@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Local workstation files and configuration
+.DS_Store
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+Report.pdf
+
+# Local AI tools, agent instructions and generated planning files
+.agents/
+.claude/
+.codex/
+.cursor/
+.skills/
+skills/
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+GEMINI.md
+SKILL.md
+skills-lock.json
+.github/copilot-instructions.md
+.github/instructions/
+docs/superpowers/
