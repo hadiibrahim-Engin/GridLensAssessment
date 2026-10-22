@@ -463,6 +463,8 @@ reduce the case run to ~16 days; this is shown, not executed.
 | memory budget (`MAX_RUN_CELLS`) exceeded | stops before the next run, not after the last one; state restored | `check_run_budget` |
 | a setting cannot be restored | run stops with expected and found value | `StateRestoreError` |
 | reference fails | run stops (no case could be compared); state restored | `_run_reference` |
+| result object records no loading or voltage (no `c:loading`/`m:loading` of lines and transformers, no `m:u`/`m:u1` of terminals) | the message names what is needed, lists what the `ElmRes` records instead and says to add the variables in the QDS result variables or choose another study case; all-de-energised terminals are named as such | `collect_series`, `missing_series_message` |
+| run ends without publication (error or Cancel) | the last log line says that no report tables were published, so generating the report fails with "Scripted... not found" in `ReportsNet.log`; a successful run names the IntReport to generate from | `main`, `NO_REPORT_DATA`, `execute_gridlens` |
 | coverage below 99.9 % | never "NO LIMIT EXCEEDED"; text never shows "100 %" | `assess_case`, `percent_text` |
 | outage windows cannot be placed on the time axis | every time step compared (slower); warning in the log, note in the report | `compare_case`, `_run_planning_case` |
 | verdict computed several times could drift | each case is judged once after the runs; log, case table and summary read that verdict | `judge_cases`, `judged` |

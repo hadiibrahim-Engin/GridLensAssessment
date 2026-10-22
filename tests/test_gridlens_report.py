@@ -1461,6 +1461,82 @@ def test_nan_loading_still_stops_the_extraction():
         gl.collect_series(result)
 
 
+def test_a_result_object_without_loading_or_voltage_says_what_is_missing_and_what_to_do():
+    result = ElmRes()
+    load = PFObject("Load 1", "ElmLod", outserv=0)
+    result.variables = ("b:tnow", "m:P:bus1", "m:Q:bus1", "m:phiu")
+    result.objects = (result.time, load, load, result.term)
+    result.units = ("h", "MW", "Mvar", "deg")
+    result.columns = ([0.0, 1.0], [5.0, 6.0], [1.0, 1.0], [0.0, 2.0])
+
+    with pytest.raises(RuntimeError) as raised:
+        gl.collect_series(result)
+
+    message = str(raised.value)
+    assert "records none of the results GridLens assesses" in message
+    assert "c:loading" in message and "m:u" in message, "names what is needed"
+    assert "ElmLod m:P:bus1 (1 column)" in message and "ElmTerm m:phiu (1 column)" in message, "names what is there"
+    assert "b:tnow" not in message, "the time column is no result"
+    assert "Result Variables" in message, "says what to do"
+
+
+def test_a_run_without_publication_says_that_the_report_cannot_be_generated(monkeypatch):
+    import sys
+    import types
+    app = App((PlannedOutage("FS1"),))
+
+    def angles_only():
+        copy = ElmRes(app.original_result.loc_name)
+        copy.variables, copy.objects = ("b:tnow", "m:phiu"), (copy.time, copy.term)
+        copy.units, copy.columns = ("h", "deg"), ([0.0, 1.0], [0.0, 2.0])
+        return copy
+    app.original_result.clone = angles_only
+    monkeypatch.setitem(sys.modules, "powerfactory", types.SimpleNamespace(GetApplication=lambda: app))
+
+    assert gl.main() is False
+
+    failed = [line for line in app.messages if "FAILED" in line]
+    assert failed and "No report tables were published" in failed[-1] and "ReportsNet.log" in failed[-1]
+    assert app.report.tables == {}, "nothing was published"
+
+
+def test_a_successful_run_names_the_report_to_generate():
+    app = App((PlannedOutage("FS1"),))
+
+    gl.execute_gridlens(app)
+
+    assert any("Generate the report now from the IntReport '{}'".format(app.report.loc_name) in line
+               for line in app.messages)
+
+
+def test_a_result_object_with_only_dead_terminals_says_so():
+    result = ElmRes()
+    result.variables = ("b:tnow", "m:u")
+    result.objects = (result.time, result.term)
+    result.units = ("h", "p.u.")
+    result.columns = ([0.0, 1.0], [0.0, float("nan")])
+
+    with pytest.raises(RuntimeError, match="all 1 recorded terminal voltages are 0 or not a number"):
+        gl.collect_series(result)
+
+
+def test_an_unusable_result_object_is_named_in_the_run_error():
+    app = App((PlannedOutage("FS1"),))
+
+    def angles_only():
+        copy = ElmRes(app.original_result.loc_name)
+        copy.variables, copy.objects = ("b:tnow", "m:phiu"), (copy.time, copy.term)
+        copy.units, copy.columns = ("h", "deg"), ([0.0, 1.0], [0.0, 2.0])
+        return copy
+    app.original_result.clone = angles_only
+
+    with pytest.raises(gl.GridLensError) as raised:
+        gl.execute_gridlens(app)
+
+    assert "was calculated, but GridLens cannot use its result object GridLens_" in str(raised.value)
+    assert "records none of the results GridLens assesses" in str(raised.value)
+
+
 # ---------------------------------------------------------------------------
 # Planning cases through the complete run
 # ---------------------------------------------------------------------------

@@ -469,6 +469,8 @@ wird angezeigt, nicht gerechnet.
 | Speicherbudget (`MAX_RUN_CELLS`) überschritten | Stopp vor dem nächsten Lauf, nicht nach dem letzten; Zustand zurückgesetzt | `check_run_budget` |
 | Einstellung nicht rücksetzbar | Lauf stoppt mit erwartetem und gelesenem Wert | `StateRestoreError` |
 | Referenz scheitert | Lauf stoppt (kein Fall vergleichbar); Zustand zurückgesetzt | `_run_reference` |
+| Ergebnisobjekt zeichnet weder Auslastung noch Spannung auf (kein `c:loading`/`m:loading` von Leitungen und Trafos, kein `m:u`/`m:u1` von Knoten) | die Meldung nennt, was gebraucht wird, listet, was das `ElmRes` stattdessen aufzeichnet, und sagt, die Variablen in den Result Variables der QDS zu ergänzen oder einen anderen Study Case zu wählen; nur spannungslose Knoten werden als solche benannt | `collect_series`, `missing_series_message` |
+| Lauf endet ohne Publikation (Fehler oder Abbrechen) | die letzte Logzeile sagt, dass keine Berichtstabellen publiziert wurden und das Erzeugen des Berichts daher mit „Scripted... not found“ in `ReportsNet.log` scheitert; ein erfolgreicher Lauf nennt den IntReport, aus dem der Bericht erzeugt wird | `main`, `NO_REPORT_DATA`, `execute_gridlens` |
 | Abdeckung unter 99,9 % | nie „NO LIMIT EXCEEDED“; der Text zeigt nie „100 %“ | `assess_case`, `percent_text` |
 | Fenster nicht auf der Zeitachse platzierbar | jeder Zeitschritt wird verglichen (langsamer); Warnung im Log, Hinweis im Bericht | `compare_case`, `_run_planning_case` |
 | mehrfach berechnetes Urteil könnte abweichen | jeder Fall wird nach den Läufen einmal beurteilt; Log, Falltabelle und Übersicht lesen dieses Urteil | `judge_cases`, `judged` |

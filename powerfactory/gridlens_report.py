@@ -490,6 +490,7 @@ def collect_series(elmres, counters=None):
     out_of_scope = 0
     grids = {}
     dc_nodes = set()
+    recorded = {}  # what the result object records that GridLens does not assess, for the error message
     for column in range(columns):
         try:
             obj = elmres.GetObject(column)
@@ -498,6 +499,9 @@ def collect_series(elmres, counters=None):
         except Exception:
             continue
         if not category or variable not in VARIABLES[category]:
+            if column != t_column:
+                name = '{} {}'.format(class_name(obj) or 'unknown object', variable)
+                recorded[name] = recorded.get(name, 0) + 1
             continue
         # Before the full path is fetched and before any value is read.
         grid_name = element_grid_name(obj)
@@ -532,6 +536,7 @@ def collect_series(elmres, counters=None):
     if cells > MAX_RESULT_CELLS:
         raise RuntimeError('ElmRes contains {} evaluated cells ({} rows x {} series) and exceeds the limit of {} (MAX_RESULT_CELLS).'.format(cells, rows, len(chosen), MAX_RESULT_CELLS))
     series = []
+    dark_series = 0
     plot_rows = sample_rows(rows)
     for (_, _), (_, column, obj, variable) in sorted(chosen.items()):
         values = []
@@ -549,6 +554,7 @@ def collect_series(elmres, counters=None):
         if counters is not None:
             counters['deenergized_steps'] += dark
         if dark == len(values):
+            dark_series += 1
             if counters is not None:
                 counters['deenergized_nodes'] += 1
                 counters['dark_keys'].add(object_key(obj))
@@ -568,8 +574,26 @@ def collect_series(elmres, counters=None):
                        'points': [(labels[row], plot_times[row], values[row]) for row in plot_rows],
                        'statistics': array_statistics(array_values, labels), 'values': array_values})
     if not series:
-        raise RuntimeError('ElmRes contains no completely readable supported result series.')
+        raise RuntimeError(missing_series_message(recorded, dark_series))
     return (series, labels, plot_times, time_unit, absolute, origin)
+
+
+def missing_series_message(recorded, dark_series=0):
+    """Why a result object yields nothing to assess, and what the engineer can do about it."""
+    needed = ('the loading of lines and transformers (c:loading or m:loading) and the voltage of terminals '
+              '(m:u or m:u1)')
+    if dark_series:
+        return ('The result object has no usable result: all {} recorded terminal voltages are 0 or not a number '
+                '(de-energised) and no line or transformer loading is recorded. GridLens needs {}. Check the study '
+                'case and the network state of the quasi-dynamic simulation.'.format(dark_series, needed))
+    ordered = sorted(recorded.items(), key=lambda entry: (-entry[1], entry[0]))
+    found = ', '.join('{} ({} column{})'.format(name, count, '' if count == 1 else 's') for name, count in ordered[:8])
+    if len(ordered) > 8:
+        found += ' and {} more'.format(len(ordered) - 8)
+    return ('The result object records none of the results GridLens assesses. GridLens needs {}. Recorded are: {}. '
+            'Add these variables to the result variables of the quasi-dynamic simulation (ComStatsim, '
+            '"Result Variables") or choose a study case that records them, then run GridLens again.'.format(
+                needed, found or 'no result variables at all'))
 
 def _grid_listing(grids):
     ordered = sorted(grids.items(), key=lambda entry: (-entry[1][0], entry[0]))
@@ -4860,8 +4884,8 @@ def _run_calculation(app, study_case, qds, case_id, name, description,
         _log_extraction_detail(logger, series, counters)
     except Exception as exc:
         raise GridLensError(
-            "{} completed, but its ElmRes could not be evaluated: {}".format(
-                case_id, _friendly_exception(exc))) from None
+            "{} was calculated, but GridLens cannot use its result object {}: {}".format(
+                case_id, object_name(snapshot), _friendly_exception(exc))) from None
     finally:
         try:
             snapshot.Release()
@@ -5591,12 +5615,21 @@ def execute_gridlens(app):
     logger.write(
         "COMPLETE",
         "Report published successfully: {} table(s), {} planning case(s), "
-        "{} calculated case(s).".format(
-            len(counts), len(request["cases"]), len(results)), 7)
+        "{} calculated case(s). Generate the report now from the IntReport "
+        "'{}' that contains this script.".format(
+            len(counts), len(request["cases"]), len(results), object_name(report)), 7)
     logger.table(
         ("Table", "Rows"),
         [(name, count) for name, count in counts.items() if count])
     return counts
+
+
+# Said whenever a run ends without publication: generating the report then
+# fails in PowerFactory with "exit with error, see ReportsNet.log" because the
+# Scripted... tables do not exist.
+NO_REPORT_DATA = ("No report tables were published in this run, so generating the report now fails with "
+                  "'Scripted... not found' (see ReportsNet.log). Generate the report only after a run that ends "
+                  "with 'Report published successfully'.")
 
 
 def main():
@@ -5619,7 +5652,7 @@ def main():
         execute_gridlens(app)
         return True
     except GridLensCancelled as exc:
-        logger.write("CANCELLED", str(exc), level="INFO")
+        logger.write("CANCELLED", "{} {}".format(exc, NO_REPORT_DATA), level="INFO")
         return False
     except KeyboardInterrupt:
         logger.write(
@@ -5631,8 +5664,8 @@ def main():
         logger.write(
             "FAILED",
             "{} Recommended action: correct the reported condition, verify the "
-            "active study case, and run GridLens again.".format(
-                _friendly_exception(exc)), level="ERROR")
+            "active study case, and run GridLens again. {}".format(
+                _friendly_exception(exc), NO_REPORT_DATA), level="ERROR")
     return False
 
 
