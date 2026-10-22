@@ -84,7 +84,7 @@ design and are historical.
 | P1 | `iopt_maint=1` applies every `IntPlannedout` with `outserv=0` inside its own window | every case | confirmed in field for one outage (28 Sep 2026) |
 | P2 | `outserv=1` on an `IntPlannedout` excludes it while `iopt_maint=1` | isolating the case's set | not verified |
 | P3 | several active outages are applied at the same time and switch back at their own end | multi-outage cases, T01–T13 | not verified |
-| P4 | two outages on the same equipment: behaviour when the first ends | V13 | unknown, reported as warning |
+| P4 | two outages on the same equipment: behaviour when the first ends | V13 | unknown; overlapping outages are normal planning and no warning |
 | P5 | `ElmRes` time stamp vs. window boundaries (02:00 effect seen in the 29 Sep test) | half-open windows | open; the spill-over check now detects and assesses such effects |
 | P6 | `AddCopy` of the configured `ElmRes`, renaming, `ComStatsim.results` binding | result objects per case | used since 6.x, not end-to-end verified |
 | P7 | writing `IntPlannedout.starttime/endtime` | own dates per case | not used (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
@@ -284,7 +284,7 @@ prevents any joint case from containing both (B02).
 | B08/F11 must not overlap | rule `not_overlap` | overlapping windows refused |
 | B09/F10 order | rule `order` | second must start after the first has ended |
 | B10 together | rule `together` | both present and overlapping |
-| F15/V13 same equipment | automatic | warning |
+| F15/V13 same equipment | automatic | none: overlapping outages are normal planning, recorded only as their relation |
 
 ---
 

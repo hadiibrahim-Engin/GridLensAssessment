@@ -30,9 +30,12 @@ tool, not delivered); do not edit it by hand.
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import sys
 import tempfile
+import time
 import traceback
 
 # Start from the case configuration GridLens saved for this project (read only).
@@ -44,12 +47,9 @@ H, D = 3600.0, 86400.0
 
 # >>> copy of powerfactory/gridlens_report.py, written by tools/sync_case_manager_copy.py - do not edit >>>
 # GridLens 8.0.0: 92 definitions.
-import json
 import re
 import hashlib
 import math
-import os
-import time
 from datetime import datetime
 
 
@@ -193,7 +193,7 @@ def period_text(start, end):
 TOTAL_STEPS = 7
 
 
-OUTAGE_CLASSES = ("IntPlannedout", "IntOutage")
+OUTAGE_CLASSES = ("IntPlannedout",)
 
 
 OUTAGE_CONSIDERED = "CONSIDERED"
@@ -925,11 +925,9 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
                 a, b = windows[left['key']], windows[right['key']]
                 if None in a + b:
                     continue
+                # Overlapping outages are normal planning, not a problem: only
+                # their relation is recorded for the report.
                 plan['relations'].append((left['name'], right['name'], interval_relation(a, b)))
-                shared = set(left.get('component_keys') or ()) & set(right.get('component_keys') or ())
-                if shared and windows_overlap(a, b):
-                    plan['warnings'].append('{} and {} switch the same equipment at the same time; PowerFactory switches it once and '
-                                            'the earlier end may put it back into service'.format(left['name'], right['name']))
         for record in members:
             window = windows[record['key']]
             if None not in window and window[1] <= window[0]:
@@ -972,7 +970,13 @@ def case_config_path(project_key):
 
 
 def load_case_config(path):
-    """The saved configuration, or None when there is none; a damaged file raises."""
+    """The saved configuration, or None when there is none; a damaged file raises.
+
+    Only the structure is checked here, not the number of cases: a file with
+    more cases than MAX_CASES (e.g. saved by GridLens 8.0) must still open in
+    the case manager, where cases can be deleted. Calculating and saving it is
+    refused with the reason (resolve_request, save_case_config).
+    """
     if not os.path.isfile(path):
         return None
     try:
@@ -980,7 +984,7 @@ def load_case_config(path):
             config = json.load(handle)
     except (OSError, ValueError) as exc:
         raise GridLensError('The saved case configuration {} cannot be read: {}'.format(path, exc)) from None
-    problems = validate_case_config(config)
+    problems = validate_case_config(config, max_cases=None)
     if problems:
         raise GridLensError('The saved case configuration {} is invalid: {}'.format(path, '; '.join(problems)))
     return config
@@ -1008,7 +1012,7 @@ class CaseManagerUnavailable(GridLensError):
     """tkinter or Tcl/Tk cannot open a window in this PowerFactory installation."""
 
 
-MARK_IN_CASE, MARK_FIXED = 'in case', 'fixed'
+MARK_IN_CASE, MARK_FIXED, MARK_FREE = '\u2611 in case', 'fixed', '\u2610'
 
 
 RELATION_LABELS = (('includes', 'Also contains'), ('requires', 'Only valid with'), ('alternatives', 'Alternative to'))
@@ -1050,28 +1054,29 @@ HELP_TEXTS = {
                "once and reported as REUSED.\n"
                "Unticked: status 'excluded'. The case stays in the configuration but is neither calculated nor "
                "reported; other cases can still contain it through 'Also contains'.",
-    'name': "Name shown in the report. The case ID (C1 ... C5) is generated and never changes.",
-    'description': "Free text for the report and the saved configuration.",
     'case_limit': "At most {} planning cases. Each case is one more QDS run over the complete period.".format(MAX_CASES),
-    'New': "Creates the next case (C1 ... C{}) and puts the cursor into the name field.".format(MAX_CASES),
+    'New': "Creates the next case (C1 ... C{}) and opens its name and description.".format(MAX_CASES),
     'Copy': "New case with the same planned outages, own dates and relations (also contains, only valid with, "
             "alternative to); independent afterwards.",
-    'Rename': "Jumps to the name field. Only the name changes; the generated ID stays.",
+    'Edit': "Name and description of the selected case, in a small window. Same as a double-click on the case. "
+            "The generated case ID stays.",
     'Delete': "Removes the case and every reference to it in other cases; asks first and names the cases that "
               "change. A case that is only valid with it is excluded. The planned outages stay in PowerFactory.",
     'one_per_outage': "Replaces all cases by one case per planned outage in the simulated period (GridLens 7 "
                       "behaviour), at most {}. Ignored and fixed outages get none. Asks before replacing.".format(MAX_CASES),
-    'add': "Assigns the selected planned outages to the selected case. Same as double-click or Enter.\n"
+    'add': "Assigns all selected planned outages to the selected case at once. Same as Enter. For one outage, "
+           "tick its box in the first column.\n"
            "An outage already in the case or fixed is refused with the reason.",
     'fix': "Makes the selected planned outages fixed background outages: active in the reference (Rfix) and in "
            "every case. Not possible while an outage is assigned to a case, so it never acts twice.",
     'details': "What PowerFactory holds for the planned outage: object, equipment, window, priority, status and "
-               "the cases that use it. Own dates per case are entered there.",
+               "the cases that use it. Own dates per case are entered there. Same as a double-click on the row.",
     'remove': "Ends only the assignment to this case; the planned outage in PowerFactory stays unchanged. "
               "Same as the Delete key.",
     'unfix': "The selected outages are no longer fixed; the reference becomes R0 when none is left.",
     'timeline': "Planning check only, no load flow: when the outages of this case are active. Blue: case outage, "
-                "grey: fixed outage, orange: more than one active, light band: a long empty period drawn short.",
+                "grey: fixed background outage, shaded: several outages at the same time (normal, no problem), light band: a "
+                "long empty period drawn short.",
     'rule_kind': "must not overlap: a case with both outages is refused if their windows overlap.\n"
                  "second only after the first: the second may only start after the first has ended.\n"
                  "only together: a case with one of them must contain the other, at the same time.\n"
@@ -1094,7 +1099,9 @@ COLUMN_HELP = {
                    "simulated period. The reason is on Review & start.\n"
                    "excluded: 'Include in the calculation' is unticked.",
     'case_count': "Number of planned outages assigned directly to the case (without those it also contains).",
-    'mark': "in case: part of the selected case.\nfixed: fixed background outage of every case.\nempty: free.",
+    'mark': "Check box: tick to add the planned outage to the selected case, untick to remove it (also Space).\n"
+            "\u2611 in case: part of the selected case.\n\u2610: free.\nfixed: fixed background outage of every case, "
+            "cannot be ticked.",
     'outage_status': "in simulated period: the window lies in the ComStatsim period.\n"
                      "outside simulated period: has no effect in this run.\n"
                      "Ignored in PowerFactory: set to Ignored there; GridLens applies it only for a case that "
@@ -1363,6 +1370,17 @@ class CaseEditor:
         case.setdefault('outages', []).append(key)
         return None
 
+    def toggle_outage(self, case_id, key):
+        """The check box in the outage list: adds the outage to the case, or removes it when it is part of it.
+
+        A problem as text (no case, fixed outage, missing outage), else None.
+        """
+        case = self.case(case_id)
+        if case is not None and key in (case.get('outages') or ()):
+            self.remove_outage(case_id, key)
+            return None
+        return self.add_outage(case_id, key)
+
     def remove_outage(self, case_id, key):
         """Remove the assignment only; the planned outage in PowerFactory stays as it is."""
         case = self.case(case_id)
@@ -1445,7 +1463,7 @@ class CaseEditor:
                 continue
             if show == OUTAGE_FILTERS[3] and status != 'Ignored in PowerFactory':
                 continue
-            mark = MARK_IN_CASE if record['key'] in members else MARK_FIXED if record['key'] in self.config['background'] else ''
+            mark = MARK_IN_CASE if record['key'] in members else MARK_FIXED if record['key'] in self.config['background'] else MARK_FREE
             rows.append((record['key'], (mark, record['id'], clip_text(record.get('equipment_name') or '-', 60),
                                          record.get('start_time') or '?', record.get('end_time') or '?', status)))
         return rows
@@ -1567,7 +1585,8 @@ class CaseEditor:
         """Case id -> 'ready', 'not calculated' or 'excluded', as the calculation would see it."""
         problems, request = self.checked()
         if problems:
-            return {case['id']: 'not calculated' for case in self.config['cases']}
+            return {case['id']: 'excluded' if case.get('enabled', True) is False else 'not calculated'
+                    for case in self.config['cases']}
         statuses = {plan['id']: 'ready' if plan['status'] == PLAN_READY else 'not calculated' for plan in request['cases']}
         statuses.update({identifier: 'excluded' for identifier in request['disabled']})
         return statuses
@@ -1826,7 +1845,13 @@ class FilterTable:
         self.render()
 
     def render(self):
-        self._pending = None
+        if self._pending is not None:
+            # A direct render makes the debounced one pending from typing unnecessary.
+            try:
+                self.dialog.root.after_cancel(self._pending)
+            except Exception:
+                pass
+            self._pending = None
         filters = self.active_filters()
         rows = filter_rows(self.rows, filters)
         if self.sort_column is not None:
@@ -1877,7 +1902,7 @@ class CaseManagerDialog:
     BACKGROUND, CARD, TEXT, MUTED = '#eef1f5', '#ffffff', '#1f2933', '#5f6b7a'
     ACCENT, ACCENT_ACTIVE, SELECTED, PROBLEM = '#2f6db3', '#245a96', '#d6e4f5', '#b42318'
     HEADER, FILTER, BORDER = '#e4e9f0', '#f6f8fa', '#d4dae2'
-    FIXED, OVERLAP, GAP = '#8a94a3', '#f6d9a8', '#eceff3'
+    FIXED, OVERLAP, GAP = '#8a94a3', '#dbe6f5', '#eceff3'
     TAB_FIXED, TAB_REVIEW = 'Fixed background & rules', 'Review & start'
 
     def __init__(self, root, editor, config_path, user, tk_modules):
@@ -1889,6 +1914,8 @@ class CaseManagerDialog:
         self.selected = None
         self.outcome = None
         self._relation_lists = {}
+        self._preview_labels = []
+        self.case_form = None
         self.tooltips = []
         self.bold_font = 'TkDefaultFont'
 
@@ -2035,11 +2062,13 @@ class CaseManagerDialog:
         self.case_table.grid(row=1, column=0, sticky='nsew')
         self.case_tree = self.case_table.tree
         self.case_tree.bind('<<TreeviewSelect>>', self.on_case_select)
+        self.case_tree.bind('<Double-1>', self.on_case_double_click)
+        self.case_tree.bind('<Return>', lambda _event: self.edit_case())
         buttons = ttk.Frame(pane, style='Card.TFrame')
         buttons.grid(row=2, column=0, sticky='ew', pady=(6, 0))
         self.case_buttons = {}
         for column, (label, command) in enumerate((('New', self.new_case), ('Copy', self.copy_case),
-                                                   ('Rename', self.rename_case), ('Delete', self.delete_case))):
+                                                   ('Edit', self.edit_case), ('Delete', self.delete_case))):
             buttons.columnconfigure(column, weight=1)
             self.case_buttons[label] = ttk.Button(buttons, text=label, command=command)
             self.case_buttons[label].grid(row=0, column=column, sticky='ew', padx=1)
@@ -2050,17 +2079,8 @@ class CaseManagerDialog:
         details = ttk.Labelframe(pane, text='Selected case', padding=8)
         details.grid(row=4, column=0, sticky='ew')
         details.columnconfigure(0, weight=1)
-        self.name_var, self.description_var, self.enabled_var = tk.StringVar(), tk.StringVar(), tk.BooleanVar(value=True)
-        ttk.Label(details, text='Name').grid(row=0, column=0, sticky='w')
-        self.name_entry = ttk.Entry(details, textvariable=self.name_var)
-        self.name_entry.grid(row=1, column=0, sticky='ew')
-        ttk.Label(details, text='Description').grid(row=2, column=0, sticky='w', pady=(4, 0))
-        self.description_entry = ttk.Entry(details, textvariable=self.description_var)
-        self.description_entry.grid(row=3, column=0, sticky='ew')
-        for widget, key in ((self.name_entry, 'name'), (self.description_entry, 'description')):
-            widget.bind('<Return>', self.apply_details)
-            widget.bind('<FocusOut>', self.apply_details)
-            self.tip(widget, HELP_TEXTS[key])
+        # Name and description are edited in their own small window (double-click, Edit).
+        self.enabled_var = tk.BooleanVar(value=True)
         enabled = ttk.Checkbutton(details, text='Include in the calculation', variable=self.enabled_var, command=self.apply_enabled)
         enabled.grid(row=4, column=0, sticky='w', pady=(4, 2))
         self.tip(enabled, HELP_TEXTS['enabled'])
@@ -2092,8 +2112,13 @@ class CaseManagerDialog:
         pane.columnconfigure(0, weight=1)
         pane.rowconfigure(2, weight=3, minsize=170)
         pane.rowconfigure(4, weight=2, minsize=150)
-        self.case_title = ttk.Label(pane, text='', style='Title.TLabel')
+        heading = ttk.Frame(pane, style='Card.TFrame')
+        heading.grid(row=0, column=0, sticky='ew')
+        heading.columnconfigure(1, weight=1)
+        self.case_title = ttk.Label(heading, text='', style='Title.TLabel')
         self.case_title.grid(row=0, column=0, sticky='w')
+        self.case_description = ttk.Label(heading, text='', style='Muted.TLabel')
+        self.case_description.grid(row=0, column=1, sticky='w', padx=(10, 0))
         self.counts_label = ttk.Label(pane, text='', style='Muted.TLabel')
         self.counts_label.grid(row=1, column=0, sticky='w', pady=(0, 6))
         self.member_table = FilterTable(self, pane, (
@@ -2118,7 +2143,7 @@ class CaseManagerDialog:
         timeline.grid(row=4, column=0, sticky='nsew')
         timeline.columnconfigure(0, weight=1)
         timeline.rowconfigure(1, weight=1)
-        legend = ttk.Label(timeline, text='blue: case outage   grey: fixed background outage   orange: overlap   light band: shortened empty period',
+        legend = ttk.Label(timeline, text='blue: case outage   grey: fixed background outage   shaded: several at the same time   light band: shortened empty period',
                            style='Muted.TLabel')
         legend.grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 4))
         self.tip(legend, HELP_TEXTS['timeline'])
@@ -2135,7 +2160,7 @@ class CaseManagerDialog:
         pane.rowconfigure(1, weight=1)
         ttk.Label(pane, text='Available planned outages', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 6))
         self.available_table = FilterTable(self, pane, (
-            ('mark', 'Assigned', 66, False, ((MARK_IN_CASE, MARK_IN_CASE), (MARK_FIXED, MARK_FIXED), ('free', ''))),
+            ('mark', 'In case', 78, False, (('in case', MARK_IN_CASE), ('free', MARK_FREE), ('fixed', MARK_FIXED))),
             ('fs', 'Planned outage', 140, True, None), ('equipment', 'Equipment', 110, True, None),
             ('start', 'Start', 106, False, None), ('end', 'End', 106, False, None),
             ('status', 'Status', 132, False, ('in simulated period', 'outside simulated period', 'Ignored in PowerFactory'))),
@@ -2144,7 +2169,9 @@ class CaseManagerDialog:
         self.available_tree = self.available_table.tree
         self.available_tree.tag_configure(MARK_IN_CASE, background='#e8f0fb')
         self.available_tree.tag_configure(MARK_FIXED, background='#f1f2f4')
-        self.available_tree.bind('<Double-1>', lambda _event: self.add_selected())
+        self.available_tree.bind('<Button-1>', self.on_available_click)
+        self.available_tree.bind('<space>', lambda _event: self.toggle_outage(self.available_tree.focus()) or 'break')
+        self.available_tree.bind('<Double-1>', self.on_available_double_click)
         self.available_tree.bind('<Return>', lambda _event: self.add_selected())
         buttons = ttk.Frame(pane, style='Card.TFrame')
         buttons.grid(row=2, column=0, sticky='ew', pady=(6, 0))
@@ -2154,8 +2181,9 @@ class CaseManagerDialog:
             button = ttk.Button(buttons, text=text, command=command)
             button.grid(row=0, column=column, padx=(0, 6))
             self.tip(button, HELP_TEXTS[key])
-        ttk.Label(pane, text='Double-click or Enter adds the selected outages to the selected case.',
-                  style='Muted.TLabel').grid(row=3, column=0, sticky='w', pady=(4, 0))
+        ttk.Label(pane, text='Tick the box to add an outage to the selected case, untick to remove it. '
+                             '"Add to case" or Enter adds all selected rows.',
+                  style='Muted.TLabel', wraplength=520).grid(row=3, column=0, sticky='w', pady=(4, 0))
 
     # --- tab "Fixed background & rules" -------------------------------------------
     def _build_fixed_and_rules(self, tab):
@@ -2267,8 +2295,7 @@ class CaseManagerDialog:
         if missing:
             counts += '   ({} assigned outage(s) no longer exist in the project)'.format(len(missing))
         self.counts_label.configure(text=counts)
-        self.name_var.set(case.get('name', '') if case else '')
-        self.description_var.set(case.get('description', '') if case else '')
+        self.case_description.configure(text=clip_text(case.get('description', ''), 90) if case else '')
         self.enabled_var.set(case.get('enabled', True) if case else False)
         self.member_table.set_rows(self.editor.member_rows(self.selected))
         for relation, box in self._relation_lists.items():
@@ -2291,13 +2318,21 @@ class CaseManagerDialog:
         """The tabs "Fixed background & rules" and "Review & start", the status line and the tab label."""
         self.fixed_table.set_rows(self.editor.fixed_rows())
         self.rule_table.set_rows([(str(index), cells) for index, cells in self.editor.rule_rows()])
-        frame = self.preview_frame
-        for child in frame.winfo_children():
-            child.destroy()
         lines, _ = self.editor.summary()
-        for row, (label, value) in enumerate(lines):
-            self.ttk.Label(frame, text=label, style='Muted.TLabel').grid(row=row, column=0, sticky='nw', padx=(0, 14), pady=1)
-            self.ttk.Label(frame, text=value, wraplength=640).grid(row=row, column=1, sticky='w', pady=1)
+        if len(lines) != len(self._preview_labels):
+            # The number of lines changes only between a valid and an invalid configuration.
+            for child in self.preview_frame.winfo_children():
+                child.destroy()
+            self._preview_labels = []
+            for row in range(len(lines)):
+                caption = self.ttk.Label(self.preview_frame, style='Muted.TLabel')
+                caption.grid(row=row, column=0, sticky='nw', padx=(0, 14), pady=1)
+                value = self.ttk.Label(self.preview_frame, wraplength=640)
+                value.grid(row=row, column=1, sticky='w', pady=1)
+                self._preview_labels.append((caption, value))
+        for (caption, value), (label, text) in zip(self._preview_labels, lines):
+            caption.configure(text=label)
+            value.configure(text=text)
         problems = self.editor.problem_rows()
         self.problem_table.set_rows([(str(index), cells) for index, cells in enumerate(problems)])
         self.notebook.tab(self.review_tab, text=self.TAB_REVIEW + (' ({})'.format(len(problems)) if problems else ''))
@@ -2346,21 +2381,8 @@ class CaseManagerDialog:
         chosen = self.case_tree.selection()
         identifier = chosen[0] if chosen else None
         if identifier is not None and identifier != self.selected:
-            self.apply_details()
             self.selected = identifier
             self.refresh_selected()
-
-    def apply_details(self, _event=None):
-        case = self.editor.case(self.selected)
-        if case is None:
-            return
-        changed = self.name_var.get().strip() != case.get('name', '')
-        self.editor.rename_case(self.selected, self.name_var.get())
-        self.editor.set_description(self.selected, self.description_var.get())
-        if changed:
-            self.refresh_cases(self.selected)
-            self.case_title.configure(text=self.editor.case_label(self.selected))
-            self.refresh_overview()
 
     def apply_enabled(self):
         if self.selected is not None:
@@ -2378,17 +2400,15 @@ class CaseManagerDialog:
         self.refresh_overview()
 
     def new_case(self):
-        self.apply_details()
         identifier, problem = self.editor.add_case()
         if problem:
             self.messagebox.showinfo('New case', problem, parent=self.root)
             return
         self.case_table.clear_filters()
         self.refresh_all(identifier)
-        self.rename_case()
+        self.edit_case()
 
     def copy_case(self):
-        self.apply_details()
         if self.editor.case(self.selected) is None:
             return
         identifier, problem = self.editor.copy_case(self.selected)
@@ -2398,11 +2418,59 @@ class CaseManagerDialog:
         self.case_table.clear_filters()
         self.refresh_all(identifier)
 
-    def rename_case(self):
-        # Renaming happens in place: the name field of the selected case.
-        if self.selected is not None:
-            self.name_entry.focus_set()
-            self.name_entry.select_range(0, 'end')
+    def on_case_double_click(self, event):
+        if self.case_tree.identify_row(event.y):
+            self.edit_case()
+
+    def edit_case(self):
+        """Name and description of the selected case in a small window (double-click, Edit, New); None without a case."""
+        case = self.editor.case(self.selected)
+        if case is None:
+            return None
+        if self.case_form is not None:
+            self.case_form['window'].destroy()
+        tk, ttk, identifier = self.tk, self.ttk, self.selected
+        window = tk.Toplevel(self.root)
+        window.title('Planning case')
+        window.configure(background=self.CARD)
+        window.transient(self.root)
+        window.resizable(False, False)
+        frame = ttk.Frame(window, style='Card.TFrame', padding=12)
+        frame.grid(row=0, column=0, sticky='nsew')
+        frame.columnconfigure(0, weight=1)
+        name_var, description_var = tk.StringVar(value=case.get('name', '')), tk.StringVar(value=case.get('description', ''))
+        ttk.Label(frame, text='Name').grid(row=0, column=0, sticky='w')
+        name = ttk.Entry(frame, textvariable=name_var, width=48)
+        name.grid(row=1, column=0, sticky='ew')
+        ttk.Label(frame, text='Description').grid(row=2, column=0, sticky='w', pady=(8, 0))
+        ttk.Entry(frame, textvariable=description_var, width=48).grid(row=3, column=0, sticky='ew')
+        ttk.Label(frame, text='Case ID {} is generated and does not change.'.format(identifier), style='Muted.TLabel').grid(
+            row=4, column=0, sticky='w', pady=(6, 0))
+
+        def close(_event=None):
+            self.case_form = None
+            window.destroy()
+
+        def apply(_event=None):
+            if not name_var.get().strip():
+                self.messagebox.showerror('Planning case', 'A planning case needs a name.', parent=window)
+                return
+            self.editor.rename_case(identifier, name_var.get())
+            self.editor.set_description(identifier, description_var.get())
+            close()
+            self.refresh_cases(identifier)
+            self.refresh_selected()
+        buttons = ttk.Frame(frame, style='Card.TFrame')
+        buttons.grid(row=5, column=0, sticky='e', pady=(12, 0))
+        ttk.Button(buttons, text='Cancel', command=close).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(buttons, text='OK', style='Accent.TButton', command=apply).grid(row=0, column=1)
+        window.bind('<Return>', apply)
+        window.bind('<Escape>', close)
+        window.protocol('WM_DELETE_WINDOW', close)
+        name.focus_set()
+        name.select_range(0, 'end')
+        self.case_form = {'window': window, 'name': name_var, 'description': description_var, 'apply': apply, 'close': close}
+        return window
 
     def delete_case(self):
         case = self.editor.case(self.selected)
@@ -2424,6 +2492,7 @@ class CaseManagerDialog:
             return
         note = self.editor.one_case_per_outage()
         ids = self.editor.case_ids()
+        self.case_table.clear_filters()
         self.refresh_all(ids[0] if ids else None)
         if note:
             self.messagebox.showinfo('One case per planned outage', note, parent=self.root)
@@ -2438,6 +2507,36 @@ class CaseManagerDialog:
         self.refresh_selected()
         if problems:
             self.messagebox.showinfo('Add to case', '\n'.join(problems), parent=self.root)
+
+    def on_available_click(self, event):
+        """A click into the check box column ticks or unticks that outage; elsewhere it selects as usual."""
+        tree = self.available_tree
+        if tree.identify_region(event.x, event.y) != 'cell' or tree.identify_column(event.x) != '#1':
+            return None
+        key = tree.identify_row(event.y)
+        if key:
+            self.toggle_outage(key)
+        return 'break'
+
+    def on_available_double_click(self, event):
+        # Tk reports a quick second click as a double-click: in the box it ticks
+        # again, elsewhere it opens the details.
+        if self.on_available_click(event) == 'break':
+            return 'break'
+        self.show_details(self.available_tree)
+        return 'break'
+
+    def toggle_outage(self, key):
+        if not key:
+            return
+        if self.selected is None:
+            self.messagebox.showinfo('Add to case', 'Select a planning case on the right first.', parent=self.root)
+            return
+        problem = self.editor.toggle_outage(self.selected, key)
+        self.refresh_cases(self.selected)
+        self.refresh_selected()
+        if problem:
+            self.messagebox.showinfo('Add to case', problem, parent=self.root)
 
     def remove_selected(self):
         for key in self.member_tree.selection():
@@ -2526,7 +2625,6 @@ class CaseManagerDialog:
         self.refresh_overview()
 
     def save(self):
-        self.apply_details()
         problems = validate_case_config(self.editor.config)
         if problems:
             self.messagebox.showerror('Save configuration', '\n'.join(problems), parent=self.root)
@@ -2559,7 +2657,6 @@ class CaseManagerDialog:
 
     def start(self):
         """Check the configuration and hand it to GridLens; the calculation starts after the window closes."""
-        self.apply_details()
         problem = self.editor.set_assessments(self.n0_var.get(), self.n1_var.get())
         problems = ([problem] if problem else []) + validate_case_config(self.editor.config)
         if problems:
@@ -2719,7 +2816,12 @@ def starting_configuration(app, scratch):
         real = case_config_path(project_key)
         if os.path.isfile(real):
             shutil.copyfile(real, copy)
-            return load_case_config(copy), copy, "saved configuration " + real
+            try:
+                return load_case_config(copy), copy, "saved configuration " + real
+            except GridLensError as exc:
+                # A damaged file must not stop the GUI test; GridLens itself would report it.
+                os.remove(copy)
+                return empty_case_config(project_key), copy, "empty configuration ({})".format(exc)
     return empty_case_config(project_key), copy, "empty configuration"
 
 

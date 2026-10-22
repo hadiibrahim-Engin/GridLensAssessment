@@ -87,7 +87,7 @@ den Stand 7.0 und sind historisch.
 | P1 | `iopt_maint=1` wendet jede `IntPlannedout` mit `outserv=0` in ihrem Fenster an | jeder Fall | im Feld für eine FS bestätigt (28.09.2026) |
 | P2 | `outserv=1` an einer `IntPlannedout` schließt sie bei `iopt_maint=1` aus | Isolation der Fallmenge | nicht geprüft |
 | P3 | mehrere aktive FS wirken gleichzeitig und enden je an ihrem eigenen Ende | Mehrfach-FS-Fälle, T01–T13 | nicht geprüft |
-| P4 | zwei FS auf demselben Betriebsmittel: Verhalten, wenn die erste endet | V13 | unbekannt, als Warnung gemeldet |
+| P4 | zwei FS auf demselben Betriebsmittel: Verhalten, wenn die erste endet | V13 | unbekannt; sich überlappende FS sind normale Planung und keine Warnung |
 | P5 | `ElmRes`-Zeitstempel und Fenstergrenzen (02:00-Effekt im Test vom 29.09.) | halboffene Fenster | offen; die Spill-over-Prüfung erkennt und bewertet solche Effekte |
 | P6 | `AddCopy` des konfigurierten `ElmRes`, Umbenennen, Bindung `ComStatsim.results` | Ergebnisobjekt je Fall | seit 6.x genutzt, nicht Ende-zu-Ende geprüft |
 | P7 | Schreiben von `IntPlannedout.starttime/endtime` | eigene Termine je Fall | nicht genutzt (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
@@ -288,7 +288,7 @@ Alternativgruppe, darf kein gemeinsamer Fall beide enthalten (B02).
 | B08/F11 dürfen nicht überlappen | Regel `not_overlap` | überlappende Fenster abgelehnt |
 | B09/F10 Reihenfolge | Regel `order` | die zweite FS muss nach dem Ende der ersten beginnen |
 | B10 nur gemeinsam | Regel `together` | beide vorhanden und überlappend |
-| F15/V13 gleiches Betriebsmittel | automatisch | Warnung |
+| F15/V13 gleiches Betriebsmittel | automatisch | keine: Überlappung ist normale Planung, nur ihre Beziehung wird festgehalten |
 
 ---
 

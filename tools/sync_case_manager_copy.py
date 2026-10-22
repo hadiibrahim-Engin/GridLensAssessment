@@ -47,9 +47,21 @@ def _used(node):
         {item.attr for item in ast.walk(node) if isinstance(item, ast.Attribute)}
 
 
-def copied_block(source_text=None):
-    """The block the test tool must contain: the needed imports and definitions, in source order."""
+def _tool_imports(tool_text):
+    """Names the tool imports itself, above the copy; the copy does not import them again."""
+    header = ast.parse(tool_text[:tool_text.index(BEGIN)])
+    return {alias.asname or alias.name.split(".")[0] for node in header.body if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names}
+
+
+def copied_block(source_text=None, tool_text=None):
+    """The block the test tool must contain: the needed imports and definitions, in source order.
+
+    The tool imports what its own code uses in its header, so its code never
+    depends on which imports the copied definitions happen to need.
+    """
     text = source_text if source_text is not None else SOURCE.read_text(encoding="utf-8")
+    present = _tool_imports(tool_text if tool_text is not None else TOOL.read_text(encoding="utf-8"))
     tree = ast.parse(text)
     definitions = {}
     imports = []
@@ -70,7 +82,7 @@ def copied_block(source_text=None):
     lines = [BEGIN, "# GridLens {}: {} definitions.".format(_version(definitions, text), len(nodes))]
     for node in imports:
         bound = [alias.asname or alias.name.split(".")[0] for alias in node.names]
-        if any(name in used for name in bound):
+        if any(name in used for name in bound) and not all(name in present for name in bound):
             lines.append(ast.get_source_segment(text, node))
     for node in nodes:
         lines += ["", "", ast.get_source_segment(text, node)]

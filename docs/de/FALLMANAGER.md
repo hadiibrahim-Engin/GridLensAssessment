@@ -22,17 +22,17 @@ Drei Reiter; Statuszeile und Aktionsleiste bleiben auf jedem Reiter sichtbar:
  [ Workspace ] [ Fixed background & rules ] [ Review & start (1) ]
 +--------------------------------------+------------------------------------+------------------------+
 | Available planned outages            | Case A - Sommermaßnahmen           | Planning cases  2 of 5 |
-| Assigned Planned outage Equip. Start | 2 case outages · 1 fixed backgr.   | Planning case  FS  Stat|
+| In case  Planned outage Equip. Start | 2 case outages · 1 fixed backgr.   | Planning case Outg Stat|
 | [All  v][            ][     ][     ] | Planned outage Equip. Start End Pr | [            ][  ][ v ]|
-| in case FS Bedarf 1    NE_L1  ...    | [          ][     ][    ][   ][  ] | Sommer         2  ready|
-|         FS Bedarf 3    NE_L7  ...    | FS Bedarf 1    NE_L1  ...          | Nord-Ost       1  ready|
+| ☑ in case FS Bedarf 1 NE_L1  ...     | [          ][     ][    ][   ][  ] | Sommer         2  ready|
+| ☐       FS Bedarf 3    NE_L7  ...    | FS Bedarf 1    NE_L1  ...          | Nord-Ost       1  ready|
 | fixed   FS Hintergrund NE_L5  ...    | FS Bedarf 2    NE_L2  ...          | 4 shown                |
-| 48 shown                             | 2 shown                            | [New][Copy][Ren.][Del.]|
+| 48 shown                             | 2 shown                            | [New][Copy][Edit][Del.]|
 |                                      | [Remove from case] [Details]       | Selected case          |
-| [Add to case] [Set as fixed] [Det.]  | Timeline of the case               |  Name [..............] |
-|                                      |   |=====FS Bedarf 1=====|          |  [x] Include           |
-|                                      |     |====FS Bedarf 2====|          |  Relations to other ⓘ  |
-|                                      |                                    |  Also | Only | Altern. |
+| [Add to case] [Set as fixed] [Det.]  | Timeline of the case               |  [x] Include           |
+|                                      |   |=====FS Bedarf 1=====|          |  Relations to other ⓘ  |
+|                                      |     |====FS Bedarf 2====|          |  Also | Only | Altern. |
+|                                      |                                    |                        |
 +--------------------------------------+------------------------------------+------------------------+
  [Save configuration] [Load saved]   QDS ... · n-0 · 3 of 4 cases ready · 1 problem  [Cancel] [Start calculation]
 ```
@@ -40,10 +40,15 @@ Drei Reiter; Statuszeile und Aktionsleiste bleiben auf jedem Reiter sichtbar:
 - **Workspace** – drei Bereiche, etwa 40 % / 38 % / 22 %, Trennlinien verschiebbar.
   Von links nach rechts der Weg einer FS: aus der Library in den gewählten
   Fall, der rechts ausgewählt wird.
-  - **Verfügbare Freischaltungen** (links): alle FS der Library mit *Assigned*
+  - **Verfügbare Freischaltungen** (links): alle FS (`IntPlannedout`) der Library mit *In case*
     (`in case`, `fixed`, leer; auch als Zeilenfarbe), *Planned outage,
-    Equipment, Start, End, Status*; *Add to case* (auch Doppelklick oder Enter),
-    *Set as fixed background*, *Details*.
+    Equipment, Start, End, Status*; *Add to case* (oder Enter, für alle markierten Zeilen),
+    *Set as fixed background*, *Details* (auch Doppelklick auf eine Zeile).
+    Die erste Spalte *In case* ist ein **Häkchen**: anhaken (Klick oder
+    Leertaste) nimmt die FS in den gewählten Fall auf, abhaken beendet die
+    Zuordnung; `☑ in case`, `☐` frei, `fixed` (nicht anhakbar). Demand
+    Transfers (`IntOutage`) werden nicht gelesen: Sie verschieben Last und
+    schalten kein Betriebsmittel.
   - **Der gewählte Fall** (Mitte): Titel *Case A - Name*, die Zeile *n case outages ·
     m fixed background outages*, die Tabelle *Planned outage, Equipment, Start,
     End, Priority*, *Remove from case*, *Details* und die Zeitachse des Falls.
@@ -52,11 +57,14 @@ Drei Reiter; Statuszeile und Aktionsleiste bleiben auf jedem Reiter sichtbar:
     (Zahl der FS), *Status* (`ready`, `not calculated`, `excluded`). Niemand
     vergibt eine ID: GridLens nummeriert die Fälle selbst (C1 … C5, die kleinste
     freie Nummer) und nutzt die ID nur intern (Beziehungen, Ergebnisobjekte
-    `GridLens_<stamp>_C1`, Bericht). Darunter *New, Copy, Rename, Delete*, *One
-    case per planned outage* (legt höchstens fünf an) sowie Name, Beschreibung, *Include in
-    the calculation* und die *Relations to other cases* des gewählten Falls
+    `GridLens_<stamp>_C1`, Bericht). Darunter *New, Copy, Edit, Delete*, *One
+    case per planned outage* (legt höchstens fünf an) sowie für den gewählten Fall
+    *Include in the calculation* und die *Relations to other cases*
     per Klick: *Also contains* (Gesamtplanung), *Only valid with* (bedingter
-    Fall), *Alternative to* (entweder – oder). Siehe
+    Fall), *Alternative to* (entweder – oder). Name und Beschreibung brauchen
+    hier keinen Platz: ein **Doppelklick auf den Fall** (oder *Edit*) öffnet ein
+    kleines Fenster mit beiden; die Mitte zeigt die Beschreibung neben dem
+    Fallnamen. Siehe
     [Beziehungen zwischen Planungsfällen](#beziehungen-zwischen-planungsfällen).
 - **Fixed background & rules** – links die festen Hintergrund-FS (Rfix) mit
   *Remove from fixed background*; rechts die Regeln zwischen FS mit drei Auswahllisten
@@ -73,7 +81,7 @@ Drei Reiter; Statuszeile und Aktionsleiste bleiben auf jedem Reiter sichtbar:
 
 - Eine **Filterzeile** direkt unter den Spaltenköpfen: ein Textfeld je
   Textspalte (zeigt Zeilen, die den Text enthalten, ohne Groß/Klein) und eine
-  Auswahlliste je Kategoriespalte (*Status*, *Assigned*, *Rule*; *All* schaltet
+  Auswahlliste je Kategoriespalte (*Status*, *In case*, *Rule*; *All* schaltet
   sie ab). Filter mehrerer Spalten gelten zusammen.
 - Unter der Tabelle: *12 of 48 shown · Clear filters* (nur solange ein Filter
   aktiv ist).
@@ -89,7 +97,7 @@ Bleibt die Maus etwa eine halbe Sekunde auf einem Bedienelement, erscheint
 eine Erklärung, was es für die Berechnung bewirkt: jede Schaltfläche, die drei
 Beziehungsüberschriften und -listen (mit ⓘ markiert), *Include in the
 calculation*, Name und Beschreibung, der Fallzähler, die Spaltenköpfe mit
-Kategorien (*Status*, *Assigned*, *Outages*, *Priority*, *Rule*; jeder nennt auch das
+Kategorien (*Status*, *In case*, *Outages*, *Priority*, *Rule*; jeder nennt auch das
 Sortieren), jedes Filterfeld, die Legende der Zeitachse, die Regelauswahl,
 n-1, der QDS-Zeitraum und die Statuszeile. Die Texte stehen englisch in
 `HELP_TEXTS` und `COLUMN_HELP` von `gridlens_report.py` (Klasse `Tooltip`, nur
@@ -133,19 +141,21 @@ nicht gerechnet und gemeldet.
 
 | Aktion | Wirkung |
 |---|---|
-| Klick auf einen Fall rechts (`<<TreeviewSelect>>`) | die Mitte zeigt sofort seine Freischaltungen; links sind sie als `in case` markiert; Name, Beschreibung, Beziehungen, Zeitachse, die anderen Reiter und die Statuszeile folgen. Kein weiteres Fenster. |
+| Klick auf einen Fall rechts (`<<TreeviewSelect>>`) | die Mitte zeigt sofort seine Freischaltungen; links sind sie als `in case` markiert; Beschreibung, Beziehungen, Zeitachse, die anderen Reiter und die Statuszeile folgen. Kein weiteres Fenster. |
 | Text in ein Filterfeld tippen / Filterliste wählen | die Tabelle zeigt sofort nur passende Zeilen; *Clear filters* zeigt wieder alle |
 | Klick auf einen Spaltenkopf | sortiert nach der Spalte; ein zweiter Klick kehrt die Reihenfolge um |
 | Klick auf einen Fall in einer Beziehungsliste | wählt ihn aus (hervorgehoben) oder hebt die Auswahl auf; die Beziehung gilt sofort |
 | Maus auf einem Bedienelement ruhen lassen | nach etwa einer halben Sekunde erscheint eine Erklärung; sie schließt beim Verlassen oder bei einem Klick |
 | Klick auf die Statuszeile | öffnet *Review & start* |
-| *Add to case*, Doppelklick oder Enter in der linken Liste | die gewählten FS werden zugeordnet; Falltabelle, Zahl der FS, Markierungen und Vorschau aktualisieren sich sofort. Eine FS, die schon im Fall oder fest ist, wird mit Grund abgelehnt. |
+| Häkchen in der ersten Spalte der linken Liste setzen oder entfernen (oder Leertaste) | genau diese FS kommt sofort in den gewählten Fall oder verlässt ihn; eine feste FS lässt sich nicht anhaken und nennt den Grund |
+| *Add to case* oder Enter in der linken Liste | die gewählten FS werden zugeordnet; Falltabelle, Zahl der FS, Markierungen und Vorschau aktualisieren sich sofort. Eine FS, die schon im Fall oder fest ist, wird mit Grund abgelehnt. |
 | *Remove from case* oder Entf-Taste in der Mitte | nur die Zuordnung endet; die Freischaltung in PowerFactory bleibt unberührt. |
 | Doppelklick in der Mitte oder *Details* | ein kompaktes Fenster mit den PowerFactory-Daten der FS (Objekt, Klasse, Betriebsmittel, Schalthandlungen, Fenster, Priorität, Status, verwendet in Fällen) und ihren eigenen Terminen in diesem Fall. |
 | *Set as fixed background* | die FS wird Teil der Referenz und jedes Falls (Rfix). Abgelehnt, solange sie einem Fall zugeordnet ist – sie wirkt so nie doppelt. |
-| *New* | legt *Case n* mit der nächsten generierten ID an (C1 … C5), wählt ihn aus und setzt den Cursor ins Namensfeld: kein Dialog. Bei fünf Fällen gesperrt. |
+| *New* | legt *Case n* mit der nächsten generierten ID an (C1 … C5), wählt ihn aus und öffnet sein Fenster für Name und Beschreibung. Bei fünf Fällen gesperrt. |
 | *Copy* | neue generierte ID, Name *… (copy)*, gleiche FS, eigene Termine und Beziehungen (auch *Alternative to*); danach unabhängig. Bei fünf Fällen gesperrt. |
-| *Rename* | springt ins Namensfeld; nur der Name ändert sich, die generierte ID für Beziehungen und Ergebnisobjekte bleibt. |
+| Doppelklick auf einen Fall, *Edit* oder Enter in der Fallliste | ein kleines Fenster *Planning case* mit *Name* und *Description*; *OK* (Enter) übernimmt, *Cancel* (Escape) lässt beides unverändert; ein leerer Name wird abgelehnt. Die generierte ID für Beziehungen und Ergebnisobjekte bleibt. |
+| Doppelklick auf eine Zeile der linken Liste | das Detailfenster dieser Freischaltung |
 | *Delete* | fragt einmal nach und nennt die Fälle, die sich ändern; entfernt den Fall und jeden Verweis darauf (Beziehungen anderer Fälle, Alternativen). Ein Fall, der nur mit dem gelöschten gültig ist, wird ausgeschlossen und so nie ohne seine Bedingung gerechnet. Die Freischaltungen bleiben. |
 | *One case per planned outage* | ersetzt die Fälle durch einen je FS im simulierten Zeitraum, höchstens fünf (mit Hinweis, wenn FS übrig bleiben); ignorierte und feste FS bekommen keinen. |
 | *Save configuration* / *Load saved configuration* | schreibt / liest die JSON-Datei des Projekts mit Revision, Benutzer und Zeit; das Projekt bleibt unberührt. |
@@ -156,7 +166,8 @@ nicht gerechnet und gemeldet.
 
 Die Zeitachse dient nur der Planungskontrolle (keine Lastfluss-, Spannungs-
 oder sonstigen Ergebnisse). Eine Zeile je Fall-FS (blau) und je feste FS
-(grau); orange Bänder zeigen Zeiten, in denen mehr als eine FS aktiv ist;
+(grau); hellblau schattiert sind Zeiten, in denen mehr als eine FS aktiv ist.
+Sich überlappende FS sind normale Planung, weder Warnung noch Fehler;
 Datumsangaben an Beginn und Ende jedes belegten Zeitraums. Ein langer leerer
 Zeitraum (z. B. zwischen KW10 und KW40) erscheint als schmales helles Band,
 damit weit auseinanderliegende FS lesbar bleiben (`timeline_scale`).
@@ -215,7 +226,10 @@ nie in PowerFactory und startet nie eine QDS.
 Konfigurationsdatei: `CASE_CONFIG_DIR` (Standard `~/GridLens/cases`), eine je
 Projekt. Neue Felder seit der Überarbeitung: `assessments` (`["n-0"]`) und je
 Fall `enabled` (true/false). Eine gespeicherte oder von Hand bearbeitete
-Konfiguration mit mehr als fünf Fällen wird mit diesem Grund abgelehnt; nur
+Konfiguration mit mehr als fünf Fällen (z. B. von GridLens 8.0 gespeichert)
+öffnet sich trotzdem im Fallmanager, zeigt *6 of 5 cases* in Rot und den Grund
+unter *Review & start*, damit Fälle gelöscht werden können; Rechnen, Speichern
+und `CASE_SOURCE = 'saved'` lehnen sie mit diesem Grund ab; nur
 `CASE_SOURCE = 'per_outage'` (ohne Fenster) legt weiterhin je FS einen Fall ohne
 Grenze an. Ein mit *Include in the calculation* ausgeschlossener Fall (`excluded`) wird weder gerechnet noch
 berichtet, kann aber Teil eines anderen Falls sein.

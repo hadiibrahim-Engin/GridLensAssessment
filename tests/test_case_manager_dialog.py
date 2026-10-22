@@ -7,6 +7,7 @@ editing rules behind each click are tested without a window in test_planner.py.
 from __future__ import annotations
 
 import importlib.util
+import time
 from pathlib import Path
 
 import pytest
@@ -307,20 +308,84 @@ def test_gui_20_load_saved_configuration_replaces_the_cases(monkeypatch, records
     assert seen["cases"] == ("S",) and seen["members"] == ["FS4"]
 
 
-def test_new_case_gets_a_generated_id_and_is_named_in_place(monkeypatch, records, config):
+def test_new_case_gets_a_generated_id_and_is_named_in_its_window(monkeypatch, records, config):
+    errors = []
+
     def steps(dialog, root, seen):
+        dialog.messagebox.showerror = lambda title, text, **_kw: errors.append(text)
         _button(root, "New").invoke()
         seen["selected"] = dialog.case_tree.selection()
-        dialog.name_var.set("Winter")
-        dialog.apply_details()
+        form = dialog.case_form
+        seen["opened"] = form is not None and form["window"].winfo_exists()
+        form["name"].set("Winter")
+        form["description"].set("two lines in January")
+        form["apply"]()
+        seen["closed"] = dialog.case_form is None
         seen["row"] = dialog.case_tree.item("C1", "values")
+        seen["description"] = dialog.case_description.cget("text")
         seen["headings"] = [label.cget("text") for label in dialog.case_table.labels]
+        dialog.edit_case()
+        dialog.case_form["name"].set("   ")
+        dialog.case_form["apply"]()
+        seen["kept"] = (dialog.case_form is not None, dialog.editor.case("C1")["name"])
+        dialog.case_form["close"]()
 
     _, seen = _run(monkeypatch, records, config, steps)
 
-    assert seen["selected"] == ("C1",)
-    assert seen["row"][0] == "Winter"
+    assert seen["selected"] == ("C1",) and seen["opened"] and seen["closed"]
+    assert seen["row"][0] == "Winter" and seen["description"] == "two lines in January"
+    assert seen["kept"] == (True, "Winter") and errors == ["A planning case needs a name."]
     assert seen["headings"] == ["Planning case", "Outages", "Status"], "no ID column"
+
+
+def test_double_click_on_a_case_opens_name_and_description(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        tree = dialog.case_tree
+        tree.selection_set("B")
+        root.update()
+        x, y, _, height = tree.bbox("B")
+        dialog.on_case_double_click(type("Event", (), {"x": x + 5, "y": y + height // 2})())
+        root.update()
+        seen["form"] = dialog.case_form is not None and dialog.case_form["name"].get()
+        seen["panel"] = [text for text in _texts(root) if text in ("Name", "Description")]
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    assert seen["form"] == "North-east"
+    assert seen["panel"] == ["Name", "Description"], "only the small window has name and description fields"
+
+
+def test_ticking_the_box_adds_and_removes_an_outage(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        _select_case(dialog, root, "B")
+        tree = dialog.available_tree
+        key = records[3]["key"]
+        tree.see(key)
+        root.update()
+        x, y, width, height = tree.bbox(key, "#1")
+        click = lambda: (tree.event_generate("<Button-1>", x=x + width // 2, y=y + height // 2), root.update())
+        click()
+        seen["after_tick"] = (_members(dialog), tree.item(key, "values")[0])
+        root.after(600, lambda: None)
+        time.sleep(0.6)  # a second, separate click; a quick one counts as a double-click
+        root.update()
+        click()
+        seen["after_untick"] = (_members(dialog), tree.item(key, "values")[0])
+        event = type("Event", (), {"x": x + width // 2, "y": y + height // 2})()
+        dialog.on_available_double_click(event)  # a quick second click on the box ticks too
+        root.update()
+        seen["double_on_box"] = (_members(dialog), dialog.root.winfo_children()[-1].winfo_class())
+        name_x = x + width + 20
+        tree.event_generate("<Button-1>", x=name_x, y=y + height // 2)
+        root.update()
+        seen["plain_click"] = _members(dialog)
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    assert seen["after_tick"] == (["FS3", "FS4"], gl.MARK_IN_CASE)
+    assert seen["after_untick"] == (["FS3"], gl.MARK_FREE)
+    assert seen["double_on_box"] == (["FS3", "FS4"], seen["double_on_box"][1]) and seen["double_on_box"][1] != "Toplevel"
+    assert seen["plain_click"] == ["FS3", "FS4"], "a click on the name only selects the row"
 
 
 def test_new_and_copy_stop_at_five_cases(monkeypatch, records, config):
@@ -340,6 +405,36 @@ def test_new_and_copy_stop_at_five_cases(monkeypatch, records, config):
     assert seen["counter"] == "5 of 5 cases"
     assert seen["new_locked"] == (True, True)
     assert seen["cases"] == 5 and infos and "At most 5" in infos[0]
+
+
+def test_refreshes_reuse_widgets_and_render_once(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        before = [str(label) for pair in dialog._preview_labels for label in pair]
+        dialog.case_tree.selection_set("B")
+        root.update()
+        seen["same_labels"] = before == [str(label) for pair in dialog._preview_labels for label in pair]
+        table = dialog.available_table
+        renders = []
+        original = table.render
+        table.render = lambda: (renders.append(1), original())
+        table.values[1].set("FS")  # typing schedules a render
+        table.clear_filters()      # renders at once
+        seen["pending"] = table._pending
+        time.sleep(0.2)  # longer than the 120 ms pause of a typed filter
+        root.update()
+        seen["renders"] = len(renders)
+        dialog.case_table.values[0].set("Summer")
+        dialog.case_table.render()
+        dialog.messagebox.askyesno = lambda *_args, **_kw: True
+        dialog.one_case_per_outage()
+        seen["case_filter"] = dialog.case_table.values[0].get()
+        seen["shown"] = len(dialog.case_tree.get_children())
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    assert seen["same_labels"], "the preview updates its labels instead of rebuilding them"
+    assert seen["pending"] is None and seen["renders"] == 1
+    assert seen["case_filter"] == "" and seen["shown"] == len(records)
 
 
 def test_workspace_runs_available_outages_then_case_outages_then_cases(monkeypatch, records, config):
@@ -364,7 +459,7 @@ def test_hover_explains_the_relations_and_the_controls(monkeypatch, records, con
         seen["lists"] = {name: dialog.tip_text(box) for name, box in dialog._relation_lists.items()}
         seen["labels"] = [label.cget("text") for label in dialog.relation_labels.values()]
         seen["buttons"] = {label: dialog.tip_text(_button(root, label))
-                           for label in ("New", "Copy", "Rename", "Delete", "Add to case", "Set as fixed background",
+                           for label in ("New", "Copy", "Edit", "Delete", "Add to case", "Set as fixed background",
                                          "Remove from case", "Start calculation", "Cancel")}
         status = dialog.case_table.labels[2]
         seen["status_header"] = dialog.tip_text(status)

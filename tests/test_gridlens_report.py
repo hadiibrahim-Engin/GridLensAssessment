@@ -590,6 +590,21 @@ def test_duplicate_outage_names_receive_distinct_short_ids():
     assert all(record["id"].startswith("Duplicate (") for record in records)
 
 
+def test_only_planned_outages_are_read_not_demand_transfers():
+    outage = PlannedOutage("FS Line A")
+    transfer = PFObject("Demand transfer Load 1 -> Load 2", "IntOutage", outserv=0)
+    transfer.starttime, transfer.endtime = OUTAGE_START, OUTAGE_END
+    app = App((outage, transfer))
+    asked = []
+    contents = app._outage_contents
+    app.outage_folder.GetContents = app.project.GetContents = lambda pattern, *args: asked.append(pattern) or contents(pattern, *args)
+
+    records, _ = gl.classify_planned_outages(app, gl.RunLogger(app), (PERIOD_START, PERIOD_END))
+
+    assert [record["name"] for record in records] == ["FS Line A"]
+    assert gl.OUTAGE_CLASSES == ("IntPlannedout",) and set(asked) == {"*.IntPlannedout"}
+
+
 def test_complete_outage_discovery_failure_is_not_reported_as_empty():
     app = App(())
     app.outage_folder.GetContents = lambda *_args: (_ for _ in ()).throw(

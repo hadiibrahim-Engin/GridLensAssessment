@@ -10,7 +10,7 @@ Statuskategorien:
 - **Nicht verifiziert** – offen; braucht PowerFactory oder ist nicht umgesetzt
 
 Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
-343 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); 19 davon
+350 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); 22 davon
 öffnen das echte Tk-Fenster und werden nur übersprungen, wo `tkinter` fehlt. Die Testnamen sind englisch, wie der Code.
 
 ## Tests A–E der Vorgabe
@@ -39,7 +39,7 @@ Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
 | V10 | alternative Fälle zur gleichen Zeit | keine ungeplante Kombination | nie automatisch kombiniert | Testdaten | `test_no_combination_is_generated_automatically` |
 | V11 | gemeinsam gültige Fälle | ausdrücklicher Gesamtplan | `includes` | Testdaten | Test E |
 | V12 | teilweise identische Fälle | Wiederverwendung nur bei voller Gleichheit | Fingerabdruck über FS, Fenster, feste FS; übernommenes Ergebnis gekennzeichnet | Testdaten | `test_v12_identical_cases_share_a_fingerprint_and_others_do_not`, `test_identical_cases_are_calculated_once_and_say_so` |
-| V13 | zwei FS auf derselben Leitung | konsistenter Zustand | Warnung; PF-Verhalten unbekannt (P4) | Testdaten (Warnung); PF offen | `test_v13_two_outages_on_the_same_line_warn` |
+| V13 | zwei FS auf derselben Leitung | konsistenter Zustand | keine Warnung, Überlappung ist normale Planung; PF-Verhalten unbekannt (P4) | Testdaten; PF offen | `test_v13_overlapping_outages_are_normal_planning_not_a_warning` |
 | V14 | FS mit dauerhafter Umschaltung | Nachwirkung berücksichtigt | Spill-over-Zeilen bewertet und gemeldet | Testdaten | `test_effect_after_the_window_is_assessed_as_well` |
 | V15 | QDSL-Speicherzustand | richtige Fortsetzung | konservative Läufe sind durchgehend; Fenster abgelehnt, wenn `ElmQdsl` vorhanden | Statisch + Testdaten | `test_time_coupled_models_make_shorter_windows_inadmissible` |
 | V16 | kurze FS zwischen QDS-Stützstellen | Ereignis erfasst | keine Zeile → Abdeckung 0 → nie „kein Grenzwert überschritten“ | Testdaten | `test_v16_short_outage_between_time_steps_has_no_coverage`, `test_incomplete_coverage_is_never_reported_as_secure` |
@@ -104,7 +104,7 @@ Nicht in PowerFactory verifiziert; die Bearbeitungsregeln sind ohne Fenster gete
 | 5 | FS aus einem Fall entfernen | nur die Zuordnung endet | Editor + echtes Fenster | `test_gui_05_and_09_*`, `test_gui_04_and_05_*` |
 | 6 | eine FS in mehreren Fällen | erlaubt | Editor | `test_gui_04_and_06_*` |
 | 7 | Fall kopieren | Zuordnungen kopiert, beide unabhängig | Editor | `test_gui_07_*` |
-| 8 | Fall umbenennen | ID und alle Verweise bleiben | Editor + echtes Fenster | `test_gui_08_*`, `test_new_case_gets_a_generated_id_and_is_named_in_place` |
+| 8 | Fall umbenennen | ID und alle Verweise bleiben | Editor + echtes Fenster | `test_gui_08_*`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window` |
 | 9 | Fall löschen | Freischaltungen bleiben; Verweise auf den Fall entfernt | Editor | `test_gui_05_and_09_*`, `test_gui_deleting_a_case_removes_every_reference_to_it` |
 | 10 | feste Hintergrund-FS | getrennt von Fall-FS, nie beides; Rfix in der Vorschau | Editor | `test_gui_10_*` |
 | 11 | Suche nach Betriebsmittel | nur passende FS | Editor + echtes Fenster | `test_gui_11_and_12_*`, `test_gui_11_*` |
@@ -117,9 +117,11 @@ Nicht in PowerFactory verifiziert; die Bearbeitungsregeln sind ohne Fenster gete
 | 18 | Berechnung starten | Konfiguration an den bestehenden GridLens-Lauf übergeben | echtes Fenster + Lauf | `test_gui_18_and_19_*`, `test_a_case_with_two_outages_runs_them_together` |
 | 19 | keine Ergebnisansicht | Fenster schließt; das PDF ist das einzige Ergebnis | echtes Fenster | `test_gui_18_and_19_*` |
 | 20 | erneut öffnen | gespeicherte Zuordnungen kommen unverändert zurück | Editor + echtes Fenster | `test_gui_20_*` (2) |
-| GUI-Testwerkzeug: eigenständiges Skript mit eigener Kopie des Fallmanagers (lädt `gridlens_report.py` nie), Kopie gleich dem Produktionsfenster; Projekt-FS nur lesend; temporäre Konfigurationskopie; Demodaten; fehlendes Tk | `test_case_manager_gui.py` (8) |
+| GUI-Testwerkzeug: eigenständiges Skript mit eigener Kopie des Fallmanagers (lädt `gridlens_report.py` nie), Kopie gleich dem Produktionsfenster; Projekt-FS nur lesend; temporäre Konfigurationskopie; Demodaten; fehlendes Tk | `test_case_manager_gui.py` (9) |
 | Tabellenfilter und Sortierung: enthält / exakter Wert, Sortieren per Kopf ▲▼, Spaltenbreiten, Filter auf jedem Reiter ausgerichtet | `test_filter_rows_*`, `test_sort_rows_*`, `test_column_widths_*`, `test_gui_11_every_table_filters_per_column_and_clears`, `test_filters_stand_exactly_under_their_columns`, `test_header_click_sorts_and_shows_the_direction` |
 | Reiter, Statuszeile, Problemliste; feste FS und Regeln auf eigenem Reiter | `test_tabs_status_line_and_problem_list`, `test_fixed_outages_and_rules_live_on_their_own_tab` |
-| höchstens 5 Fälle (Fenster, gespeicherte Datei, je FS ein Fall); IDs generiert, nie getippt | `test_gui_at_most_five_cases`, `test_gui_one_case_per_outage_stops_at_five`, `test_more_than_five_cases_are_refused_where_engineers_define_them`, `test_gui_ids_are_generated_and_the_engineer_only_names_cases`, `test_new_case_gets_a_generated_id_and_is_named_in_place`, `test_new_and_copy_stop_at_five_cases` |
+| höchstens 5 Fälle (Fenster, gespeicherte Datei, je FS ein Fall); IDs generiert, nie getippt | `test_gui_at_most_five_cases`, `test_gui_one_case_per_outage_stops_at_five`, `test_more_than_five_cases_are_refused_where_engineers_define_them`, `test_gui_ids_are_generated_and_the_engineer_only_names_cases`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window`, `test_new_and_copy_stop_at_five_cases` |
 | Reihenfolge im Workspace: verfügbare FS, FS des Falls, Fälle; Hover-Texte an Beziehungen, Schaltflächen, Spaltenköpfen und Filtern | `test_workspace_runs_available_outages_then_case_outages_then_cases`, `test_hover_explains_the_relations_and_the_controls` |
 | Review-Korrekturen: je FS ein Fall nur im Zeitraum; Copy übernimmt Alternativen; Delete schließt Fälle aus, die den gelöschten voraussetzen, und nennt die Änderungen; Regelauswahl trennt gleichnamige FS; eine Auflösung je Aktualisierung; Tippen schließt einen Hinweis | `test_one_case_per_outage_takes_only_outages_in_the_simulated_period`, `test_copy_keeps_the_alternatives`, `test_deleting_a_required_case_excludes_the_dependent_case`, `test_rule_choices_keep_outages_with_the_same_name_apart`, `test_statuses_problems_and_preview_share_one_resolution`, `test_hover_explains_the_relations_and_the_controls` |
+| zweites Review: eine gespeicherte Datei mit mehr als fünf Fällen öffnet sich trotzdem (ausgeschlossen bleibt ausgeschlossen); der GUI-Test übersteht eine beschädigte gespeicherte Datei und importiert, was sein eigener Code braucht; Vorschau-Labels werden wiederverwendet; ein direktes Rendern bricht das ausstehende ab; je FS ein Fall leert den Fallfilter | `test_a_saved_file_with_too_many_cases_still_opens_so_cases_can_be_deleted`, `test_a_damaged_saved_configuration_does_not_stop_the_gui_test`, `test_the_copied_case_manager_matches_gridlens_report`, `test_refreshes_reuse_widgets_and_render_once` |
+| Häkchen in der FS-Liste (anhaken nimmt auf, abhaken entfernt, ein schneller zweiter Klick ist kein Doppelklick), Name und Beschreibung im eigenen Fenster (Doppelklick, Edit, New), nur `IntPlannedout` gelesen (keine Demand Transfers) | `test_the_check_box_adds_and_removes_one_outage`, `test_ticking_the_box_adds_and_removes_an_outage`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window`, `test_double_click_on_a_case_opens_name_and_description`, `test_only_planned_outages_are_read_not_demand_transfers` |

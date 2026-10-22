@@ -21,17 +21,17 @@ Three tabs; a status line and the action bar stay visible on every tab:
  [ Workspace ] [ Fixed background & rules ] [ Review & start (1) ]
 +--------------------------------------+------------------------------------+------------------------+
 | Available planned outages            | Case A - Summer measures           | Planning cases  2 of 5 |
-| Assigned Planned outage Equip. Start | 2 case outages · 1 fixed backgr.   | Planning case  FS  Stat|
+| In case  Planned outage Equip. Start | 2 case outages · 1 fixed backgr.   | Planning case Outg Stat|
 | [All  v][            ][     ][     ] | Planned outage Equip. Start End Pr | [            ][  ][ v ]|
-| in case FS Bedarf 1    NE_L1  ...    | [          ][     ][    ][   ][  ] | Summer         2  ready|
-|         FS Bedarf 3    NE_L7  ...    | FS Bedarf 1    NE_L1  ...          | North-east     1  ready|
+| ☑ in case FS Bedarf 1 NE_L1  ...     | [          ][     ][    ][   ][  ] | Summer         2  ready|
+| ☐       FS Bedarf 3    NE_L7  ...    | FS Bedarf 1    NE_L1  ...          | North-east     1  ready|
 | fixed   FS Hintergrund NE_L5  ...    | FS Bedarf 2    NE_L2  ...          | 4 shown                |
-| 48 shown                             | 2 shown                            | [New][Copy][Ren.][Del.]|
+| 48 shown                             | 2 shown                            | [New][Copy][Edit][Del.]|
 |                                      | [Remove from case] [Details]       | Selected case          |
-| [Add to case] [Set as fixed] [Det.]  | Timeline of the case               |  Name [..............] |
-|                                      |   |=====FS Bedarf 1=====|          |  [x] Include           |
-|                                      |     |====FS Bedarf 2====|          |  Relations to other ⓘ  |
-|                                      |                                    |  Also | Only | Altern. |
+| [Add to case] [Set as fixed] [Det.]  | Timeline of the case               |  [x] Include           |
+|                                      |   |=====FS Bedarf 1=====|          |  Relations to other ⓘ  |
+|                                      |     |====FS Bedarf 2====|          |  Also | Only | Altern. |
+|                                      |                                    |                        |
 +--------------------------------------+------------------------------------+------------------------+
  [Save configuration] [Load saved]   QDS ... · n-0 · 3 of 4 cases ready · 1 problem  [Cancel] [Start calculation]
 ```
@@ -39,10 +39,14 @@ Three tabs; a status line and the action bar stay visible on every tab:
 - **Workspace** – three panes, about 40 % / 38 % / 22 %, dividers draggable.
   Left to right the way an outage travels: from the library, into the
   selected case, which is chosen on the right.
-  - **Available planned outages** (left): every outage of the library with *Assigned*
-    (`in case`, `fixed`, empty; also as row colour), *Planned outage, Equipment,
-    Start, End, Status*; *Add to case* (also double-click or Enter), *Set as
-    fixed background*, *Details*.
+  - **Available planned outages** (left): every planned outage (`IntPlannedout`)
+    of the library. The first column *In case* is a **check box**: tick it
+    (click or Space) and the outage belongs to the selected case, untick it and
+    the assignment ends; `☑ in case`, `☐` free, `fixed` (cannot be ticked), also
+    as row colour. Then *Planned outage, Equipment, Start, End, Status*;
+    *Add to case* (or Enter) adds all selected rows at once, *Set as fixed
+    background*, *Details* (also double-click on a row). Demand transfers
+    (`IntOutage`) are not read: they move load and switch no equipment.
   - **The selected case** (centre): title *Case A - name*, the count line *n case outages ·
     m fixed background outages*, the table *Planned outage, Equipment, Start, End,
     Priority*, *Remove from case*, *Details*, and the timeline of the case.
@@ -51,11 +55,12 @@ Three tabs; a status line and the action bar stay visible on every tab:
     (number of outages), *Status* (`ready`, `not calculated`, `excluded`).
     Nobody types an ID: GridLens numbers the cases itself (C1 … C5, the lowest
     free number) and uses that ID only internally (relations, result objects
-    `GridLens_<stamp>_C1`, report). Below: *New, Copy, Rename, Delete*, *One case
-    per planned outage* (creates at most five), and the selected case's name,
-    description, *Include in the calculation* and its *Relations to other
-    cases*, chosen by clicking: *Also contains* (joint plan), *Only valid with*
-    (conditional case), *Alternative to* (either – or). See
+    `GridLens_<stamp>_C1`, report). Below: *New, Copy, Edit, Delete*, *One case
+    per planned outage* (creates at most five), and for the selected case
+    *Include in the calculation* and its *Relations to other cases*, chosen by clicking: *Also contains* (joint plan), *Only valid with*
+    (conditional case), *Alternative to* (either – or). Name and description
+    take no room here: a **double-click on the case** (or *Edit*) opens a small
+    window with both; the centre shows the description next to the case name. See
     [Relations between planning cases](#relations-between-planning-cases).
 - **Fixed background & rules** – left the fixed background outages (Rfix) with
   *Remove from fixed background*; right the rules between planned outages with three
@@ -72,7 +77,7 @@ Three tabs; a status line and the action bar stay visible on every tab:
 
 - A **filter row** directly under the column headers: a text field per text
   column (keeps rows that contain the text, any case) and a drop-down per
-  category column (*Status*, *Assigned*, *Rule*; *All* switches it off).
+  category column (*Status*, *In case*, *Rule*; *All* switches it off).
   Filters of several columns combine.
 - Under the table: *12 of 48 shown · Clear filters* (only while a filter is
   active).
@@ -87,7 +92,7 @@ Three tabs; a status line and the action bar stay visible on every tab:
 Resting the mouse on a control for about half a second shows what it does to
 the calculation: every button, the three relation headings and lists (marked
 ⓘ), *Include in the calculation*, the name and description fields, the case
-counter, the column headings with categories (*Status*, *Assigned*, *Outages*,
+counter, the column headings with categories (*Status*, *In case*, *Outages*,
 *Priority*, *Rule*; each also says how sorting works), every filter field, the
 timeline legend, the rule drop-down, n-1, the QDS period and the status line.
 The texts are in `HELP_TEXTS` and `COLUMN_HELP` of `gridlens_report.py`
@@ -137,13 +142,15 @@ time). A case that breaks a rule is not calculated and is reported.
 | Click a case in a relation list | selects (highlights) or deselects it; the relation applies at once |
 | Rest the mouse on a control | after about half a second an explanation appears; it closes when the mouse leaves or on a click |
 | Click the status line | opens *Review & start* |
-| *Add to case*, double-click or Enter in the left list | the selected outages are assigned; centre table, outage count, marks and preview update at once. An outage already in the case or fixed is refused with the reason. |
+| Tick or untick the box in the first column of the left list (or Space) | that one outage is added to or removed from the selected case at once; a fixed outage cannot be ticked and says why |
+| *Add to case* or Enter in the left list | the selected outages are assigned; centre table, outage count, marks and preview update at once. An outage already in the case or fixed is refused with the reason. |
 | *Remove from case* or Delete key in the centre | only the assignment ends; the planned outage in PowerFactory is untouched. |
 | Double-click in the centre or *Details* | a compact window with what PowerFactory holds for the outage (object, class, equipment, actions, window, priority, status, cases it is used in) and its own dates in this case. |
 | *Set as fixed background* | the outage becomes part of the reference and of every case (Rfix). Refused while the outage is assigned to a case, so it never acts twice. |
-| *New* | creates *Case n* with the next generated ID (C1 … C5), selects it and puts the cursor into the name field: no dialog. Locked at five cases. |
+| *New* | creates *Case n* with the next generated ID (C1 … C5), selects it and opens its name and description window. Locked at five cases. |
 | *Copy* | new generated ID, name *… (copy)*, same outages, own dates and relations (including *Alternative to*); independent afterwards. Locked at five cases. |
-| *Rename* | jumps to the name field; only the name changes, the generated ID that relations and result objects use stays. |
+| Double-click a case, *Edit* or Enter in the case list | a small window *Planning case* with *Name* and *Description*; *OK* (Enter) applies, *Cancel* (Escape) leaves both unchanged; an empty name is refused. The generated ID that relations and result objects use stays. |
+| Double-click a row in the left list | the details window of that planned outage |
 | *Delete* | asks once and names the cases that change; removes the case and every reference to it (other cases' relations, alternatives). A case that is only valid with the deleted one is excluded, so it is never calculated without its condition. The planned outages stay. |
 | *One case per planned outage* | replaces the cases by one per outage in the simulated period, at most five (and says so when outages are left out); ignored and fixed outages get none. |
 | *Save configuration* / *Load saved configuration* | writes / reads the project's JSON file with revision, user and time; the project is not touched. |
@@ -153,8 +160,9 @@ time). A case that breaks a rule is not calculated and is reported.
 ## Timeline
 
 The timeline is a planning check only (no load flow, voltage or other
-result). One row per case outage (blue) and per fixed outage (grey); orange
-bands mark times when more than one is active; date labels at the start and
+result). One row per case outage (blue) and per fixed outage (grey); light blue
+shading marks times when more than one is active. Overlapping outages are
+normal planning: they are neither a warning nor an error; date labels at the start and
 end of every busy period. A long empty period (e.g. between KW10 and KW40)
 is drawn as a short light band, so far-apart outages stay readable
 (`timeline_scale`).
@@ -212,7 +220,9 @@ equipment, never writes PowerFactory and never starts a QDS.
 Configuration file: `CASE_CONFIG_DIR` (default `~/GridLens/cases`), one per
 project. New fields since the redesign: `assessments` (`["n-0"]`) and per case
 `enabled` (true/false). A saved or hand-edited configuration with more than five
-cases is refused with that reason; only `CASE_SOURCE = 'per_outage'` (no window)
+cases (e.g. saved by GridLens 8.0) still opens in the case manager, shows *6 of 5
+cases* in red and the reason under *Review & start*, so cases can be deleted;
+calculating, saving or `CASE_SOURCE = 'saved'` refuse it with that reason; only `CASE_SOURCE = 'per_outage'` (no window)
 still creates one case per outage without a limit. A case excluded with *Include in the calculation* is neither calculated nor
 reported but can still be part of another case.
 

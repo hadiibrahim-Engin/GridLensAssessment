@@ -121,6 +121,21 @@ def test_save_and_load_in_the_window_use_a_temporary_copy_of_the_saved_configura
     assert any("Cancel" in line for line in app.lines)
 
 
+def test_a_damaged_saved_configuration_does_not_stop_the_gui_test(opened):
+    gl, seen, answer = opened
+    app = App([outage("FS1", 1)])
+    real = Path(gl.case_config_path(gl.object_key(app.project)))
+    real.parent.mkdir(parents=True)
+    real.write_text("{ damaged", encoding="utf-8")
+    answer(None)
+
+    assert tool.run(app) is True
+
+    assert seen["config"]["cases"] == []
+    assert any("empty configuration (The saved case configuration" in line for line in app.lines)
+    assert real.read_text(encoding="utf-8") == "{ damaged", "the real file is left as it is"
+
+
 def test_without_powerfactory_the_window_shows_marked_demo_data(opened, capsys):
     _, seen, answer = opened
     answer(None)
@@ -163,6 +178,10 @@ def test_the_copied_case_manager_matches_gridlens_report():
         "the case manager in gridlens_report.py changed: run python3 tools/sync_case_manager_copy.py"
     for name in ("CaseManagerDialog", "CaseEditor", "FilterTable", "Tooltip", "HELP_TEXTS", "resolve_request"):
         assert hasattr(tool, name), name
+    header = TOOL.read_text(encoding="utf-8").split(sync.BEGIN)[0]
+    for module in ("json", "os", "time", "shutil", "tempfile"):
+        assert "import {}\n".format(module) in header, "the tool's own code imports {} itself".format(module)
+    assert "import os\n" not in sync.current_block() and "import json\n" not in sync.current_block()
 
 
 def test_with_real_tk_the_tool_opens_the_new_window_and_cancel_ends_it(monkeypatch):

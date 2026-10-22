@@ -268,13 +268,31 @@ def test_own_dates_are_refused_while_overrides_are_off():
     assert plan["windows"][fs1["key"]] == (kw(40), kw(41)), "the case documents its own dates"
 
 
-def test_v13_two_outages_on_the_same_line_warn():
+def test_v13_overlapping_outages_are_normal_planning_not_a_warning():
     fs1 = record("FS1", kw(10), kw(11), ["Project\\L100.ElmLne"])
     fs2 = record("FS2", kw(10) + 24 * H, kw(12), ["Project\\L100.ElmLne"])
+    fs3 = record("FS3", kw(10), kw(12), ["Project\\L200.ElmLne"])
 
-    plan = gl.resolve_request(config([case("A", fs1, fs2)]), [fs1, fs2], PERIOD)["cases"][0]
+    plan = gl.resolve_request(config([case("A", fs1, fs2, fs3)]), [fs1, fs2, fs3], PERIOD)["cases"][0]
 
-    assert any("same equipment" in warning for warning in plan["warnings"])
+    assert plan["status"] == gl.PLAN_READY and plan["warnings"] == []
+    assert len(plan["relations"]) == 3, "the overlap is only recorded as a relation for the report"
+    edit = gl.CaseEditor([fs1, fs2, fs3], config([case("A", fs1, fs2, fs3)]), PERIOD)
+    assert edit.problem_rows() == []
+
+
+def test_the_check_box_adds_and_removes_one_outage(editor):
+    edit, outages = editor
+    marks = lambda: {key: cells[0] for key, cells in edit.available_rows("B")}
+
+    assert marks()[outages[0]["key"]] == gl.MARK_FREE
+    assert edit.toggle_outage("B", outages[0]["key"]) is None
+    assert marks()[outages[0]["key"]] == gl.MARK_IN_CASE
+    assert edit.toggle_outage("B", outages[0]["key"]) is None
+    assert marks()[outages[0]["key"]] == gl.MARK_FREE
+    edit.set_fixed(outages[4]["key"], True)
+    assert "fixed background outage" in edit.toggle_outage("B", outages[4]["key"])
+    assert edit.toggle_outage(None, outages[0]["key"]) == "Select a planning case first."
 
 
 def test_case_outside_the_simulated_period_is_not_simulated():
@@ -1004,6 +1022,26 @@ def test_more_than_five_cases_are_refused_where_engineers_define_them():
     with pytest.raises(gl.GridLensError, match="at most 5 planning cases"):
         gl.resolve_request(data, outages, PERIOD, "saved")
     assert len(gl.resolve_request(data, outages, PERIOD, "per_outage")["cases"]) == 6, "the window-less mode keeps every outage"
+
+
+def test_a_saved_file_with_too_many_cases_still_opens_so_cases_can_be_deleted(tmp_path, monkeypatch):
+    monkeypatch.setattr(gl, "CASE_CONFIG_DIR", str(tmp_path))
+    outages = [record("FS{}".format(i), kw(10), kw(11), ["Project\\Z{}.ElmLne".format(i)]) for i in range(6)]
+    data = config([case("K{}".format(i), item) for i, item in enumerate(outages)])
+    data["cases"][5]["enabled"] = False
+    path = str(tmp_path / "old.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle)  # as GridLens 8.0 saved it, without a case limit
+
+    loaded = gl.load_case_config(path)
+    edit = gl.CaseEditor(outages, loaded, PERIOD)
+    statuses = edit.case_statuses()
+    assert statuses["K5"] == "excluded" and statuses["K0"] == "not calculated"
+    assert "at most 5 planning cases" in " ".join(problem for _, problem in edit.problem_rows())
+    with pytest.raises(gl.GridLensError, match="at most 5 planning cases"):
+        gl.save_case_config(path, loaded, "operator")
+    edit.delete_case("K5")
+    assert set(edit.case_statuses().values()) == {"ready"}, "after deleting one the configuration works again"
 
 
 def test_gui_20_saved_assignments_come_back_unchanged(editor, tmp_path):
