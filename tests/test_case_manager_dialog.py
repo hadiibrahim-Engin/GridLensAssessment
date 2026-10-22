@@ -308,51 +308,76 @@ def test_gui_20_load_saved_configuration_replaces_the_cases(monkeypatch, records
     assert seen["cases"] == ("S",) and seen["members"] == ["FS4"]
 
 
-def test_new_case_gets_a_generated_id_and_is_named_in_its_window(monkeypatch, records, config):
-    errors = []
-
+def test_new_case_gets_a_standard_name_without_any_extra_window(monkeypatch, records, config):
     def steps(dialog, root, seen):
-        dialog.messagebox.showerror = lambda title, text, **_kw: errors.append(text)
+        windows = len(root.winfo_children())
         _button(root, "New").invoke()
+        root.update()
         seen["selected"] = dialog.case_tree.selection()
-        form = dialog.case_form
-        seen["opened"] = form is not None and form["window"].winfo_exists()
-        form["name"].set("Winter")
-        form["description"].set("two lines in January")
-        form["apply"]()
-        seen["closed"] = dialog.case_form is None
         seen["row"] = dialog.case_tree.item("C1", "values")
-        seen["description"] = dialog.case_description.cget("text")
+        seen["new_windows"] = [child.winfo_class() for child in root.winfo_children()[windows:]]
+        seen["editing"] = dialog.inline_edit
         seen["headings"] = [label.cget("text") for label in dialog.case_table.labels]
-        dialog.edit_case()
-        dialog.case_form["name"].set("   ")
-        dialog.case_form["apply"]()
-        seen["kept"] = (dialog.case_form is not None, dialog.editor.case("C1")["name"])
-        dialog.case_form["close"]()
+        seen["buttons"] = sorted(dialog.case_buttons)
 
     _, seen = _run(monkeypatch, records, config, steps)
 
-    assert seen["selected"] == ("C1",) and seen["opened"] and seen["closed"]
-    assert seen["row"][0] == "Winter" and seen["description"] == "two lines in January"
-    assert seen["kept"] == (True, "Winter") and errors == ["A planning case needs a name."]
+    assert seen["selected"] == ("C1",) and seen["row"][0] == "Case 1"
+    assert "Toplevel" not in seen["new_windows"] and seen["editing"] is None
     assert seen["headings"] == ["Planning case", "Outages", "Status"], "no ID column"
+    assert seen["buttons"] == ["Copy", "Delete", "New"], "no Edit button"
 
 
-def test_double_click_on_a_case_opens_name_and_description(monkeypatch, records, config):
+def test_double_click_renames_a_case_in_place(monkeypatch, records, config):
     def steps(dialog, root, seen):
         tree = dialog.case_tree
-        tree.selection_set("B")
-        root.update()
+        _select_case(dialog, root, "B")
         x, y, _, height = tree.bbox("B")
         dialog.on_case_double_click(type("Event", (), {"x": x + 5, "y": y + height // 2})())
         root.update()
-        seen["form"] = dialog.case_form is not None and dialog.case_form["name"].get()
-        seen["panel"] = [text for text in _texts(root) if text in ("Name", "Description")]
+        entry = dialog.inline_edit["entry"]
+        seen["over_the_cell"] = (entry.winfo_parent() == str(tree), entry.get(), entry.winfo_y() == y)
+        entry.delete(0, "end")
+        entry.insert(0, "Winter")
+        entry.event_generate("<Return>")
+        root.update()
+        seen["renamed"] = (tree.item("B", "values")[0], dialog.inline_edit, entry.winfo_exists())
+        seen["still_open"] = root.winfo_exists()
+        dialog.rename_in_place("B")
+        dialog.inline_edit["entry"].delete(0, "end")
+        dialog.inline_edit["entry"].event_generate("<Escape>")
+        root.update()
+        seen["escape"] = (tree.item("B", "values")[0], root.winfo_exists())
+        dialog.rename_in_place("B")
+        dialog.inline_edit["entry"].delete(0, "end")
+        dialog.finish_editing()
+        seen["empty"] = tree.item("B", "values")[0]
 
     _, seen = _run(monkeypatch, records, config, steps)
 
-    assert seen["form"] == "North-east"
-    assert seen["panel"] == ["Name", "Description"], "only the small window has name and description fields"
+    assert seen["over_the_cell"] == (True, "North-east", True)
+    assert seen["renamed"] == ("Winter", None, 0) and seen["still_open"]
+    assert seen["escape"] == ("Winter", 1), "Escape cancels the edit, not the whole window"
+    assert seen["empty"] == "Winter", "an empty name keeps the old one"
+
+
+def test_double_click_on_the_description_edits_it_in_place(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        _select_case(dialog, root, "A")
+        seen["placeholder"] = dialog.case_description.cget("text")
+        dialog.describe_in_place()
+        root.update()
+        entry = dialog.inline_edit["entry"]
+        entry.insert(0, "two lines in July")
+        dialog.case_tree.focus_set()  # a click elsewhere applies
+        root.update()
+        seen["description"] = (dialog.editor.case("A")["description"], dialog.case_description.cget("text"))
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    assert seen["placeholder"] == "(double-click to add a description)"
+    assert seen["description"] == ("two lines in July", "two lines in July")
+
 
 
 def test_ticking_the_box_adds_and_removes_an_outage(monkeypatch, records, config):
@@ -459,7 +484,7 @@ def test_hover_explains_the_relations_and_the_controls(monkeypatch, records, con
         seen["lists"] = {name: dialog.tip_text(box) for name, box in dialog._relation_lists.items()}
         seen["labels"] = [label.cget("text") for label in dialog.relation_labels.values()]
         seen["buttons"] = {label: dialog.tip_text(_button(root, label))
-                           for label in ("New", "Copy", "Edit", "Delete", "Add to case", "Set as fixed background",
+                           for label in ("New", "Copy", "Delete", "Add to case", "Set as fixed background",
                                          "Remove from case", "Start calculation", "Cancel")}
         status = dialog.case_table.labels[2]
         seen["status_header"] = dialog.tip_text(status)

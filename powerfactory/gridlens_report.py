@@ -3048,6 +3048,8 @@ HELP_TEXTS = {
                     "reported with the reason.\n"
                     "Works both ways: selecting B here also marks this case under B.\n"
                     "Click a case to select it (highlighted), click again to deselect.",
+    'description': "Double-click to write or change the description of the case: Enter or a click elsewhere "
+                   "applies, Escape cancels.",
     'relations': "Relations to other planning cases. Select a case in the table above, then click cases in these "
                  "lists to select or deselect them. Hover over a heading for its meaning.",
     'enabled': "Include in the calculation\n"
@@ -3057,11 +3059,9 @@ HELP_TEXTS = {
                "Unticked: status 'excluded'. The case stays in the configuration but is neither calculated nor "
                "reported; other cases can still contain it through 'Also contains'.",
     'case_limit': "At most {} planning cases. Each case is one more QDS run over the complete period.".format(MAX_CASES),
-    'New': "Creates the next case (C1 ... C{}) and opens its name and description.".format(MAX_CASES),
+    'New': "Creates the next case (C1 ... C{}) with the name 'Case n'. Double-click it to rename it.".format(MAX_CASES),
     'Copy': "New case with the same planned outages, own dates and relations (also contains, only valid with, "
             "alternative to); independent afterwards.",
-    'Edit': "Name and description of the selected case, in a small window. Same as a double-click on the case. "
-            "The generated case ID stays.",
     'Delete': "Removes the case and every reference to it in other cases; asks first and names the cases that "
               "change. A case that is only valid with it is excluded. The planned outages stay in PowerFactory.",
     'one_per_outage': "Replaces all cases by one case per planned outage in the simulated period (GridLens 7 "
@@ -3093,6 +3093,8 @@ HELP_TEXTS = {
     'cancel': "Closes the window: nothing is calculated, saved or changed in the project.",
 }
 COLUMN_HELP = {
+    'case_name': "Double-click a case (or press F2) to rename it in place: Enter or a click elsewhere applies, "
+                 "Escape cancels. The generated case ID stays.",
     'case_status': "ready: will be calculated.\n"
                    "not calculated: reported as NOT EVALUATED or NOT SIMULATED, e.g. no planned outage assigned, "
                    "an outage missing in the project, own dates, a broken relation or rule, or outside the "
@@ -3650,6 +3652,19 @@ class CaseEditor:
         return lines, problems
 
 
+def window_geometry(screen_width, screen_height, share=0.86, largest=(1480, 860)):
+    """'WxH+X+Y' of the case manager: a share of the screen, at most `largest`, centred."""
+    width = max(min(int(screen_width * share), largest[0]), min(900, screen_width))
+    height = max(min(int(screen_height * share), largest[1]), min(600, screen_height))
+    width, height = min(width, screen_width), min(height, screen_height)
+    return '{}x{}+{}+{}'.format(width, height, max((screen_width - width) // 2, 0), max((screen_height - height) // 2 - 20, 0))
+
+
+def minimum_window_size(screen_width, screen_height):
+    """The smallest useful window, never larger than the screen."""
+    return min(1000, screen_width), min(620, screen_height)
+
+
 def column_widths(columns, width, flexible_share=0.6):
     """Pixel width per column for a table `width` wide; columns are (base width, stretches).
 
@@ -3915,7 +3930,7 @@ class CaseManagerDialog:
         self.outcome = None
         self._relation_lists = {}
         self._preview_labels = []
-        self.case_form = None
+        self.inline_edit = None
         self.tooltips = []
         self.bold_font = 'TkDefaultFont'
 
@@ -3933,9 +3948,8 @@ class CaseManagerDialog:
         ttk, root = self.ttk, self.root
         self._style()
         root.title('GridLens {} - Case Manager'.format(PUBLISHER_VERSION))
-        width, height = min(1720, root.winfo_screenwidth() - 60), min(960, root.winfo_screenheight() - 80)
-        root.geometry('{}x{}'.format(max(width, 1100), max(height, 700)))
-        root.minsize(1100, 700)
+        root.geometry(window_geometry(root.winfo_screenwidth(), root.winfo_screenheight()))
+        root.minsize(*minimum_window_size(root.winfo_screenwidth(), root.winfo_screenheight()))
         root.configure(background=self.BACKGROUND)
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
@@ -3968,7 +3982,7 @@ class CaseManagerDialog:
             button.grid(row=0, column=column, padx=(0, 6) if column in (0, 3) else 0)
             self.tip(button, HELP_TEXTS[key])
         root.protocol('WM_DELETE_WINDOW', self.cancel)
-        root.bind('<Escape>', lambda _event: self.cancel())
+        root.bind('<Escape>', self.on_escape)
         ids = self.editor.case_ids()
         self.refresh_all(ids[0] if ids else None)
         self.root.update_idletasks()
@@ -4058,17 +4072,18 @@ class CaseManagerDialog:
         self.case_table = FilterTable(self, pane, (
             ('name', 'Planning case', 150, True, None), ('count', 'Outages', 56, False, None),
             ('status', 'Status', 100, False, ('ready', 'not calculated', 'excluded'))), height=6, selectmode='browse',
-            tips={'count': COLUMN_HELP['case_count'], 'status': COLUMN_HELP['case_status']})
+            tips={'name': COLUMN_HELP['case_name'], 'count': COLUMN_HELP['case_count'], 'status': COLUMN_HELP['case_status']})
         self.case_table.grid(row=1, column=0, sticky='nsew')
         self.case_tree = self.case_table.tree
         self.case_tree.bind('<<TreeviewSelect>>', self.on_case_select)
         self.case_tree.bind('<Double-1>', self.on_case_double_click)
-        self.case_tree.bind('<Return>', lambda _event: self.edit_case())
+        self.case_tree.bind('<F2>', lambda _event: self.rename_in_place())
+        self.case_tree.bind('<Return>', lambda _event: self.rename_in_place())
         buttons = ttk.Frame(pane, style='Card.TFrame')
         buttons.grid(row=2, column=0, sticky='ew', pady=(6, 0))
         self.case_buttons = {}
         for column, (label, command) in enumerate((('New', self.new_case), ('Copy', self.copy_case),
-                                                   ('Edit', self.edit_case), ('Delete', self.delete_case))):
+                                                   ('Delete', self.delete_case))):
             buttons.columnconfigure(column, weight=1)
             self.case_buttons[label] = ttk.Button(buttons, text=label, command=command)
             self.case_buttons[label].grid(row=0, column=column, sticky='ew', padx=1)
@@ -4117,8 +4132,11 @@ class CaseManagerDialog:
         heading.columnconfigure(1, weight=1)
         self.case_title = ttk.Label(heading, text='', style='Title.TLabel')
         self.case_title.grid(row=0, column=0, sticky='w')
-        self.case_description = ttk.Label(heading, text='', style='Muted.TLabel')
+        self.case_heading = heading
+        self.case_description = ttk.Label(heading, text='', style='Muted.TLabel', cursor='xterm')
         self.case_description.grid(row=0, column=1, sticky='w', padx=(10, 0))
+        self.case_description.bind('<Double-1>', lambda _event: self.describe_in_place())
+        self.tip(self.case_description, HELP_TEXTS['description'])
         self.counts_label = ttk.Label(pane, text='', style='Muted.TLabel')
         self.counts_label.grid(row=1, column=0, sticky='w', pady=(0, 6))
         self.member_table = FilterTable(self, pane, (
@@ -4295,7 +4313,9 @@ class CaseManagerDialog:
         if missing:
             counts += '   ({} assigned outage(s) no longer exist in the project)'.format(len(missing))
         self.counts_label.configure(text=counts)
-        self.case_description.configure(text=clip_text(case.get('description', ''), 90) if case else '')
+        description = case.get('description', '') if case else ''
+        self.case_description.configure(text=clip_text(description, 90) if description else
+                                        ('(double-click to add a description)' if case else ''))
         self.enabled_var.set(case.get('enabled', True) if case else False)
         self.member_table.set_rows(self.editor.member_rows(self.selected))
         for relation, box in self._relation_lists.items():
@@ -4406,7 +4426,6 @@ class CaseManagerDialog:
             return
         self.case_table.clear_filters()
         self.refresh_all(identifier)
-        self.edit_case()
 
     def copy_case(self):
         if self.editor.case(self.selected) is None:
@@ -4419,58 +4438,91 @@ class CaseManagerDialog:
         self.refresh_all(identifier)
 
     def on_case_double_click(self, event):
-        if self.case_tree.identify_row(event.y):
-            self.edit_case()
+        row = self.case_tree.identify_row(event.y)
+        if row:
+            self.rename_in_place(row)
+        return 'break'
 
-    def edit_case(self):
-        """Name and description of the selected case in a small window (double-click, Edit, New); None without a case."""
-        case = self.editor.case(self.selected)
+    def rename_in_place(self, case_id=None):
+        """An entry over the name cell of the case; Enter or a click elsewhere applies, Escape cancels."""
+        case_id = case_id or self.selected
+        case = self.editor.case(case_id)
+        if case is None or not self.case_tree.exists(case_id):
+            return None
+        self.case_tree.see(case_id)
+        self.root.update_idletasks()
+        box = self.case_tree.bbox(case_id, 'name')
+        if not box:
+            return None
+
+        def apply(value):
+            if value.strip():
+                self.editor.rename_case(case_id, value)
+            self.refresh_cases(self.selected)
+            self.refresh_selected()
+        return self._edit_in_place(self.case_tree, box, case.get('name', ''), apply, 'name')
+
+    def describe_in_place(self):
+        """An entry over the description next to the case name in the centre."""
+        case_id = self.selected
+        case = self.editor.case(case_id)
         if case is None:
             return None
-        if self.case_form is not None:
-            self.case_form['window'].destroy()
-        tk, ttk, identifier = self.tk, self.ttk, self.selected
-        window = tk.Toplevel(self.root)
-        window.title('Planning case')
-        window.configure(background=self.CARD)
-        window.transient(self.root)
-        window.resizable(False, False)
-        frame = ttk.Frame(window, style='Card.TFrame', padding=12)
-        frame.grid(row=0, column=0, sticky='nsew')
-        frame.columnconfigure(0, weight=1)
-        name_var, description_var = tk.StringVar(value=case.get('name', '')), tk.StringVar(value=case.get('description', ''))
-        ttk.Label(frame, text='Name').grid(row=0, column=0, sticky='w')
-        name = ttk.Entry(frame, textvariable=name_var, width=48)
-        name.grid(row=1, column=0, sticky='ew')
-        ttk.Label(frame, text='Description').grid(row=2, column=0, sticky='w', pady=(8, 0))
-        ttk.Entry(frame, textvariable=description_var, width=48).grid(row=3, column=0, sticky='ew')
-        ttk.Label(frame, text='Case ID {} is generated and does not change.'.format(identifier), style='Muted.TLabel').grid(
-            row=4, column=0, sticky='w', pady=(6, 0))
+        self.root.update_idletasks()
+        heading, label = self.case_heading, self.case_description
+        left = label.winfo_x()
+        box = (left, 0, max(heading.winfo_width() - left, 240), max(heading.winfo_height(), 24))
 
-        def close(_event=None):
-            self.case_form = None
-            window.destroy()
-
-        def apply(_event=None):
-            if not name_var.get().strip():
-                self.messagebox.showerror('Planning case', 'A planning case needs a name.', parent=window)
-                return
-            self.editor.rename_case(identifier, name_var.get())
-            self.editor.set_description(identifier, description_var.get())
-            close()
-            self.refresh_cases(identifier)
+        def apply(value):
+            self.editor.set_description(case_id, value)
             self.refresh_selected()
-        buttons = ttk.Frame(frame, style='Card.TFrame')
-        buttons.grid(row=5, column=0, sticky='e', pady=(12, 0))
-        ttk.Button(buttons, text='Cancel', command=close).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(buttons, text='OK', style='Accent.TButton', command=apply).grid(row=0, column=1)
-        window.bind('<Return>', apply)
-        window.bind('<Escape>', close)
-        window.protocol('WM_DELETE_WINDOW', close)
-        name.focus_set()
-        name.select_range(0, 'end')
-        self.case_form = {'window': window, 'name': name_var, 'description': description_var, 'apply': apply, 'close': close}
-        return window
+        return self._edit_in_place(heading, box, case.get('description', ''), apply, 'description')
+
+    def _edit_in_place(self, parent, box, text, apply, what):
+        """An entry laid over `box` (x, y, width, height) of `parent`; no extra window."""
+        self.finish_editing()
+        entry = self.ttk.Entry(parent)
+        entry.insert(0, text)
+        x, y, width, height = box
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+        entry.select_range(0, 'end')
+        state = {'entry': entry, 'what': what}
+
+        def commit(_event=None):
+            if self.inline_edit is not state:
+                return
+            value = entry.get()
+            self.inline_edit = None
+            entry.destroy()
+            apply(value)
+
+        def cancel(_event=None):
+            # 'break' keeps Escape from reaching the window, where it would cancel the run;
+            # the entry goes once this event is handled.
+            if self.inline_edit is state:
+                self.inline_edit = None
+                entry.after_idle(entry.destroy)
+            return 'break'
+        for sequence in ('<Return>', '<KP_Enter>', '<FocusOut>'):
+            entry.bind(sequence, commit)
+        entry.bind('<Escape>', cancel)
+        state.update(commit=commit, cancel=cancel)
+        self.inline_edit = state
+        return entry
+
+    def on_escape(self, _event=None):
+        # Escape first ends an open in-place edit; only without one it cancels the run.
+        if self.inline_edit is not None:
+            self.inline_edit['cancel']()
+            return 'break'
+        self.cancel()
+        return 'break'
+
+    def finish_editing(self):
+        """Apply an open in-place edit, e.g. before saving or starting."""
+        if self.inline_edit is not None:
+            self.inline_edit['commit']()
 
     def delete_case(self):
         case = self.editor.case(self.selected)
@@ -4625,6 +4677,7 @@ class CaseManagerDialog:
         self.refresh_overview()
 
     def save(self):
+        self.finish_editing()
         problems = validate_case_config(self.editor.config)
         if problems:
             self.messagebox.showerror('Save configuration', '\n'.join(problems), parent=self.root)
@@ -4657,6 +4710,7 @@ class CaseManagerDialog:
 
     def start(self):
         """Check the configuration and hand it to GridLens; the calculation starts after the window closes."""
+        self.finish_editing()
         problem = self.editor.set_assessments(self.n0_var.get(), self.n1_var.get())
         problems = ([problem] if problem else []) + validate_case_config(self.editor.config)
         if problems:

@@ -953,6 +953,17 @@ def test_gui_one_case_per_outage_stops_at_five(editor):
     assert crowded.case_ids() == ["C1", "C2", "C3", "C4", "C5"]
 
 
+def test_the_window_fits_the_screen_and_opens_centred():
+    assert gl.window_geometry(1920, 1080) == "1480x860+220+90"
+    assert gl.window_geometry(1366, 768) == "1174x660+96+34"
+    assert gl.window_geometry(1024, 600) == "900x600+62+0"
+    for width, height in ((1920, 1080), (1366, 768), (1024, 600), (800, 500)):
+        size, x, y = gl.window_geometry(width, height).split("+")
+        w, h = (int(part) for part in size.split("x"))
+        assert w <= width and h <= height and int(x) + w <= width and int(y) + h <= height
+        assert gl.minimum_window_size(width, height) <= (width, height)
+
+
 def test_one_case_per_outage_takes_only_outages_in_the_simulated_period():
     outside = record("FS Next year", PERIOD[1] + WEEK, PERIOD[1] + 2 * WEEK)
     inside = [record("FS{}".format(i), kw(10), kw(11), ["Project\\W{}.ElmLne".format(i)]) for i in range(5)]
