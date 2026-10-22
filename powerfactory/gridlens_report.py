@@ -2953,11 +2953,25 @@ def optimization_summary(request, period, app=None):
     return {'summary': summary, 'reason': reason, 'admissible': False, 'time_coupled': coupled, 'executed': False}
 
 
-def case_config_path(project_key):
+def legacy_case_config_path(project_key):
+    """Where GridLens 8.0 (schema 1) keeps the cases of a project; this version only reads that file."""
     folder = CASE_CONFIG_DIR or os.path.join(os.path.expanduser('~'), 'GridLens', 'cases')
     stem = re.sub(r'[^A-Za-z0-9_.-]+', '_', project_key.rsplit('\\', 1)[-1])[:40] or 'project'
     digest = hashlib.sha256(project_key.encode('utf-8')).hexdigest()[:8]
     return os.path.join(folder, '{}_{}.json'.format(stem, digest))
+
+
+def case_config_path(project_key):
+    """The file this version saves to. It has its own name, so a schema-2 file never replaces the
+    schema-1 file that the delivered gridlens-powerfactory script reads for the same project."""
+    stem, extension = os.path.splitext(legacy_case_config_path(project_key))
+    return '{}.v{}{}'.format(stem, CASE_CONFIG_SCHEMA_VERSION, extension)
+
+
+def _legacy_sibling(path):
+    """The schema-1 file next to a versioned path, or None."""
+    marker = '.v{}.json'.format(CASE_CONFIG_SCHEMA_VERSION)
+    return path[:-len(marker)] + '.json' if path.endswith(marker) else None
 
 
 def load_case_config(path):
@@ -2969,7 +2983,11 @@ def load_case_config(path):
     refused with the reason (resolve_request, save_case_config).
     """
     if not os.path.isfile(path):
-        return None
+        # Not saved by this version yet: start from the GridLens 8.0 file, read only.
+        legacy = _legacy_sibling(path)
+        if legacy is None or not os.path.isfile(legacy):
+            return None
+        path = legacy
     try:
         with open(path, 'r', encoding='utf-8') as handle:
             config = json.load(handle)
@@ -2992,6 +3010,8 @@ def save_case_config(path, config, user=''):
         raise GridLensError('The case configuration was not saved: {}'.format('; '.join(problems)))
     stored = dict(config, revision=int(config.get('revision') or 0) + 1,
                   saved_at=datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %z'), saved_by=user)
+    # The upgrade note is a one-time hint; once saved, the cases are the reviewed ones.
+    stored.pop('migration_note', None)
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
@@ -3000,6 +3020,7 @@ def save_case_config(path, config, user=''):
         json.dump(stored, handle, indent=2, sort_keys=True)
     os.replace(temporary, path)
     config['revision'] = stored['revision']
+    config.pop('migration_note', None)
     return stored
 
 
@@ -3053,6 +3074,26 @@ MARK_IN_CASE, MARK_FIXED, MARK_FREE = '\u2611 in case', 'fixed', '\u2610'
 RULE_LABELS = (('not_overlap', 'must not overlap'), ('order', 'second only after the first'), ('together', 'only together'))
 OUTAGE_FILTERS = ('All planned outages', 'Not in this case', 'In simulated period', 'Ignored in PowerFactory')
 
+# Keys of the case manager: (key sequence, where, what). Delete and BackSpace
+# both work, so the key labelled "delete" on any keyboard does it.
+KEYBOARD_SHORTCUTS = (
+    ('Delete / BackSpace', 'case list', 'delete the selected case (asks first)'),
+    ('Delete / BackSpace', 'outages of the case', 'remove the selected outages from the case'),
+    ('Delete / BackSpace', 'fixed background outages', 'remove the selected outages from the fixed background'),
+    ('Delete / BackSpace', 'rules', 'remove the selected rules'),
+    ('Space', 'case list', 'switch the Run flag of the focused case'),
+    ('Space', 'available outages', 'tick or untick the focused outage'),
+    ('Enter', 'available outages', 'add all selected outages to the case'),
+    ('F2 / Enter', 'case list', 'rename the case in place'),
+    ('Ctrl+A', 'any table', 'select every shown row'),
+    ('Ctrl+N', 'window', 'new case'),
+    ('Ctrl+F', 'window', 'search the available outages'),
+    ('Ctrl+S', 'window', 'save configuration'),
+    ('Ctrl+O', 'window', 'load saved configuration'),
+    ('Ctrl+Enter', 'window', 'start calculation'),
+    ('Escape', 'window', 'end an in-place edit, otherwise cancel'),
+)
+
 # Hover texts of the case manager. They explain what a control does to the
 # calculation; the operating guide (docs/CASE_MANAGER.md) says the same.
 HELP_TEXTS = {
@@ -3065,9 +3106,10 @@ HELP_TEXTS = {
                "Unticked: status 'excluded'. The case stays in the configuration but is neither calculated nor "
                "reported. Other cases stay unchanged.",
     'case_limit': "At most {} planning cases. Each case is one more QDS run over the complete period.".format(MAX_CASES),
-    'New': "Creates the next case (C1 ... C{}) with the name 'Case n'. Double-click it to rename it.".format(MAX_CASES),
+    'New': "Creates the next case (C1 ... C{}) with the name 'Case n'. Double-click it to rename it. Key: Ctrl+N.".format(MAX_CASES),
     'Copy': "New independent case with the same planned outages and own dates. Changes affect only the copy.",
-    'Delete': "Removes only the selected case after confirmation. Other cases and the planned outages in PowerFactory stay unchanged.",
+    'Delete': "Removes only the selected case after confirmation. Other cases and the planned outages in PowerFactory "
+              "stay unchanged. Key: Delete in the case list.",
     'one_per_outage': "Replaces all cases by one case per planned outage in the simulated period (GridLens 7 "
                       "behaviour), at most {}. Ignored and fixed outages get none. Asks before replacing.".format(MAX_CASES),
     'add': "Assigns all selected planned outages to the selected case at once. Same as Enter. For one outage, "
@@ -3079,7 +3121,7 @@ HELP_TEXTS = {
                "the cases that use it. Own dates per case are entered there. Same as a double-click on the row.",
     'remove': "Ends only the assignment to this case; the planned outage in PowerFactory stays unchanged. "
               "Same as the Delete key.",
-    'unfix': "The selected outages are no longer fixed; the reference becomes R0 when none is left.",
+    'unfix': "The selected outages are no longer fixed; the reference becomes R0 when none is left. Key: Delete.",
     'timeline': "Planning check only, no load flow and no dates: which outages of this case are active at the same "
                 "time and in which order. Blue: case outage, "
                 "grey: fixed background outage, shaded: several outages at the same time (normal, no problem), light band: a "
@@ -3092,10 +3134,12 @@ HELP_TEXTS = {
     'qds': "Period and time step of the active ComStatsim. Every run covers the complete period; GridLens does "
            "not change it.",
     'status_line': "Click to open Review & start: what will be calculated and every problem or warning.",
-    'save': "Writes the configuration file of this project (with revision, user and time). The project is not touched.",
-    'load': "Reads the saved configuration file again; unsaved changes in the window are replaced.",
-    'start': "Checks the configuration, closes the window and starts the reference and one QDS run per case.",
-    'cancel': "Closes the window: nothing is calculated, saved or changed in the project.",
+    'save': "Writes the configuration file of this project (with revision, user and time). The project is not touched. "
+            "Key: Ctrl+S.",
+    'load': "Reads the saved configuration file again; unsaved changes in the window are replaced. Key: Ctrl+O.",
+    'start': "Checks the configuration, closes the window and starts the reference and one QDS run per case. "
+             "Key: Ctrl+Enter.",
+    'cancel': "Closes the window: nothing is calculated, saved or changed in the project. Key: Escape.",
 }
 COLUMN_HELP = {
     'case_name': "Double-click a case (or press F2) to rename it in place: Enter or a click elsewhere applies, "
@@ -3203,6 +3247,7 @@ class CaseEditor:
         self.period = period
         self.qds_text = qds_text or qds_period_text(period)
         self._checked_state = None
+        self._outage_choices = None
         self.load(config)
 
     def load(self, config):
@@ -3460,13 +3505,19 @@ class CaseEditor:
 
     # --- rules between planned outages -------------------------------------------
     def outage_choices(self):
-        """(label, key) of every planned outage, sorted; the PowerFactory path is added where names repeat."""
+        """(label, key) of every planned outage, sorted; the PowerFactory path is added where names repeat.
+
+        The records do not change while the window is open, so the list is built once.
+        """
+        if self._outage_choices is not None:
+            return self._outage_choices
         counts = {}
         for record in self.records:
             counts[record['id']] = counts.get(record['id'], 0) + 1
         choices = [(record['id'] if counts[record['id']] == 1 else '{} ({})'.format(record['id'], record['key']), record['key'])
                    for record in self.records]
-        return sorted(choices, key=lambda item: item[0].casefold())
+        self._outage_choices = sorted(choices, key=lambda item: item[0].casefold())
+        return self._outage_choices
 
     def rule_rows(self):
         if not self.config['rules']:
@@ -3995,6 +4046,7 @@ class CaseManagerDialog:
             self.tip(button, HELP_TEXTS[key])
         root.protocol('WM_DELETE_WINDOW', self.cancel)
         root.bind('<Escape>', self.on_escape)
+        self._bind_window_keys()
         ids = self.editor.case_ids()
         self.refresh_all(ids[0] if ids else None)
         self.root.update_idletasks()
@@ -4121,6 +4173,7 @@ class CaseManagerDialog:
         self.case_tree.bind('<Double-1>', self.on_case_double_click)
         self.case_tree.bind('<F2>', lambda _event: self.rename_in_place())
         self.case_tree.bind('<Return>', lambda _event: self.rename_in_place())
+        self._bind_delete(self.case_tree, self.delete_case)
         buttons = ttk.Frame(pane, style='Card.TFrame')
         buttons.grid(row=2, column=0, sticky='ew', pady=(6, 0))
         self.case_buttons = {}
@@ -4161,7 +4214,7 @@ class CaseManagerDialog:
         self.member_table.grid(row=2, column=0, sticky='nsew')
         self.member_tree = self.member_table.tree
         self.member_tree.bind('<Double-1>', lambda _event: self.show_details(self.member_tree))
-        self.member_tree.bind('<Delete>', lambda _event: self.remove_selected())
+        self._bind_delete(self.member_tree, self.remove_selected)
         buttons = ttk.Frame(pane, style='Card.TFrame')
         buttons.grid(row=3, column=0, sticky='ew', pady=(6, 8))
         remove = ttk.Button(buttons, text='Remove from case', command=self.remove_selected)
@@ -4251,6 +4304,7 @@ class CaseManagerDialog:
         self.fixed_table.grid(row=3, column=0, sticky='nsew')
         self.fixed_tree = self.fixed_table.tree
         self.fixed_tree.bind('<Double-1>', lambda _event: self.show_details(self.fixed_tree))
+        self._bind_delete(self.fixed_tree, self.unfix_selected)
         self._wrapped_label(fixed, 'Add a shared outage in Workspace with "Set as fixed background".',
                             row=4, column=0, pady=(8, 4))
         unfix = ttk.Button(fixed, text='Remove from fixed background', command=self.unfix_selected)
@@ -4281,6 +4335,7 @@ class CaseManagerDialog:
             ('second', 'Second outage', 170, True, None)), height=5, tips={'rule': HELP_TEXTS['rule_kind']})
         self.rule_table.grid(row=3, column=0, sticky='nsew')
         self.rule_tree = self.rule_table.tree
+        self._bind_delete(self.rule_tree, self.remove_rule)
         editor_row = ttk.Frame(rules, style='Card.TFrame')
         editor_row.grid(row=4, column=0, sticky='ew', pady=(8, 0))
         for column, text in enumerate(('First outage', 'Rule', 'Second outage')):
@@ -4579,6 +4634,35 @@ class CaseManagerDialog:
         state.update(commit=commit, cancel=cancel)
         self.inline_edit = state
         return entry
+
+    def _bind_delete(self, tree, command):
+        for sequence in ('<Delete>', '<BackSpace>'):
+            tree.bind(sequence, lambda _event: (command(), 'break')[1])
+
+    def _bind_window_keys(self):
+        """Ctrl shortcuts for the whole window (on macOS also Command); see KEYBOARD_SHORTCUTS."""
+        modifiers = ['Control']
+        try:
+            if self.root.tk.call('tk', 'windowingsystem') == 'aqua':
+                modifiers.append('Command')
+        except Exception:
+            pass
+        for key, command in (('n', self.new_case), ('s', self.save), ('o', self.load_saved),
+                             ('Return', self.start), ('f', self.focus_search)):
+            for modifier in modifiers:
+                self.root.bind('<{}-{}>'.format(modifier, key), lambda _event, run=command: (run(), 'break')[1])
+        for table in (self.case_table, self.member_table, self.available_table, self.fixed_table, self.rule_table,
+                      self.problem_table):
+            for modifier in modifiers:
+                table.tree.bind('<{}-a>'.format(modifier), lambda _event, tree=table.tree: (
+                    tree.selection_set(tree.get_children()), 'break')[1])
+
+    def focus_search(self):
+        """Ctrl+F: the name filter of the available planned outages, on the Workspace tab."""
+        self.notebook.select(0)
+        search = self.available_table.inputs[1]
+        search.focus_set()
+        search.select_range(0, 'end')
 
     def on_escape(self, _event=None):
         # Escape first ends an open in-place edit; only without one it cancels the run.

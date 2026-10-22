@@ -10,7 +10,7 @@ Statuskategorien:
 - **Nicht verifiziert** – offen; braucht PowerFactory oder ist nicht umgesetzt
 
 Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
-375 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); 28 davon
+379 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); 28 davon
 öffnen das echte Tk-Fenster und werden nur übersprungen, wo `tkinter` fehlt. Die Testnamen sind englisch, wie der Code.
 
 ## Tests A–E der Vorgabe
@@ -131,3 +131,6 @@ Nicht in PowerFactory verifiziert; die Bearbeitungsregeln sind ohne Fenster gete
 | sichtbare Erklärung mit Beispielen für Hintergrund-FS und jede Regel; Häkchen erklärt; Bedienelemente und Hilfe bei 1000×620 und 1280×800 sichtbar | `test_fixed_tab_explains_shared_outages_rules_and_optional_use_without_hover`, `test_explanations_and_rule_controls_fit_the_window` (2 Größen) |
 | Run flags: click, Space, filtering and live settings preview; background, windows, reuse, blocked and excluded cases | `test_run_flags_toggle_the_clicked_case_and_update_the_settings_preview`, `test_calculation_preview_lists_effective_settings_and_keeps_blocked_cases_out` |
 | Abbrechen oder ein gescheiterter Lauf beenden das Skript mit Exit-Code 1, es wird kein Bericht erzeugt | `test_cancel_or_a_failure_ends_the_script_with_an_error_code_so_no_report_is_rendered`, `test_cancel_says_that_the_report_is_not_generated` |
+| gespeicherte Umstellung verliert ihren einmaligen Hinweis; Schema-2-Datei `.v2.json` ersetzt nie die Schema-1-Datei des ausgelieferten Skripts; FS-Auswahl einmal aufgebaut | `test_the_upgrade_note_is_shown_until_the_cases_are_saved`, `test_this_version_never_overwrites_the_file_of_the_delivered_script`, `test_outage_choices_are_built_once` |
+| nur Tests, `gridlens_report.py` und `MASTER_GRIDLENS.mrt` nötig: `tests/_paths.py` findet beide in `powerfactory/` oder neben `tests/`; Werkzeug-Tests werden ohne `tools/` übersprungen | geprüft durch einen Lauf in einer Kopie mit nur diesen Dateien (verschachtelt und flach) |
+| Tastatur: Entf/Rücktaste entfernen in jeder Liste, Strg+N/S/O/F/Enter, Strg+A | `test_keyboard_deletes_and_shortcuts` |

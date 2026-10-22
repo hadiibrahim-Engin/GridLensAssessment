@@ -9,12 +9,15 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOL = ROOT / "tools" / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
+from _paths import tool as _tool  # noqa: E402
+
+TOOL, SYNC = _tool("FS_CaseManager_GUI_Test_PowerFactory2026.py"), _tool("sync_case_manager_copy.py")
+if TOOL is None or SYNC is None:
+    pytest.skip("development tools not in this checkout", allow_module_level=True)
 SPEC = importlib.util.spec_from_file_location("case_manager_gui_test_tool", TOOL)
 tool = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(tool)
-SYNC_SPEC = importlib.util.spec_from_file_location("sync_case_manager_copy", ROOT / "tools" / "sync_case_manager_copy.py")
+SYNC_SPEC = importlib.util.spec_from_file_location("sync_case_manager_copy", SYNC)
 sync = importlib.util.module_from_spec(SYNC_SPEC)
 SYNC_SPEC.loader.exec_module(sync)
 

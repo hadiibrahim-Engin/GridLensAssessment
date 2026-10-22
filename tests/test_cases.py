@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "powerfactory" / "gridlens_report.py"
+from _paths import delivered  # noqa: E402
+SCRIPT = delivered("gridlens_report.py")
 SPEC = importlib.util.spec_from_file_location("gridlens_cases", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

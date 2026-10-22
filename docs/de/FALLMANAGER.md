@@ -133,6 +133,28 @@ nach dem Ende der ersten), *only together* (ein Fall mit der einen enthält
 auch die andere, mit überlappenden Zeitfenstern). Ein Fall, der eine Regel bricht, wird
 nicht gerechnet und gemeldet.
 
+## Tastatur
+
+Jede Liste lässt sich ohne Maus bedienen (`KEYBOARD_SHORTCUTS` in `gridlens_report.py`). Unter macOS wirkt Command wie Strg.
+
+| Taste | Wo | Was |
+|---|---|---|
+| Entf / BackLeertaste | Fallliste | gewählten Fall löschen (fragt vorher) |
+| Entf / BackLeertaste | FS des Falls | gewählte FS aus dem Fall entfernen |
+| Entf / BackLeertaste | feste Hintergrund-FS | gewählte FS aus dem festen Hintergrund entfernen |
+| Entf / BackLeertaste | Regeln | gewählte Regeln entfernen |
+| Leertaste | Fallliste | Run-Flag des fokussierten Falls umschalten |
+| Leertaste | verfügbare FS | fokussierte FS an- oder abhaken |
+| Enter | verfügbare FS | alle gewählten FS dem Fall hinzufügen |
+| F2 / Enter | Fallliste | Fall direkt umbenennen |
+| Strg+A | jede Tabelle | alle angezeigten Zeilen wählen |
+| Strg+N | Fenster | neuer Fall |
+| Strg+F | Fenster | verfügbare FS durchsuchen |
+| Strg+S | Fenster | Konfiguration speichern |
+| Strg+O | Fenster | gespeicherte Konfiguration laden |
+| Strg+Enter | Fenster | Berechnung starten |
+| Esc | Fenster | direkte Bearbeitung beenden, sonst abbrechen |
+
 ## Was ein Klick bewirkt
 
 | Aktion | Wirkung |
@@ -221,7 +243,11 @@ nie in PowerFactory und startet nie eine QDS.
 | `'per_outage'` | je Freischaltung im simulierten Zeitraum ein Fall |
 
 Konfigurationsdatei: `CASE_CONFIG_DIR` (Standard `~/GridLens/cases`), eine je
-Projekt. Neue Felder seit der Überarbeitung: `assessments` (`["n-0"]`) und je
+Projekt, gespeichert als `<Projekt>_<Hash>.v2.json`. Die Schema-1-Datei
+`<Projekt>_<Hash>.json` des ausgelieferten gridlens-powerfactory-Skripts wird nur
+gelesen (solange es keine `.v2.json` gibt) und nie überschrieben; beide Versionen
+arbeiten so am selben Projekt. Der Hinweis zur Umstellung auf unabhängige Fälle
+erscheint nur, bis die geprüften Fälle gespeichert sind. Neue Felder seit der Überarbeitung: `assessments` (`["n-0"]`) und je
 Fall `enabled` (true/false). Eine gespeicherte oder von Hand bearbeitete
 Konfiguration mit mehr als fünf Fällen (z. B. von GridLens 8.0 gespeichert)
 öffnet sich trotzdem im Fallmanager, zeigt *6 of 5 cases* in Rot und den Grund

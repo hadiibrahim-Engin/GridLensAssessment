@@ -9,8 +9,8 @@ from xml.etree import ElementTree as ET
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "powerfactory" / "gridlens_report.py"
+from _paths import delivered  # noqa: E402
+SCRIPT = delivered("gridlens_report.py")
 SPEC = importlib.util.spec_from_file_location("gridlens_report", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -1081,7 +1081,7 @@ def _check_emitted_report_against_mrt(report):
     The host's single Scripted prefix and field type mapping are modeled here;
     this does not exercise PowerFactory's export/merge or Stimulsoft compiler.
     """
-    root = ET.parse(ROOT / "powerfactory" / "MASTER_GRIDLENS.mrt").getroot()
+    root = ET.parse(delivered("MASTER_GRIDLENS.mrt")).getroot()
     sources = list(root.find("./Dictionary/DataSources"))
     emitted = {"Scripted" + name: table
                for name, table in report.tables.items()}

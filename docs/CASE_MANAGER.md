@@ -118,7 +118,8 @@ copy a case and change the copy. Deleting or excluding C1 leaves C2 and C3 uncha
 Saved version 1 configurations are converted to version 2 in memory when opened:
 formerly inherited outages and their effective own dates become direct assignments;
 case dependencies and alternatives are removed. Review & start shows a migration
-notice if relations were present. The original file stays unchanged until you save.
+notice if relations were present; saving drops the notice, so it appears only until
+the reviewed cases are saved. The original file stays unchanged even then (see below).
 Invalid legacy references or cycles are reported with the file path rather than
 silently losing assignments.
 
@@ -126,6 +127,28 @@ The rules on *Fixed background & rules* apply between two
 **planned outages** in every case: *must not overlap* (windows must not
 overlap), *second only after the first* (the second starts after the first
 has ended), *only together* (a case with one contains the other and their windows overlap). A case that breaks a rule is not calculated and is reported.
+
+## Keyboard
+
+Every list can be used without the mouse (`KEYBOARD_SHORTCUTS` in `gridlens_report.py`). On macOS Command works like Ctrl.
+
+| Key | Where | What |
+|---|---|---|
+| Delete / BackSpace | case list | delete the selected case (asks first) |
+| Delete / BackSpace | outages of the case | remove the selected outages from the case |
+| Delete / BackSpace | fixed background outages | remove the selected outages from the fixed background |
+| Delete / BackSpace | rules | remove the selected rules |
+| Space | case list | switch the Run flag of the focused case |
+| Space | available outages | tick or untick the focused outage |
+| Enter | available outages | add all selected outages to the case |
+| F2 / Enter | case list | rename the case in place |
+| Ctrl+A | any table | select every shown row |
+| Ctrl+N | window | new case |
+| Ctrl+F | window | search the available outages |
+| Ctrl+S | window | save configuration |
+| Ctrl+O | window | load saved configuration |
+| Ctrl+Enter | window | start calculation |
+| Escape | window | end an in-place edit, otherwise cancel |
 
 ## What a click does
 
@@ -214,7 +237,9 @@ equipment, never writes PowerFactory and never starts a QDS.
 | `'per_outage'` | one case per planned outage in the simulated period |
 
 Configuration file: `CASE_CONFIG_DIR` (default `~/GridLens/cases`), one per
-project. New fields since the redesign: `assessments` (`["n-0"]`) and per case
+project, saved as `<project>_<hash>.v2.json`. The schema-1 file `<project>_<hash>.json`
+of the delivered gridlens-powerfactory script is only read (as long as no `.v2.json`
+exists) and never overwritten, so both versions keep working on the same project. New fields since the redesign: `assessments` (`["n-0"]`) and per case
 `enabled` (true/false). A saved or hand-edited configuration with more than five
 cases (e.g. saved by GridLens 8.0) still opens in the case manager, shows *6 of 5
 cases* in red and the reason under *Review & start*, so cases can be deleted;

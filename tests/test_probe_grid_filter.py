@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
+from _paths import delivered, tool  # noqa: E402
+
+PROBE = tool("probe_grid_filter.py")
+if PROBE is None:
+    pytest.skip("development tool not in this checkout", allow_module_level=True)
 
 
 def _load(name, path):
@@ -18,8 +21,8 @@ def _load(name, path):
     return module
 
 
-gl = _load("gridlens_report_for_probe", ROOT / "powerfactory" / "gridlens_report.py")
-probe = _load("probe_grid_filter", ROOT / "tools" / "probe_grid_filter.py")
+gl = _load("gridlens_report_for_probe", delivered("gridlens_report.py"))
+probe = _load("probe_grid_filter", PROBE)
 
 
 class Obj:
@@ -71,7 +74,7 @@ def test_probe_recognises_the_same_result_variables(kind, variable):
 
 
 def test_probe_needs_nothing_but_powerfactory():
-    source = (ROOT / "tools" / "probe_grid_filter.py").read_text(encoding="utf-8")
+    source = (PROBE).read_text(encoding="utf-8")
     imports = {line.split()[1] for line in source.splitlines()
                if line.startswith(("import ", "from "))}
     assert imports <= {"time", "powerfactory"}, imports

@@ -14,8 +14,8 @@ import pytest
 
 tk = pytest.importorskip("tkinter")
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("gridlens_dialog", ROOT / "powerfactory" / "gridlens_report.py")
+from _paths import delivered  # noqa: E402
+SPEC = importlib.util.spec_from_file_location("gridlens_dialog", delivered("gridlens_report.py"))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 
@@ -648,6 +648,37 @@ def test_hover_explains_the_controls_without_case_relations(monkeypatch, records
     assert "contains this text" in seen["filter"]
     assert seen["shown"] and seen["shown_text"] == [gl.HELP_TEXTS["Copy"]]
     assert seen["hidden"][0], seen["hidden"][1]
+
+
+def test_keyboard_deletes_and_shortcuts(monkeypatch, records, config, tmp_path):
+    def steps(dialog, root, seen):
+        dialog.messagebox.askyesno = lambda *_args, **_kw: True
+        dialog.messagebox.showinfo = lambda *_args, **_kw: None
+        press = lambda widget, key: (widget.focus_force(), root.update(), widget.event_generate(key), root.update())
+        _select_case(dialog, root, "A")
+        dialog.member_tree.selection_set(records[0]["key"])
+        press(dialog.member_tree, "<Delete>")
+        seen["removed"] = _members(dialog)
+        dialog.case_tree.selection_set("B")
+        root.update()
+        press(dialog.case_tree, "<BackSpace>")
+        seen["cases_after_delete"] = list(dialog.case_tree.get_children())
+        press(dialog.case_tree, "<Control-n>")
+        seen["cases_after_new"] = list(dialog.case_tree.get_children())
+        press(dialog.available_tree, "<Control-a>")
+        seen["all_selected"] = len(dialog.available_tree.selection()) == len(dialog.available_tree.get_children())
+        press(dialog.case_tree, "<Control-f>")
+        seen["search_focused"] = root.focus_get() is dialog.available_table.inputs[1]
+        press(dialog.case_tree, "<Control-s>")
+        seen["saved"] = (tmp_path / "cases.json").is_file()
+
+    _, seen = _run(monkeypatch, records, config, steps, tmp_path)
+
+    assert seen["removed"] == ["FS2"], "Delete removes the outage from the case"
+    assert seen["cases_after_delete"] == ["A"], "BackSpace deletes the selected case after the question"
+    assert len(seen["cases_after_new"]) == 2, "Ctrl+N creates a case"
+    assert seen["all_selected"] and seen["search_focused"] and seen["saved"]
+    assert all(len(entry) == 3 for entry in gl.KEYBOARD_SHORTCUTS)
 
 
 def test_a_dialog_that_cannot_be_built_counts_as_unavailable(monkeypatch, records):

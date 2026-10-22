@@ -9,7 +9,7 @@ Status categories:
 - **PowerFactory** – run in PowerFactory 2026 (none yet)
 - **Not verified** – open; needs PowerFactory or is not implemented
 
-Every row is **not verified in PowerFactory**. The automated suite: 375 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
+Every row is **not verified in PowerFactory**. The automated suite: 379 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
 28 of them open the real Tk window and are skipped only where `tkinter` is missing.
 
 ## Specification tests A–E
@@ -130,3 +130,6 @@ Not verified in PowerFactory; the editing rules are tested without a window (`te
 | visible purpose/examples for shared outages and each rule; keep/skip explanation; controls and help fit at 1000×620 and 1280×800 | `test_fixed_tab_explains_shared_outages_rules_and_optional_use_without_hover`, `test_explanations_and_rule_controls_fit_the_window` (2 sizes) |
 | Run flags: click, Space, filtering and live settings preview; background, windows, reuse, blocked and excluded cases | `test_run_flags_toggle_the_clicked_case_and_update_the_settings_preview`, `test_calculation_preview_lists_effective_settings_and_keeps_blocked_cases_out` |
 | Cancel or a failed run ends the script with exit code 1, so no report is rendered | `test_cancel_or_a_failure_ends_the_script_with_an_error_code_so_no_report_is_rendered`, `test_cancel_says_that_the_report_is_not_generated` |
+| saved upgrade drops its one-time note; schema-2 file `.v2.json` never replaces the schema-1 file of the delivered script; outage choices built once | `test_the_upgrade_note_is_shown_until_the_cases_are_saved`, `test_this_version_never_overwrites_the_file_of_the_delivered_script`, `test_outage_choices_are_built_once` |
+| only tests, `gridlens_report.py` and `MASTER_GRIDLENS.mrt` are needed: `tests/_paths.py` finds both in `powerfactory/` or next to `tests/`; tool tests skip without `tools/` | checked by running the suite in a copy with only those files (nested and flat) |
+| keyboard: Delete/BackSpace remove in every list, Ctrl+N/S/O/F/Enter, Ctrl+A | `test_keyboard_deletes_and_shortcuts` |

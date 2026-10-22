@@ -25,7 +25,7 @@ TOOL = ROOT / "tools" / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
 
 # What the test tool calls; everything these use is copied with them.
 ROOTS = ("run_case_manager", "CaseEditor", "qds_period", "qds_period_text", "classify_planned_outages", "RunLogger",
-         "assign_definitions", "object_key", "case_config_path", "load_case_config", "empty_case_config",
+         "assign_definitions", "object_key", "case_config_path", "legacy_case_config_path", "load_case_config", "empty_case_config",
          "_format_pf_time", "_friendly_exception", "CaseManagerUnavailable", "PUBLISHER_VERSION")
 BEGIN = "# >>> copy of powerfactory/gridlens_report.py, written by tools/sync_case_manager_copy.py - do not edit >>>"
 END = "# <<< end of the copy <<<"

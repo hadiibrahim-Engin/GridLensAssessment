@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import re
-from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-MRT = ROOT / "powerfactory" / "MASTER_GRIDLENS.mrt"
-SCRIPT = ROOT / "powerfactory" / "gridlens_report.py"
+from _paths import delivered  # noqa: E402
+MRT = delivered("MASTER_GRIDLENS.mrt")
+SCRIPT = delivered("gridlens_report.py")
 SPEC = importlib.util.spec_from_file_location("gridlens_report_mrt", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

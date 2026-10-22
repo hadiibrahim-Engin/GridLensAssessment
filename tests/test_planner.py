@@ -6,13 +6,12 @@ import calendar
 import importlib.util
 import json
 import time
-from pathlib import Path
 
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "powerfactory" / "gridlens_report.py"
+from _paths import delivered  # noqa: E402
+SCRIPT = delivered("gridlens_report.py")
 SPEC = importlib.util.spec_from_file_location("gridlens_planner", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -954,6 +953,48 @@ def test_gui_one_case_per_outage_stops_at_five(editor):
     crowded = gl.CaseEditor(many, config([]), PERIOD)
     assert crowded.one_case_per_outage() == "Only the first 5 of 10 planned outages got a case (at most 5 cases)."
     assert crowded.case_ids() == ["C1", "C2", "C3", "C4", "C5"]
+
+
+def test_the_upgrade_note_is_shown_until_the_cases_are_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(gl, "CASE_CONFIG_DIR", str(tmp_path))
+    fs1, fs2 = record("FS1", kw(10), kw(11)), record("FS2", kw(12), kw(13))
+    old = config([case("A", fs1), case("B", fs2, includes=["A"])], schema_version=1, exclusive_groups=[])
+    legacy = gl.legacy_case_config_path("Project")
+    with open(legacy, "w", encoding="utf-8") as handle:
+        json.dump(old, handle)
+    path = gl.case_config_path("Project")
+
+    edit = gl.CaseEditor([fs1, fs2], gl.load_case_config(path), PERIOD)
+    assert any(where == "configuration" for where, _ in edit.problem_rows()), "the note is shown once"
+    gl.save_case_config(path, edit.config, "operator")
+
+    assert "migration_note" not in edit.config
+    stored = json.loads(open(path, encoding="utf-8").read())
+    assert "migration_note" not in stored and stored["schema_version"] == 2
+    again = gl.CaseEditor([fs1, fs2], gl.load_case_config(path), PERIOD)
+    assert again.problem_rows() == [] and again.case("B")["outages"] == [fs2["key"], fs1["key"]]
+
+
+def test_this_version_never_overwrites_the_file_of_the_delivered_script(tmp_path, monkeypatch):
+    monkeypatch.setattr(gl, "CASE_CONFIG_DIR", str(tmp_path))
+    legacy, path = gl.legacy_case_config_path("Project\\Grid.IntPrj"), gl.case_config_path("Project\\Grid.IntPrj")
+    assert path.endswith(".v2.json") and path != legacy and path[:-len(".v2.json")] == legacy[:-len(".json")]
+    old = config([case("A")], schema_version=1, exclusive_groups=[])
+    with open(legacy, "w", encoding="utf-8") as handle:
+        json.dump(old, handle)
+    before = open(legacy, encoding="utf-8").read()
+
+    loaded = gl.load_case_config(path)  # nothing saved by this version yet: read the 8.0 file
+    assert loaded["schema_version"] == 2 and loaded["cases"][0]["id"] == "A"
+    gl.save_case_config(path, loaded, "operator")
+
+    assert open(legacy, encoding="utf-8").read() == before, "the schema-1 file stays for the delivered script"
+    assert gl.load_case_config(path)["revision"] == 1
+
+
+def test_outage_choices_are_built_once(editor):
+    edit, _ = editor
+    assert edit.outage_choices() is edit.outage_choices()
 
 
 def test_the_window_fits_the_screen_and_opens_centred():
