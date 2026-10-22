@@ -32,7 +32,7 @@ Related documents:
 | Reference | always "no planned outage" | R0 (none) or Rfix (fixed background outages) |
 | Line ranking | LODF from `ComVstab` | removed; real QDS load flows only |
 | Result objects | temporary `ElmRes`, deleted after extraction | one `ElmRes` per case, kept in the study case |
-| QDS period | complete `ComStatsim` period | complete period (conservative); shorter windows only proposed |
+| QDS period | complete `ComStatsim` period | complete period; the case manager offers no time optimisation (shorter windows only appear when `QDS_WINDOW_MODE = 'optimized'` is set in the script, as a proposal in log and report) |
 
 ---
 
@@ -125,7 +125,7 @@ flowchart LR
     subgraph GL["gridlens_report.py"]
         AD["PowerFactory adapter<br/>_find_project_outages, _run_calculation,<br/>_isolate_outages, StateGuard"]
         CM["Case manager<br/>resolve_request, validate_case_config,<br/>load/save_case_config"]
-        GUI["GUI adapter<br/>run_case_manager, CaseManagerDialog (tkinter)<br/>CaseEditor (logic, no window)"]
+        GUI["GUI adapter (configuration only, no results)<br/>run_case_manager, CaseManagerDialog: three panes (tkinter)<br/>CaseEditor (logic, no window)"]
         TP["Time and state planner<br/>network_states, interval_relation,<br/>calculation_windows"]
         OR["Calculation orchestrator<br/>execute_gridlens, _run_reference,<br/>_run_planning_case, _reused_result"]
         AE["Assessment engine<br/>compare_case, step_status,<br/>assess_case"]
@@ -476,11 +476,11 @@ All restore steps run in `finally`, so they also run after an error or a
 
 | Quantity | Where it is reported |
 |---|---|
-| planned QDS runs | preview: "QDS runs: n (1 reference)" |
-| avoided runs | identical cases (same outages, windows, fixed outages) reuse the result: preview "identical cases calculated once", evidence table "CASE (reused)" |
+| planned QDS runs | case manager preview: "Calculation runs: 1 reference + n case run(s)" |
+| avoided runs | identical cases (same outages, windows, fixed outages) reuse the result: case manager preview "n identical case(s) reused", evidence table "CASE (reused)" |
 | time steps per run | evidence table `time_steps` |
 | measured run time | evidence table `elapsed_text`, log (QDS and comparison separately) |
-| proposed windows | preview, report (`windows_text`, `qds_mode_text`) – not executed |
+| proposed windows | only with `QDS_WINDOW_MODE = 'optimized'` in the script: log and report (`windows_text`, `qds_mode_text`), never executed; the case manager shows none |
 
 Rough model (spec section 27): `T ≈ (1 + m_distinct) · (τ_I + n · τ_L)`. No
 speed-up is claimed; nothing has been measured in PowerFactory.

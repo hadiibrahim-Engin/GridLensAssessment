@@ -352,15 +352,6 @@ def test_damaged_configuration_is_reported_not_ignored(tmp_path):
         gl.load_case_config(str(path))
 
 
-def test_rules_typed_in_the_dialog_are_parsed_by_outage_name():
-    fs1, fs2 = record("FS1", 0, 1), record("FS2", 0, 1)
-
-    rules, problems = gl._parse_rules("not_overlap: FS1, FS2\nbogus\norder: FS1, FS9", [fs1, fs2])
-
-    assert rules == [{"kind": "not_overlap", "first": fs1["key"], "second": fs2["key"]}]
-    assert len(problems) == 2
-
-
 # ---------------------------------------------------------------------------
 # Per-step classification, durations, coverage
 # ---------------------------------------------------------------------------
@@ -675,82 +666,424 @@ def test_compare_element_agrees_with_step_status_at_every_step():
 
 
 # ---------------------------------------------------------------------------
-# Case editor (the dialog's logic, without a window)
+# Case editor: every step of the case manager, without a window
+# (gui_NN refers to the functional checks 1-20 of the GUI specification)
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def editor():
-    outages = [record("FS1", kw(10), kw(11)), record("FS2", kw(10), kw(11)), record("FS3", kw(60), kw(61), ignored=True)]
-    return gl.CaseEditor(outages, gl.empty_case_config(), PERIOD), outages
+    outages = [record("FS1", kw(10), kw(11), ["Project\\L1.ElmLne"]), record("FS2", kw(10) + 2 * 24 * H, kw(12), ["Project\\L2.ElmLne"]),
+               record("FS3", kw(40), kw(41), ["Project\\L3.ElmLne"]), record("FS4 Ignored", kw(20), kw(21), ignored=True),
+               record("FS0 Background", kw(9), kw(13), ["Project\\L9.ElmLne"])]
+    outages[2]["equipment_name"] = "Transformer T300"
+    data = config([case("A", outages[0], outages[1]), case("B", outages[2])])
+    return gl.CaseEditor(outages, data, PERIOD), outages
 
 
-def test_editor_creates_copies_renames_and_deletes_cases(editor):
+def members(edit, case_id):
+    return [row[1][0] for row in edit.member_rows(case_id)]
+
+
+def test_gui_01_to_03_each_case_shows_its_own_outages_and_switching_back_changes_nothing(editor):
+    edit, _ = editor
+
+    first = members(edit, "A")
+    other = members(edit, "B")
+
+    assert first == ["FS1", "FS2"] and other == ["FS3"]
+    assert members(edit, "A") == first
+
+
+def test_gui_04_and_06_adding_updates_the_case_and_an_outage_may_be_in_several_cases(editor):
     edit, outages = editor
 
-    assert edit.suggested_id() == "A"
-    edit.add_case("A", "")
-    edit.toggle_member("A", outages[0]["key"])
-    edit.copy_case("A", "B")
-    edit.rename_case("B", "  Variant  ")
+    assert edit.add_outage("A", outages[2]["key"]) is None
+
+    assert members(edit, "A") == ["FS1", "FS2", "FS3"]
+    marks = dict((key, cells[0]) for key, cells in edit.available_rows("A"))
+    assert marks[outages[2]["key"]] == gl.MARK_IN_CASE
+    assert members(edit, "B") == ["FS3"]
+
+
+def test_gui_no_duplicate_assignment_and_no_case_means_no_assignment(editor):
+    edit, outages = editor
+
+    assert edit.add_outage("A", outages[0]["key"]) == "FS1 is already part of Case A."
+    assert edit.add_outage(None, outages[0]["key"]) == "Select a planning case first."
+    assert edit.add_outage("A", "gone") == "This planned outage no longer exists in the project."
+    assert members(edit, "A") == ["FS1", "FS2"]
+
+
+def test_gui_05_and_09_removing_and_deleting_never_touch_the_planned_outages(editor):
+    edit, outages = editor
+    before = [dict(item) for item in outages]
+
+    edit.remove_outage("A", outages[0]["key"])
+    edit.delete_case("B")
+
+    assert members(edit, "A") == ["FS2"]
+    assert edit.case_ids() == ["A"]
+    assert outages == before and len(edit.records) == 5
+    assert [cells[1] for _, cells in edit.available_rows("A")] == ["FS1", "FS2", "FS3", "FS4 Ignored", "FS0 Background"]
+
+
+def test_gui_07_copying_a_case_copies_its_assignments_and_stays_independent(editor):
+    edit, outages = editor
+
+    identifier, problem = edit.copy_case("A")
+    edit.remove_outage(identifier, outages[0]["key"])
+
+    assert (identifier, problem) == ("C1", None)
+    assert members(edit, "C1") == ["FS2"]
+    assert members(edit, "A") == ["FS1", "FS2"]
+    assert edit.case("C1")["name"] == "Case A (copy)"
+
+
+def test_gui_08_renaming_keeps_the_id_and_every_reference(editor):
+    edit, _ = editor
+    edit.set_includes("B", ["A"])
+
+    edit.rename_case("A", "  Summer measures  ")
+
+    assert edit.case("A")["name"] == "Summer measures"
+    assert edit.includes("B") == ["A"]
+
+
+def test_gui_deleting_a_case_removes_every_reference_to_it(editor):
+    edit, _ = editor
+    third, _ = edit.add_case("Third")
+    edit.set_includes(third, ["A"])
+    edit.set_requires(third, ["B"])
+    edit.set_alternatives("A", ["B", third])
+
+    edit.delete_case("B")
+
+    assert edit.requires(third) == [] and edit.alternatives("A") == [third] and edit.includes(third) == ["A"]
+    assert gl.validate_case_config(edit.config) == []
+
+
+def test_gui_10_fixed_outages_stay_apart_from_case_outages(editor):
+    edit, outages = editor
+    background = outages[4]["key"]
+
+    assert edit.set_fixed(background, True) is None
+    assert "fixed background outage" in edit.add_outage("A", background)
+    assert "remove it from that case first" in edit.set_fixed(outages[0]["key"], True)
+    assert edit.counts_text("A") == "2 case outages · 1 fixed background outage"
+    assert dict(edit.summary()[0])["Reference"].startswith("Rfix")
+    edit.set_fixed(background, False)
+    assert dict(edit.summary()[0])["Reference"].startswith("R0")
+
+
+def test_gui_11_and_12_search_and_filters_cope_with_many_outages(editor):
+    _, outages = editor
+    many = outages + [record("FS{:04d}".format(i), kw(10), kw(11), ["Project\\X{}.ElmLne".format(i)]) for i in range(5000)]
+    edit = gl.CaseEditor(many, config([case("A", many[0])]), PERIOD)
+
+    started = time.perf_counter()
+    found = edit.available_rows("A", "transformer")
+    elapsed = time.perf_counter() - started
+
+    assert [cells[1] for _, cells in found] == ["FS3"]
+    assert elapsed < 0.5
+    assert [cells[1] for _, cells in edit.available_rows("A", "", gl.OUTAGE_FILTERS[3])] == ["FS4 Ignored"]
+    assert outages[0]["key"] not in [key for key, _ in edit.available_rows("A", "", gl.OUTAGE_FILTERS[1])]
+
+
+def test_gui_13_timeline_shows_overlaps_and_keeps_far_apart_outages_readable(editor):
+    edit, outages = editor
+    edit.add_outage("A", outages[2]["key"])
+
+    items, overlaps = edit.timeline("A")
+    position, breaks = gl.timeline_scale([(start, end) for _, start, end, _ in items], 600)
+
+    assert [name for name, *_ in items] == ["FS1", "FS2", "FS3"]
+    assert overlaps == [(kw(10) + 2 * 24 * H, kw(11))]
+    assert len(breaks) == 1, "the 29 empty weeks between KW11 and KW40 are shortened"
+    widths = [position(end) - position(start) for _, start, end, _ in items]
+    assert min(widths) > 100, widths
+    assert [round(position(moment)) for moment in (kw(10), kw(41))] == [0, 600]
+
+
+def test_timeline_scale_is_monotonic_and_needs_a_window():
+    position, _ = gl.timeline_scale([(0, 10), (1000, 1010)], 500)
+
+    xs = [position(moment) for moment in (0, 5, 10, 500, 1000, 1005, 1010)]
+    assert xs == sorted(xs) and xs[0] == 0 and round(xs[-1]) == 500
+    assert gl.timeline_scale([(None, None)], 500) == (None, [])
+
+
+def test_gui_14_and_16_n1_is_refused_and_no_time_optimisation_remains(editor):
+    edit, _ = editor
+
+    assert edit.set_assessments(False, False) == "Select at least one assessment."
+    assert "not available" in edit.set_assessments(True, True)
+    assert edit.set_assessments(True, False) is None
+    assert edit.config["assessments"] == ["n-0"] and edit.config["mode"] == "conservative"
+    optimised = gl.CaseEditor(edit.records, dict(edit.config, mode="optimized"), PERIOD)
+    assert optimised.config["mode"] == "conservative"
+    assert not any("optimi" in (label + value).lower() or "window" in label.lower() for label, value in edit.summary()[0])
+
+
+def test_gui_15_preview_names_the_comstatsim_period_and_the_runs(editor):
+    edit, _ = editor
+
+    values = dict(edit.summary()[0])
+
+    assert values["QDS period"].startswith(gl.qds_period_text(PERIOD))
+    assert values["Cases selected"] == "2 of 2: Case A, Case B"
+    assert values["Valid cases"] == "2"
+    assert values["Calculation runs"] == "1 reference + 2 case run(s)"
+    assert values["Assessment"] == "n-0 quasi-dynamic simulation"
+
+
+def test_gui_preview_lists_problems_instead_of_hiding_them(editor):
+    edit, outages = editor
+    edit.add_case("Empty")
+
+    lines, problems = edit.summary()
+
+    assert dict(lines)["Valid cases"] == "2"
+    assert problems == ["Empty: Not calculated: no planned outage is assigned."]
+    assert edit.problem_rows() == [("Empty", "Not calculated: no planned outage is assigned.")]
+
+
+def test_gui_switched_off_cases_are_neither_calculated_nor_lost(editor):
+    edit, _ = editor
+
+    edit.set_enabled("B", False)
+    request = edit.request()
+
+    assert [plan["id"] for plan in request["cases"]] == ["A"] and request["disabled"] == ["B"]
+    assert [row[0] for row in edit.case_rows()] == ["A", "B"]
+    assert dict(edit.summary()[0])["Cases selected"] == "1 of 2: Case A"
+
+
+def test_gui_relations_by_selection_keep_other_alternatives(editor):
+    edit, _ = editor
+    third, _ = edit.add_case("Third")
+    edit.config["exclusive_groups"] = [["A", "B", third]]
+
+    assert edit.alternatives("A") == ["B", third]
+    edit.set_alternatives("A", [third])
+
+    assert sorted(map(sorted, edit.config["exclusive_groups"])) == [["A", third], ["B", third]]
+    edit.set_includes("A", ["A", "B", "missing"])
+    assert edit.includes("A") == ["B"]
+    assert edit.relation_options("A") == [("B", "Case B"), (third, "Third")], "names, not IDs"
+
+
+def test_gui_rules_between_outages_are_checked(editor):
+    edit, outages = editor
+    first, second = outages[0]["key"], outages[1]["key"]
+
+    assert edit.add_rule("not_overlap", first, second) is None
+    assert edit.add_rule("not_overlap", first, second) == "This rule exists already."
+    assert edit.add_rule("order", first, first) == "A rule needs two different planned outages."
+    assert edit.rule_rows() == [(0, ("FS1", "must not overlap", "FS2"))]
+    assert "must not overlap" in edit.request()["cases"][0]["reason"]
+    edit.remove_rule(0)
+    assert edit.config["rules"] == []
+
+
+def test_gui_own_dates_are_checked_and_removable(editor):
+    edit, outages = editor
+    key = outages[0]["key"]
+
+    assert edit.set_own_dates("B", key, "2026-10-01 00:00", "2026-10-02 00:00") == "Select a planned outage that belongs to the selected case."
+    assert edit.set_own_dates("A", key, "01.10.2026", "x") == "Use the format YYYY-MM-DD HH:MM."
+    assert edit.set_own_dates("A", key, "2026-10-02 00:00", "2026-10-01 00:00") == "The end must lie after the start."
+    assert edit.set_own_dates("A", key, "2026-10-01 00:00", "2026-10-02 00:00") is None
+    assert dict(edit.member_rows("A"))[key][2].endswith(" *")
+    assert edit.set_own_dates("A", key, "", "") is None and edit.case("A")["overrides"] == {}
+
+
+def test_gui_ids_are_generated_and_the_engineer_only_names_cases(editor):
+    edit, outages = editor
+
+    assert edit.next_case_id() == "C1"
+    first, _ = edit.add_case("")
+    second, _ = edit.add_case("  Winter  ")
+    edit.delete_case(first)
+
+    assert (first, second) == ("C1", "C2")
+    assert edit.case(second)["name"] == "Winter"
+    assert edit.next_case_id() == "C1", "a freed number is used again"
+    assert dict(edit.details(outages[0]["key"]))["Used in cases"] == "Case A"
+
+
+def test_gui_at_most_five_cases(editor):
+    edit, _ = editor
+    created = [edit.add_case("Extra {}".format(number)) for number in range(3)]
+
+    assert [problem for _, problem in created] == [None, None, None]
+    assert len(edit.case_ids()) == gl.MAX_CASES == 5
+    assert edit.add_case("Sixth") == (None, edit.limit_problem())
+    assert edit.copy_case("A") == (None, edit.limit_problem())
+    assert "At most 5 planning cases" in edit.limit_problem()
+    assert len(edit.case_ids()) == 5
+
+
+def test_gui_one_case_per_outage_stops_at_five(editor):
+    edit, outages = editor
+    edit.set_fixed(outages[4]["key"], True)
+
+    assert edit.one_case_per_outage() is None
+    assert [row[2] for row in edit.case_rows()] == ["FS1", "FS2", "FS3"], "ignored and fixed outages get no case"
+    many = outages + [record("FS{:02d}".format(i), kw(10), kw(11), ["Project\\Y{}.ElmLne".format(i)]) for i in range(6)]
+    crowded = gl.CaseEditor(many, config([]), PERIOD)
+    assert crowded.one_case_per_outage() == "Only the first 5 of 10 planned outages got a case (at most 5 cases)."
+    assert crowded.case_ids() == ["C1", "C2", "C3", "C4", "C5"]
+
+
+def test_one_case_per_outage_takes_only_outages_in_the_simulated_period():
+    outside = record("FS Next year", PERIOD[1] + WEEK, PERIOD[1] + 2 * WEEK)
+    inside = [record("FS{}".format(i), kw(10), kw(11), ["Project\\W{}.ElmLne".format(i)]) for i in range(5)]
+    edit = gl.CaseEditor([outside] + inside, config([]), PERIOD)
+
+    assert edit.one_case_per_outage() is None
+    assert [row[2] for row in edit.case_rows()] == ["FS0", "FS1", "FS2", "FS3", "FS4"]
+
+
+def test_copy_keeps_the_alternatives(editor):
+    edit, _ = editor
+    edit.set_alternatives("A", ["B"])
+    copy, _ = edit.copy_case("A")
+
+    assert edit.alternatives(copy) == ["B"]
+    assert sorted(edit.alternatives("B")) == ["A", copy]
+
+
+def test_deleting_a_required_case_excludes_the_dependent_case(editor):
+    edit, outages = editor
+    joint, _ = edit.add_case("Joint")
+    edit.set_includes(joint, ["A"])
+    edit.set_requires("B", ["A"])
+    edit.set_alternatives("A", [joint])
+
+    effects = edit.delete_effects("A")
     edit.delete_case("A")
 
-    assert [(case["id"], case["name"], case["outages"]) for case in edit.config["cases"]] == [("B", "Variant", [outages[0]["key"]])]
-    assert edit.id_problem("B") and edit.id_problem("REF") and edit.id_problem("A.1") and edit.id_problem("C") is None
+    assert effects == ["Joint no longer contains its planned outages.",
+                       "Case B is only valid with it and will be excluded from the calculation.",
+                       "Joint loses it as alternative."]
+    assert edit.case("B")["enabled"] is False and edit.requires("B") == []
+    assert edit.case_statuses()["B"] == "excluded", "never calculated on its own once its condition is gone"
 
 
-def test_editor_never_changes_the_configuration_it_was_given(editor):
+def test_rule_choices_keep_outages_with_the_same_name_apart():
+    first = record("FS Line", kw(10), kw(11), ["Project\\A.ElmLne"])
+    second = dict(record("FS Line", kw(12), kw(13), ["Project\\B.ElmLne"]), key="Project\\Other\\FS Line.IntPlannedout")
+    edit = gl.CaseEditor([first, second], config([]), PERIOD)
+    choices = dict(edit.outage_choices())
+
+    assert len(choices) == 2 and set(choices.values()) == {first["key"], second["key"]}
+    label = next(label for label, key in choices.items() if key == second["key"])
+    assert edit.add_rule("not_overlap", choices[label], first["key"]) is None
+    assert edit.config["rules"] == [{"kind": "not_overlap", "first": second["key"], "second": first["key"]}]
+    assert edit.rule_rows()[0][1][0] == label
+
+
+def test_statuses_problems_and_preview_share_one_resolution(editor, monkeypatch):
+    edit, outages = editor
+    calls = []
+    original = gl.resolve_request
+    monkeypatch.setattr(gl, "resolve_request", lambda *args, **kw: calls.append(1) or original(*args, **kw))
+
+    edit.case_statuses(), edit.problem_rows(), edit.summary(), edit.case_statuses()
+    assert len(calls) == 1
+    edit.remove_outage("A", outages[0]["key"])
+    edit.case_statuses()
+    assert len(calls) == 2, "a change resolves again"
+
+
+def test_more_than_five_cases_are_refused_where_engineers_define_them():
+    outages = [record("FS{}".format(i), kw(10), kw(11), ["Project\\Z{}.ElmLne".format(i)]) for i in range(6)]
+    data = config([case("K{}".format(i), item) for i, item in enumerate(outages)])
+
+    assert "at most 5 planning cases" in " ".join(gl.validate_case_config(data))
+    with pytest.raises(gl.GridLensError, match="at most 5 planning cases"):
+        gl.resolve_request(data, outages, PERIOD, "saved")
+    assert len(gl.resolve_request(data, outages, PERIOD, "per_outage")["cases"]) == 6, "the window-less mode keeps every outage"
+
+
+def test_gui_20_saved_assignments_come_back_unchanged(editor, tmp_path):
+    edit, outages = editor
+    edit.add_outage("B", outages[0]["key"])
+    edit.set_enabled("A", False)
+    path = str(tmp_path / "cases.json")
+
+    gl.save_case_config(path, edit.config, "operator")
+    again = gl.CaseEditor(outages, gl.load_case_config(path), PERIOD)
+
+    assert members(again, "A") == ["FS1", "FS2"] and members(again, "B") == ["FS3", "FS1"]
+    assert again.case("A")["enabled"] is False and again.config["assessments"] == ["n-0"]
+
+
+def test_gui_the_editor_never_changes_the_configuration_it_was_given(editor):
     _, outages = editor
     original = gl.empty_case_config()
 
     edit = gl.CaseEditor(outages, original, PERIOD)
-    edit.add_case("A", "A")
+    edit.add_case("A")
 
     assert original["cases"] == []
 
 
-def test_editor_assigns_fixes_and_shows_outages(editor):
-    edit, outages = editor
-    edit.add_case("A", "A")
+@pytest.mark.parametrize("change, message", [
+    (lambda data: data.update(assessments=[]), "assessments must name"),
+    (lambda data: data.update(assessments=["n-2"]), "assessments must name"),
+    (lambda data: data.update(assessments=["n-0", "n-1"]), "n-1 contingency analysis is not part"),
+    (lambda data: data["cases"].append({"id": "E", "outages": [], "enabled": "yes"}), "enabled must be"),
+])
+def test_assessments_and_enabled_flags_are_validated(change, message):
+    data = config([])
+    change(data)
 
-    edit.toggle_member("A", outages[1]["key"])
-    edit.toggle_fixed(outages[0]["key"])
-    edit.toggle_member("A", "unknown key")
-    rows = dict(edit.outage_rows("A"))
-
-    assert rows[outages[1]["key"]][:2] == (gl.CHECKED, gl.UNCHECKED)
-    assert rows[outages[0]["key"]][:2] == (gl.UNCHECKED, gl.CHECKED)
-    assert rows[outages[2]["key"]][-1] == "Ignored in PowerFactory"
-    assert edit.config["cases"][0]["outages"] == [outages[1]["key"]]
+    assert any(message in problem for problem in gl.validate_case_config(data))
 
 
-def test_editor_own_dates_are_checked_and_removable(editor):
-    edit, outages = editor
-    edit.add_case("A", "A")
-    key = outages[0]["key"]
-
-    assert edit.set_own_dates("A", key, "2026-10-01 00:00", "2026-10-02 00:00") == "Select an outage that belongs to the selected case."
-    edit.toggle_member("A", key)
-    assert edit.set_own_dates("A", key, "01.10.2026", "x") == "Use the format YYYY-MM-DD HH:MM."
-    assert edit.set_own_dates("A", key, "2026-10-02 00:00", "2026-10-01 00:00") == "The end must lie after the start."
-    assert edit.set_own_dates("A", key, "2026-10-01 00:00", "2026-10-02 00:00") is None
-    assert dict(edit.outage_rows("A"))[key][4].endswith(" *")
-    assert edit.set_own_dates("A", key, "", "") is None
-    assert edit.config["cases"][0]["overrides"] == {}
+# ---------------------------------------------------------------------------
+# Table filters, sorting and column widths of the case manager
+# ---------------------------------------------------------------------------
+ROWS = [("a", ("FS Bedarf 1", "NE_L1", 2, "in case")), ("b", ("FS Bedarf 2", "NE_L2", 10, "")),
+        ("c", ("FS Nord", "Transformer T3", 1, "fixed"))]
 
 
-def test_editor_request_settings_report_every_problem(editor):
-    edit, outages = editor
-    edit.add_case("A", "A")
+@pytest.mark.parametrize("filters, keys", [
+    ({}, ["a", "b", "c"]),
+    ({0: ("contains", "bedarf")}, ["a", "b"]),
+    ({1: ("contains", "t3")}, ["c"]),
+    ({0: ("contains", "bedarf"), 1: ("contains", "l2")}, ["b"]),
+    ({3: ("equals", "")}, ["b"]),
+    ({3: ("equals", "fixed")}, ["c"]),
+    ({2: ("contains", "1")}, ["b", "c"]),  # numbers filter as text: "1" is in 10 and 1
+])
+def test_filter_rows_matches_every_column_filter(filters, keys):
+    assert [key for key, _ in gl.filter_rows(ROWS, filters)] == keys
 
-    assert edit.set_request("order: FS1", "", "conservative")
-    assert edit.set_request("not_overlap: FS1, FS2", "A|B", "optimized") == []
-    assert edit.config["rules"] == [{"kind": "not_overlap", "first": outages[0]["key"], "second": outages[1]["key"]}]
-    assert edit.exclusive_text() == "A|B" and edit.rules_text() == "not_overlap: FS1, FS2"
-    assert edit.request()["mode"] == "optimized"
+
+def test_filter_rows_never_changes_the_rows():
+    before = list(ROWS)
+    gl.filter_rows(ROWS, {0: ("contains", "x")})
+    assert ROWS == before
 
 
-def test_editor_one_case_per_outage_leaves_out_ignored_outages(editor):
-    edit, _ = editor
+def test_sort_rows_orders_numbers_by_value_and_text_alphabetically():
+    assert [key for key, _ in gl.sort_rows(ROWS, 2)] == ["c", "a", "b"]
+    assert [key for key, _ in gl.sort_rows(ROWS, 2, descending=True)] == ["b", "a", "c"]
+    assert [key for key, _ in gl.sort_rows(ROWS, 1)] == ["a", "b", "c"]
+    assert [key for key, _ in gl.sort_rows(ROWS, 3)] == ["b", "c", "a"], "empty first, then alphabetical"
 
-    edit.one_case_per_outage()
 
-    assert [case["name"] for case in edit.config["cases"]] == ["FS1", "FS2"]
+@pytest.mark.parametrize("width", [200, 400, 532, 800, 1200])
+def test_column_widths_fill_the_table_and_keep_flexible_columns_readable(width):
+    columns = [(66, False), (140, True), (110, True), (106, False), (106, False), (132, False)]
+
+    widths = gl.column_widths(columns, width)
+
+    assert sum(widths) == width
+    if width >= 410 + 0.6 * 250:
+        assert widths[0] == 66 and widths[3] == 106, "fixed columns keep their width while there is room"
+        assert widths[1] >= 0.6 * 140 - 1
+    else:
+        assert widths[1] / 140.0 == pytest.approx(widths[0] / 66.0 * 0.6, rel=0.1), "everything shrinks in proportion"

@@ -1,271 +1,192 @@
-"""Exercise the standalone dialog's actual callbacks without a desktop session."""
+"""The PowerFactory GUI test tool: a separate script with its own copy of the case manager; read-only, calculates nothing."""
 
 from __future__ import annotations
 
+import builtins
 import importlib.util
+import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
+ROOT = Path(__file__).resolve().parents[1]
+TOOL = ROOT / "tools" / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
+SPEC = importlib.util.spec_from_file_location("case_manager_gui_test_tool", TOOL)
+tool = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(tool)
+SYNC_SPEC = importlib.util.spec_from_file_location("sync_case_manager_copy", ROOT / "tools" / "sync_case_manager_copy.py")
+sync = importlib.util.module_from_spec(SYNC_SPEC)
+SYNC_SPEC.loader.exec_module(sync)
 
-SCRIPT = Path(__file__).resolve().parents[1] / "tools" / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
-SPEC = importlib.util.spec_from_file_location("case_manager_gui", SCRIPT)
-gui = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(gui)
-
-
-class Variable:
-    def __init__(self, value=None):
-        self.value = value
-
-    def get(self):
-        return self.value
-
-    def set(self, value):
-        self.value = value
+PERIOD = (1467324000, 1470002400)
 
 
-class Widget:
-    def __init__(self, parent=None, *, kind="Widget", **options):
-        self.kind, self.options = kind, options
-        self.children, self.bindings, self.cells = [], {}, {}
-        self.destroyed = False
-        self.root = parent.root if parent else self
-        if parent:
-            parent.children.append(self)
+class Obj:
+    def __init__(self, name, kind, **attributes):
+        self.loc_name, self.kind = name, kind
+        self.__dict__.update(attributes)
+        self.writes = []
 
-    def pack(self, **options):
-        pass
+    def GetClassName(self):
+        return self.kind
 
-    def grid(self, **options):
-        self.cells = options
+    def GetFullName(self):
+        return "\\User\\Grid.IntPrj\\{}.{}".format(self.loc_name, self.kind)
 
-    def configure(self, **options):
-        self.options.update(options)
+    def GetContents(self, *_args):
+        return []
 
-    def bind(self, name, callback):
-        self.bindings[name] = callback
-
-    def winfo_children(self):
-        return [child for child in self.children if not child.destroyed]
-
-    def destroy(self):
-        self.destroyed = True
-        for child in self.children:
-            child.destroy()
-
-    def grid_rowconfigure(self, *args, **options):
-        pass
-
-    grid_columnconfigure = grid_rowconfigure
-
-    def create_window(self, *args, **options):
-        return 1
-
-    def itemconfigure(self, *args, **options):
-        pass
-
-    def bbox(self, *args):
-        return (0, 0, 1000, 1000)
-
-    def yview(self, *args):
-        pass
-
-    xview = yview
-
-    def set(self, *args):
-        pass
-
-    def winfo_reqwidth(self):
-        return 900
-
-    def winfo_width(self):
-        return 740
-
-    def update_idletasks(self):
-        pass
-
-    def invoke(self):
-        if self.kind == "Checkbutton":
-            flag = self.options["variable"]
-            flag.set(not flag.get())
-        elif self.kind == "Radiobutton":
-            self.options["variable"].set(self.options["value"])
-        self.options["command"]()
+    def __setattr__(self, name, value):
+        if "writes" in self.__dict__:
+            self.writes.append(name)
+        super().__setattr__(name, value)
 
 
-class Root(Widget):
-    def __init__(self, scenario):
-        super().__init__(kind="Root")
-        self.scenario = scenario
-        self.quitted = False
+class App:
+    def __init__(self, outages):
+        self.outages = outages
+        self.qds = Obj("QDS", "ComStatsim", startTime=PERIOD[0], endTime=PERIOD[1], iopt_maint=0)
+        self.folder = Obj("Outages", "IntPrjfolder")
+        self.project = Obj("Grid", "IntPrj")
+        self.folder.GetContents = self.project.GetContents = lambda pattern, *_: [o for o in outages if pattern.endswith(o.kind)]
+        self.lines = []
+        self.executed = []
+        self.qds.Execute = lambda: self.executed.append("QDS")
+        for item in outages + [self.qds, self.folder, self.project]:
+            item.__dict__["writes"] = []  # only what the tool writes counts
 
-    def title(self, *args):
-        pass
+    def PrintPlain(self, message):
+        self.lines.append(message)
 
-    geometry = minsize = title
+    def GetProjectFolder(self, key):
+        return self.folder if key == "outage" else None
 
-    def protocol(self, name, callback):
-        self.bind(name, callback)
+    def GetActiveProject(self):
+        return self.project
 
-    def after(self, *args):
-        pass
+    def GetFromStudyCase(self, name):
+        return self.qds if name == "ComStatsim" else None
 
-    def lift(self):
-        pass
 
-    def quit(self):
-        self.quitted = True
+def outage(name, day):
+    return Obj(name, "IntPlannedout", outserv=0, priority=1, starttime=PERIOD[0] + day * 86400, endtime=PERIOD[0] + (day + 5) * 86400,
+               components=[Obj("L_" + name, "ElmLne")])
+
+
+@pytest.fixture
+def opened(monkeypatch, tmp_path):
+    """Replace the window by a callable that records what it was given and answers like a click on a button."""
+    gl = tool  # the tool carries its own case manager; nothing is loaded from gridlens_report.py
+    monkeypatch.setattr(gl, "CASE_CONFIG_DIR", str(tmp_path / "real_config"))
+    seen = {}
+
+    def answer(result):
+        def run_case_manager(records, config, period, config_path, user="", qds_text=""):
+            seen.update(records=records, config=config, period=period, config_path=config_path, qds_text=qds_text)
+            return result(records, config) if callable(result) else result
+        monkeypatch.setattr(gl, "run_case_manager", run_case_manager)
+    return gl, seen, answer
+
+
+def test_the_tool_opens_its_case_manager_with_the_project_outages(opened):
+    gl, seen, answer = opened
+    app = App([outage("FS Bedarf 1", 10), outage("FS Bedarf 2", 7)])
+    answer(lambda records, config: dict(config, cases=[{"id": "A", "name": "A", "outages": [records[0]["key"]]}]))
+
+    assert tool.run(app) is True
+
+    assert [record["id"] for record in seen["records"]] == ["FS Bedarf 1", "FS Bedarf 2"]
+    assert seen["period"] == PERIOD and seen["qds_text"] == gl.qds_period_text(PERIOD)
+    text = "\n".join(app.lines)
+    assert "Cases selected" in text and "PASS" in text and '"assessments": [' in text
+    assert app.executed == [], "no QDS is started"
+    assert all(item.writes == [] for item in app.outages + [app.qds]), "no PowerFactory attribute is written"
+
+
+def test_save_and_load_in_the_window_use_a_temporary_copy_of_the_saved_configuration(opened, tmp_path):
+    gl, seen, answer = opened
+    app = App([outage("FS1", 1)])
+    real = gl.case_config_path(gl.object_key(app.project))
+    saved = gl.empty_case_config()
+    saved["cases"] = [{"id": "S", "name": "Saved", "outages": []}]
+    gl.save_case_config(real, saved, "operator")
+    before = Path(real).read_text()
+    answer(None)
+
+    assert tool.run(app) is True
+
+    assert seen["config"]["cases"][0]["id"] == "S"
+    assert seen["config_path"] != real and not Path(seen["config_path"]).exists(), "the copy is removed afterwards"
+    assert Path(real).read_text() == before
+    assert any("Cancel" in line for line in app.lines)
+
+
+def test_without_powerfactory_the_window_shows_marked_demo_data(opened, capsys):
+    _, seen, answer = opened
+    answer(None)
+
+    assert tool.run(None) is True
+
+    assert all(record["id"].startswith("DEMO") for record in seen["records"])
+    assert "DEMO DATA" in capsys.readouterr().out
+
+
+def test_a_missing_tkinter_is_reported_as_failure(monkeypatch, capsys):
+    real_import = builtins.__import__
+
+    def no_tk(name, *args, **kwargs):
+        if name == "tkinter":
+            raise ImportError("no _tkinter")
+        return real_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", no_tk)
+
+    assert tool.run(None) is False
+    assert "FAIL: tkinter cannot be imported" in capsys.readouterr().out
+
+
+def test_the_tool_is_a_separate_script_that_never_loads_gridlens_report(monkeypatch, tmp_path, capsys):
+    source = TOOL.read_text(encoding="utf-8")
+    assert "importlib" not in source and "GRIDLENS_SCRIPT" not in source
+    copied = tmp_path / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
+    copied.write_text(source, encoding="utf-8")  # alone in a folder without gridlens_report.py
+    spec = importlib.util.spec_from_file_location("lonely_tool", copied)
+    lonely = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lonely)
+    monkeypatch.setattr(lonely, "run_case_manager", lambda *args, **kwargs: None)
+
+    assert lonely.run(None) is True
+    assert "standalone" in capsys.readouterr().out
+
+
+def test_the_copied_case_manager_matches_gridlens_report():
+    assert sync.current_block() == sync.copied_block(), \
+        "the case manager in gridlens_report.py changed: run python3 tools/sync_case_manager_copy.py"
+    for name in ("CaseManagerDialog", "CaseEditor", "FilterTable", "Tooltip", "HELP_TEXTS", "resolve_request"):
+        assert hasattr(tool, name), name
+
+
+def test_with_real_tk_the_tool_opens_the_new_window_and_cancel_ends_it(monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    try:
+        tk.Tk().destroy()
+    except Exception:
+        pytest.skip("Tk cannot open a window here")
+    seen = {}
 
     def mainloop(self):
-        self.scenario(self)
+        dialog = self.report_callback_exception.__self__
+        seen["title"] = self.title()
+        seen["panes"] = [dialog.case_tree.winfo_exists(), dialog.member_tree.winfo_exists(), dialog.available_tree.winfo_exists()]
+        dialog.cancel()
+    monkeypatch.setattr(tk.Tk, "mainloop", mainloop)
+
+    assert tool.run(None) is True
+    assert seen["title"].endswith("Case Manager") and seen["panes"] == [1, 1, 1]
 
 
-def widgets(root):
-    if not root.destroyed:
-        yield root
-        for child in root.children:
-            yield from widgets(child)
-
-
-def named(root, text):
-    return next(widget for widget in widgets(root) if widget.options.get("text") == text)
-
-
-def checkbox(root, row, column):
-    return next(widget for widget in widgets(root)
-                if widget.kind == "Checkbutton"
-                and widget.cells.get("row") == row
-                and widget.cells.get("column") == column)
-
-
-def run_dialog(scenario, *, answers=(), outages=None):
-    roots = []
-
-    def create_root():
-        root = Root(scenario)
-        roots.append(root)
-        return root
-
-    def factory(kind):
-        return lambda parent=None, **options: Widget(parent, kind=kind, **options)
-
-    tk = SimpleNamespace(Tk=create_root, StringVar=Variable, BooleanVar=Variable,
-                         Canvas=factory("Canvas"))
-    ttk = SimpleNamespace(**{kind: factory(kind) for kind in (
-        "Frame", "Label", "LabelFrame", "Scrollbar", "Checkbutton", "Separator",
-        "Button", "Radiobutton", "Combobox")})
-    replies = iter(answers)
-    dialogs = SimpleNamespace(askstring=lambda *args, **options: next(replies))
-    result = gui.launch_dialog(tk, ttk, dialogs, None,
-                               gui.DEMO_OUTAGES if outages is None else outages, "DEMO")
-    assert roots[0].destroyed
-    return result
-
-
-def test_matrix_is_default_and_new_case_adds_an_independent_column():
-    def scenario(root):
-        assert named(root, "Matrix").options["variable"].get() == "matrix"
-        checkbox(root, 1, 2).invoke()
-        named(root, "+ Case").invoke()
-        assert checkbox(root, 1, 2).options["variable"].get()
-        assert not checkbox(root, 1, 3).options["variable"].get()
-        checkbox(root, 2, 3).invoke()
-        checkbox(root, 3, 2).invoke()
-        named(root, "OK (test only)").invoke()
-
-    result = run_dialog(scenario, answers=["Case B"])
-    assert result == {"confirmed": True, "cases": {
-        "Case A": ["demo-FS-001", "demo-FS-003"], "Case B": ["demo-FS-002"]}, "source": "DEMO"}
-
-
-def test_view_switch_retains_assignments_and_uses_the_selected_case():
-    def scenario(root):
-        checkbox(root, 1, 2).invoke()
-        named(root, "+ Case").invoke()
-        checkbox(root, 2, 3).invoke()
-        named(root, "Single case").invoke()
-        assert not checkbox(root, 1, 2).options["variable"].get()
-        assert checkbox(root, 2, 2).options["variable"].get()
-        checkbox(root, 4, 2).invoke()
-        selector = next(w for w in widgets(root) if w.kind == "Combobox")
-        selector.options["textvariable"].set("Case A")
-        selector.bindings["<<ComboboxSelected>>"](None)
-        assert checkbox(root, 1, 2).options["variable"].get()
-        named(root, "Matrix").invoke()
-        assert checkbox(root, 4, 3).options["variable"].get()
-        named(root, "OK (test only)").invoke()
-
-    result = run_dialog(scenario, answers=["Case B"])
-    assert result["cases"] == {"Case A": ["demo-FS-001"], "Case B": ["demo-FS-002", "demo-FS-004"]}
-
-
-def test_delete_case_keeps_other_columns_and_refuses_to_delete_the_last():
-    def scenario(root):
-        checkbox(root, 1, 2).invoke()
-        named(root, "+ Case").invoke()
-        checkbox(root, 2, 3).invoke()
-        named(root, "Delete case").invoke()
-        assert not any(w.kind == "Checkbutton" and w.cells.get("column") == 3 for w in widgets(root))
-        named(root, "Delete case").invoke()
-        assert checkbox(root, 1, 2).options["variable"].get()
-        named(root, "OK (test only)").invoke()
-
-    assert run_dialog(scenario, answers=["Case B"])["cases"] == {"Case A": ["demo-FS-001"]}
-
-
-@pytest.mark.parametrize("action", ["button", "escape", "window"])
-def test_cancel_discards_all_assignments(action):
-    def scenario(root):
-        checkbox(root, 1, 2).invoke()
-        if action == "button":
-            named(root, "Cancel").invoke()
-        elif action == "escape":
-            root.bindings["<Escape>"](None)
-        else:
-            root.bindings["WM_DELETE_WINDOW"]()
-
-    assert run_dialog(scenario) == {"confirmed": False, "cases": {}, "source": "DEMO"}
-
-
-def test_blank_duplicate_and_cancelled_names_do_not_create_columns():
-    def scenario(root):
-        named(root, "+ Case").invoke()
-        named(root, "+ Case").invoke()
-        named(root, "OK (test only)").invoke()
-
-    assert run_dialog(scenario, answers=[" ", "Case A", "Case B", None])["cases"] == {"Case A": [], "Case B": []}
-
-
-def test_identical_outage_names_keep_independent_identities():
-    records = [{"id": "path/a", "name": "Same name", "period": "Week 1"},
-               {"id": "path/b", "name": "Same name", "period": "Week 1"}]
-
-    def scenario(root):
-        checkbox(root, 2, 2).invoke()
-        named(root, "OK (test only)").invoke()
-
-    assert run_dialog(scenario, outages=records)["cases"] == {"Case A": ["path/b"]}
-
-
-def test_empty_outage_list_can_be_confirmed():
-    def scenario(root):
-        named(root, "No outages available.")
-        named(root, "OK (test only)").invoke()
-
-    assert run_dialog(scenario, outages=[])["cases"] == {"Case A": []}
-
-
-def test_toggling_a_matrix_cell_updates_counts_without_replacing_the_cell():
-    def scenario(root):
-        cell = checkbox(root, 1, 2)
-        cell.invoke()
-        assert checkbox(root, 1, 2) is cell
-        texts = [w.options["textvariable"].get() for w in widgets(root)
-                 if w.kind == "Label" and "textvariable" in w.options]
-        assert "1 selected" in texts
-        assert "4 outages | 1 cases | 1 assignments" in texts
-        named(root, "OK (test only)").invoke()
-
-    assert run_dialog(scenario)["cases"] == {"Case A": ["demo-FS-001"]}
+def test_the_tool_needs_nothing_but_the_standard_library_and_powerfactory():
+    source = TOOL.read_text(encoding="utf-8")
+    imports = {line.split()[1].split(".")[0] for line in source.splitlines() if line.startswith(("import ", "from "))}
+    assert imports <= {"__future__", "datetime", "hashlib", "json", "math", "os", "re", "shutil", "sys", "tempfile", "time",
+                       "traceback"}
+    assert json.loads(json.dumps({"ok": True}))

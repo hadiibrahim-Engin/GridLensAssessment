@@ -2,109 +2,248 @@
 
 German version: [de/FALLMANAGER.md](de/FALLMANAGER.md)
 
-The case manager is the small dialog GridLens opens when the ComPython runs
-(`CASE_SOURCE = 'gui'`). It only edits a configuration. PowerFactory waits
-while it is open; nothing is calculated or changed before you press
-**OK – calculate**.
+The case manager is the window GridLens opens when the ComPython runs
+(`CASE_SOURCE = 'gui'`). It only **configures** the calculation. It shows no
+results: results, violations and charts are in the PDF report that the
+existing GridLens publication produces after the calculation. PowerFactory
+waits while the window is open; nothing is calculated or changed before
+**Start calculation**.
+
+Technology: `tkinter` / `ttk` of the Python that PowerFactory runs, styled
+with `ttk.Style` (theme `clam`); `tk.Canvas` only for the timeline. No other
+package.
+
+## Layout
+
+Three tabs; a status line and the action bar stay visible on every tab:
+
+```
+ [ Workspace ] [ Fixed background & rules ] [ Review & start (1) ]
++--------------------------------------+------------------------------------+------------------------+
+| Available planned outages            | Case A - Summer measures           | Planning cases  2 of 5 |
+| Assigned Planned outage Equip. Start | 2 case outages · 1 fixed backgr.   | Planning case  FS  Stat|
+| [All  v][            ][     ][     ] | Planned outage Equip. Start End Pr | [            ][  ][ v ]|
+| in case FS Bedarf 1    NE_L1  ...    | [          ][     ][    ][   ][  ] | Summer         2  ready|
+|         FS Bedarf 3    NE_L7  ...    | FS Bedarf 1    NE_L1  ...          | North-east     1  ready|
+| fixed   FS Hintergrund NE_L5  ...    | FS Bedarf 2    NE_L2  ...          | 4 shown                |
+| 48 shown                             | 2 shown                            | [New][Copy][Ren.][Del.]|
+|                                      | [Remove from case] [Details]       | Selected case          |
+| [Add to case] [Set as fixed] [Det.]  | Timeline of the case               |  Name [..............] |
+|                                      |   |=====FS Bedarf 1=====|          |  [x] Include           |
+|                                      |     |====FS Bedarf 2====|          |  Relations to other ⓘ  |
+|                                      |                                    |  Also | Only | Altern. |
++--------------------------------------+------------------------------------+------------------------+
+ [Save configuration] [Load saved]   QDS ... · n-0 · 3 of 4 cases ready · 1 problem  [Cancel] [Start calculation]
+```
+
+- **Workspace** – three panes, about 40 % / 38 % / 22 %, dividers draggable.
+  Left to right the way an outage travels: from the library, into the
+  selected case, which is chosen on the right.
+  - **Available planned outages** (left): every outage of the library with *Assigned*
+    (`in case`, `fixed`, empty; also as row colour), *Planned outage, Equipment,
+    Start, End, Status*; *Add to case* (also double-click or Enter), *Set as
+    fixed background*, *Details*.
+  - **The selected case** (centre): title *Case A - name*, the count line *n case outages ·
+    m fixed background outages*, the table *Planned outage, Equipment, Start, End,
+    Priority*, *Remove from case*, *Details*, and the timeline of the case.
+  - **Planning cases** (right) – **at most 5**, the counter *2 of 5 cases* stands above
+    the table; at five, *New* and *Copy* are locked. Table *Planning case, Outages*
+    (number of outages), *Status* (`ready`, `not calculated`, `excluded`).
+    Nobody types an ID: GridLens numbers the cases itself (C1 … C5, the lowest
+    free number) and uses that ID only internally (relations, result objects
+    `GridLens_<stamp>_C1`, report). Below: *New, Copy, Rename, Delete*, *One case
+    per planned outage* (creates at most five), and the selected case's name,
+    description, *Include in the calculation* and its *Relations to other
+    cases*, chosen by clicking: *Also contains* (joint plan), *Only valid with*
+    (conditional case), *Alternative to* (either – or). See
+    [Relations between planning cases](#relations-between-planning-cases).
+- **Fixed background & rules** – left the fixed background outages (Rfix) with
+  *Remove from fixed background*; right the rules between planned outages with three
+  drop-downs (*outage, rule, outage*; a name that occurs twice in the project
+  carries its PowerFactory path), *Add rule*, *Remove rule*.
+- **Review & start** – *Calculation* (n-0, n-1 disabled, QDS period of the
+  active ComStatsim), *What will be calculated* in short lines, and the table
+  *Problems and warnings*. The tab label shows the number of problems, e.g.
+  *Review & start (1)*.
+- **Status line** (every tab): QDS period, assessment, ready cases, problem
+  count in red; a click opens *Review & start*.
+
+### Filtering and sorting – every table
+
+- A **filter row** directly under the column headers: a text field per text
+  column (keeps rows that contain the text, any case) and a drop-down per
+  category column (*Status*, *Assigned*, *Rule*; *All* switches it off).
+  Filters of several columns combine.
+- Under the table: *12 of 48 shown · Clear filters* (only while a filter is
+  active).
+- A **click on a header** sorts by that column, a second click reverses it
+  (▲/▼ after the heading); numbers sort by value.
+- Filtering and sorting change only what is shown, never the configuration.
+  Header and filter widths follow the table width; on narrow screens every
+  column shrinks in proportion.
+
+### Hover help
+
+Resting the mouse on a control for about half a second shows what it does to
+the calculation: every button, the three relation headings and lists (marked
+ⓘ), *Include in the calculation*, the name and description fields, the case
+counter, the column headings with categories (*Status*, *Assigned*, *Outages*,
+*Priority*, *Rule*; each also says how sorting works), every filter field, the
+timeline legend, the rule drop-down, n-1, the QDS period and the status line.
+The texts are in `HELP_TEXTS` and `COLUMN_HELP` of `gridlens_report.py`
+(class `Tooltip`, standard library only).
+
+## Relations between planning cases
+
+A planning case is a set of planned outages. The three relations say how
+cases belong together. They are set on the **right**, in *Selected case* →
+*Relations to other cases*: select a case in the table, then click other
+cases in one of the three lists (a click selects a case and highlights it, a second click
+deselects it; several are allowed). Every list shows only the other cases. The effect is
+visible at once in the status line and on *Review & start*.
+
+| Relation (configuration field) | Meaning | What GridLens does |
+|---|---|---|
+| **Also contains** (`includes`) | joint plan: this case contains every planned outage of the selected cases, and what those contain | one QDS run with all of them active at the same time; the selected cases keep their own runs unless they are excluded. A case that contains itself through others (a cycle) is refused. |
+| **Only valid with** (`requires`) | condition: this case only makes sense together with the selected cases | the case is calculated only if it also contains them (through *Also contains*, directly or indirectly). Otherwise it is reported as NOT EVALUATED with the reason; nothing is added automatically. Deleting a required case excludes this case. |
+| **Alternative to** (`exclusive_groups`) | either – or: alternative plans for the same work | each is calculated on its own; a case that contains two alternatives through *Also contains* is NOT EVALUATED. The relation works both ways. |
+
+Example with three cases:
+
+- *Line north* (C1: FS Nord) and *Line south* (C2: FS Süd) are separate measures.
+- *Joint* (C3) has no outage of its own and **also contains** C1 and C2: one
+  run with both lines out. A change to C1 carries over to C3.
+- *Bypass* (C4: switching measure) is **only valid with** C1: it is calculated
+  only after C4 also contains C1 (select C1 under *Also contains* as well);
+  otherwise Review & start lists *case C4 may only be evaluated together with
+  case C1*.
+- *Week 10* (C5) is an **alternative to** *Line north* (same work, other
+  date): both are calculated on their own, but a case that contains both is
+  refused.
+
+The rules on *Fixed background & rules* work one level lower, between two
+**planned outages** in every case: *must not overlap* (windows must not
+overlap), *second only after the first* (the second starts after the first
+has ended), *only together* (a case with one contains the other, at the same
+time). A case that breaks a rule is not calculated and is reported.
+
+## What a click does
+
+| Action | Effect |
+|---|---|
+| Click a case on the right (`<<TreeviewSelect>>`) | the centre shows its planned outages at once; the left marks them `in case`; name, description, relations, timeline, the other tabs and the status line follow. No extra window. |
+| Type into a filter field / choose in a filter list | the table shows only matching rows at once; *Clear filters* shows all again |
+| Click a column header | sorts by that column; a second click reverses the order |
+| Click a case in a relation list | selects (highlights) or deselects it; the relation applies at once |
+| Rest the mouse on a control | after about half a second an explanation appears; it closes when the mouse leaves or on a click |
+| Click the status line | opens *Review & start* |
+| *Add to case*, double-click or Enter in the left list | the selected outages are assigned; centre table, outage count, marks and preview update at once. An outage already in the case or fixed is refused with the reason. |
+| *Remove from case* or Delete key in the centre | only the assignment ends; the planned outage in PowerFactory is untouched. |
+| Double-click in the centre or *Details* | a compact window with what PowerFactory holds for the outage (object, class, equipment, actions, window, priority, status, cases it is used in) and its own dates in this case. |
+| *Set as fixed background* | the outage becomes part of the reference and of every case (Rfix). Refused while the outage is assigned to a case, so it never acts twice. |
+| *New* | creates *Case n* with the next generated ID (C1 … C5), selects it and puts the cursor into the name field: no dialog. Locked at five cases. |
+| *Copy* | new generated ID, name *… (copy)*, same outages, own dates and relations (including *Alternative to*); independent afterwards. Locked at five cases. |
+| *Rename* | jumps to the name field; only the name changes, the generated ID that relations and result objects use stays. |
+| *Delete* | asks once and names the cases that change; removes the case and every reference to it (other cases' relations, alternatives). A case that is only valid with the deleted one is excluded, so it is never calculated without its condition. The planned outages stay. |
+| *One case per planned outage* | replaces the cases by one per outage in the simulated period, at most five (and says so when outages are left out); ignored and fixed outages get none. |
+| *Save configuration* / *Load saved configuration* | writes / reads the project's JSON file with revision, user and time; the project is not touched. |
+| *Cancel*, Escape, window close | ends the run: nothing calculated, nothing saved, nothing in the project changed. |
+| *Start calculation* | checks (see below), closes the window and hands the configuration to GridLens; then the existing calculation and PDF publication run. No result window follows. |
+
+## Timeline
+
+The timeline is a planning check only (no load flow, voltage or other
+result). One row per case outage (blue) and per fixed outage (grey); orange
+bands mark times when more than one is active; date labels at the start and
+end of every busy period. A long empty period (e.g. between KW10 and KW40)
+is drawn as a short light band, so far-apart outages stay readable
+(`timeline_scale`).
+
+## Calculation options
+
+- **n-0 – quasi-dynamic simulation (QDS)**: always on; it is the only
+  assessment GridLens has.
+- **n-1 – contingency analysis**: shown but disabled, with the note that this
+  GridLens version has no contingency analysis. A configuration file that
+  asks for n-1 is refused with that reason instead of being ignored.
+- **QDS period**: taken from the active ComStatsim and shown only. There is
+  no time-optimisation option and no shortened calculation window; every run
+  covers the complete ComStatsim period.
+
+## Checks on Start calculation
+
+1. The configuration is valid (IDs, references, own dates, rules, relations).
+2. At least one case can be calculated; otherwise GridLens asks whether to
+   calculate the reference only.
+3. Cases that cannot be calculated (missing planned outage, alternatives
+   combined, rule broken, outside the period, own dates) are listed with
+   their reason; GridLens asks whether to continue and reports them as
+   NOT EVALUATED / NOT SIMULATED.
+4. Only n-0 is requested.
+
+## Hand-over to GridLens
 
 ```mermaid
 flowchart LR
-    A["Run ComPython"] --> B["GridLens reads planned outages<br/>(read-only)"]
-    B --> C["Case manager opens"]
-    C -- "Preview" --> C
-    C -- "Save configuration" --> F[("~/GridLens/cases/<project>_<hash>.json")]
-    C -- "Cancel" --> X(["Run ends: nothing calculated, nothing changed"])
-    C -- "OK - calculate" --> D["Validation, reference, cases, report"]
+    W["Case manager (CaseManagerDialog)"] -- "every click" --> E["CaseEditor: configuration copy"]
+    E -- "Start calculation" --> C["configuration (cases, background, relations, rules, assessments)"]
+    C --> R["resolve_request: checked planning cases, reference type"]
+    R --> G["execute_gridlens: REF + one QDS per case (unchanged)"]
+    G --> P["publish_report: tables for the PDF (unchanged)"]
+    W -- "Cancel" --> X(["stop, nothing changed"])
 ```
 
-## Areas of the window
-
-| Area | Purpose |
-|---|---|
-| **Planned outages** (left) | every `IntPlannedout` / `IntOutage` found: name, equipment, start, end, priority, status (*in simulated period*, *outside simulated period*, *Ignored in PowerFactory*). Column **Case** shows `[x]` for outages of the selected case, **Fixed** for fixed outages of the reference. |
-| **Planning cases** (right) | case IDs: letters, digits, `_`, `-`, up to 16 characters. **New**, **Rename**, **Copy**, **Delete**, **One case per outage** (fills the list like GridLens 7). Below: description, *Includes cases* (joint plans, hierarchy), *Only together with* (conditional cases). |
-| **Assessment request** (bottom left) | alternative cases (`A|B; C|D`), rules, calculation period mode, path of the saved configuration. |
-| **Calculation preview** (bottom right) | reference, number of QDS runs, per case its outages, pairwise relation (T01–T13), network states, proposed windows, warnings and the reason a case cannot be calculated. |
-
-## Typical tasks
-
-| Task | How |
-|---|---|
-| One outage alone | **New** → select it → double-click (or **Assign / remove**) |
-| FS1 and FS2 at the same time | one case, assign both |
-| FS1 in KW10 *or* KW40 | create a planned outage per date in PowerFactory, one case per date, enter `A|B` as alternatives |
-| FS1 really twice (KW10 *and* KW40) | both occurrences in the same case |
-| A and B both take place | case **AB** with *Includes cases* `A, B`; never created automatically |
-| B only together with A | case B: *Only together with* `A`; calculate it through a joint case |
-| Additional effect of a new outage while FS0 is fixed | select FS0 → **Fixed outage (reference)**; the reference becomes Rfix and keeps FS0 active in every case |
-| Outage on its own date in one case | **Own dates** records it; GridLens 8.0 does **not** apply it (the case is reported NOT EVALUATED) – create a planned outage with that date instead |
-
-Rules (one per line, outage names as in the list):
-
-```
-not_overlap: FS1, FS2
-order: FS1, FS2
-together: FS3, FS4
-```
-
-## Buttons
-
-| Button | Effect |
-|---|---|
-| **Preview** | validates and shows the plan; no QDS |
-| **Save configuration** | writes the JSON file with the next revision number, user and time; the project is not touched |
-| **OK – calculate** | validates; asks before continuing when cases cannot be calculated; closes the dialog; then the calculation starts |
-| **Cancel** / window close | ends the run; nothing is calculated, nothing is saved, nothing in the project changes |
+Separation in the code: `CaseManagerDialog` is the window and keeps only
+the selection state; `CaseEditor` holds every editing rule and the
+configuration copy (tested without a window); PowerFactory outage references
+are the records GridLens read before the window opened; `resolve_request`
+turns the configuration into the calculation request; `execute_gridlens`
+calculates and `publish_report` publishes. The window never switches
+equipment, never writes PowerFactory and never starts a QDS.
 
 ## Where the cases come from
 
 | `CASE_SOURCE` | Behaviour |
 |---|---|
-| `'gui'` (default) | dialog, pre-filled with the saved configuration. If `tkinter` cannot open a window: the saved configuration; without one: one case per outage. The report states which source was used. |
-| `'saved'` | the saved configuration, no dialog (repeatable runs) |
-| `'per_outage'` | one case per planned outage in the simulated period (GridLens 7 behaviour) |
+| `'gui'` (default) | the window, pre-filled with the saved configuration. If `tkinter` cannot open it or it cannot be built: the saved configuration; without one: one case per outage. The report states the source. |
+| `'saved'` | the saved configuration, no window |
+| `'per_outage'` | one case per planned outage in the simulated period |
 
-The configuration lives in `CASE_CONFIG_DIR` (default `~/GridLens/cases`), one
-file per project, named after the project and a hash of its full path. A file
-with the wrong schema or version stops the run with its path instead of being
-ignored.
+Configuration file: `CASE_CONFIG_DIR` (default `~/GridLens/cases`), one per
+project. New fields since the redesign: `assessments` (`["n-0"]`) and per case
+`enabled` (true/false). A saved or hand-edited configuration with more than five
+cases is refused with that reason; only `CASE_SOURCE = 'per_outage'` (no window)
+still creates one case per outage without a limit. A case excluded with *Include in the calculation* is neither calculated nor
+reported but can still be part of another case.
 
-```json
-{
-  "schema": "gridlens.cases", "schema_version": 1, "revision": 3,
-  "project": "\\User\\Grid.IntPrj", "saved_at": "2026-10-22 10:15:00 +0200", "saved_by": "hadi",
-  "mode": "conservative",
-  "background": ["\\User\\Grid.IntPrj\\Outages\\FS0.IntPlannedout"],
-  "cases": [
-    {"id": "A", "name": "FS1 + FS2 week 10", "description": "",
-     "outages": ["...\\FS1.IntPlannedout", "...\\FS2.IntPlannedout"],
-     "includes": [], "requires": [], "overrides": {}}
-  ],
-  "exclusive_groups": [["A", "B"]],
-  "rules": [{"kind": "not_overlap", "first": "...\\FS1.IntPlannedout", "second": "...\\FS2.IntPlannedout"}]
-}
-```
+## What changed against the previous window
 
-Outages are stored by their full PowerFactory path, never by display name. A
-renamed or deleted outage makes its case NOT EVALUATED with the path named.
+| Kept | Changed |
+|---|---|
+| cases: new, copy, rename, delete, description, one case per outage | case list as a filterable table with FS count and status, **at most 5 cases**, **IDs generated (C1 … C5), never typed**; new case without dialog; rename in place; delete cleans references |
+| assignment of outages, an outage in several cases | assignment from a separate list of available outages with search, filter and *Add to case*; the case table shows only the case's outages |
+| fixed background outages (Rfix) | own section and own button; a fixed outage cannot also be a case outage |
+| relations *includes*, *requires*, alternatives | chosen from lists of existing cases instead of typed IDs |
+| rules `not_overlap`, `order`, `together` | added with three drop-downs instead of typed text lines |
+| own dates per case (recorded, not applied) | in the details window of the outage |
+| save configuration, preview, Cancel, OK | preview as short lines; *Load saved configuration*; OK is now *Start calculation* |
+| – | **removed:** Conservative/Optimized choice and the proposal of shorter windows |
+| – | **new:** three tabs (Workspace, Fixed background & rules, Review & start), a filter row and header sorting in every table, status line, problem list, timeline, n-0/n-1 choice, per-case *Include in the calculation* |
 
-## What happens in PowerFactory after OK
+## Trying it in PowerFactory
 
-- One reference run, then one QDS per distinct case. Cases with the same
-  outages and windows are calculated once.
-- During a case run only that case's outages (and the fixed ones) have
-  `outserv = 0`; every other planned outage is set to Ignored. `iopt_maint`,
-  every `outserv`, `ComStatsim.results` and the study time are restored and
-  read back afterwards.
-- Every run keeps its result object in the active study case:
-  `GridLens_<yymmdd-HHMMSS>_<case id>` (e.g. `GridLens_261022-101500_REF`,
-  `GridLens_261022-101500_A`). The report's *Calculation Evidence* page lists
-  them. Delete old runs yourself when they are no longer needed.
+`tools/FS_CaseManager_GUI_Test_PowerFactory2026.py` is a **separate script**:
+it does not load or import `gridlens_report.py`. Paste it alone into a
+ComPython. It carries its own copy of the case manager (the window and what it
+needs: reading the planned outages, checking a configuration, the preview), so
+it opens exactly this window with the real planned outages of the active
+project, read only, and prints what *Start calculation* hands back instead of
+calculating. Save and load work on a temporary copy of the configuration. If
+the window does not open there, configure the cases where it does and set
+`CASE_SOURCE = 'saved'`.
 
-## If the dialog does not open in PowerFactory
-
-The output window shows `The case manager cannot open a window: …` and the
-source GridLens used instead. Run `tools/FS_CaseManager_GUI_Test_PowerFactory2026.py`
-as its own ComPython to check Tcl/Tk; until the dialog works, configure the
-cases on a workstation where it does (or edit the JSON) and set
-`CASE_SOURCE = 'saved'`. A DPL dialog as fallback is not implemented.
+The copy is marked in the file and written by `tools/sync_case_manager_copy.py`
+(development tool, not delivered). Whoever changes the case manager in
+`gridlens_report.py` runs `python3 tools/sync_case_manager_copy.py`;
+`test_the_copied_case_manager_matches_gridlens_report` fails while the copy is
+out of date.

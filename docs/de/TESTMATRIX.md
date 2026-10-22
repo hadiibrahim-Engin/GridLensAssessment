@@ -10,8 +10,8 @@ Statuskategorien:
 - **Nicht verifiziert** – offen; braucht PowerFactory oder ist nicht umgesetzt
 
 Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
-292 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); 5 davon
-öffnen den echten Tk-Dialog und werden nur übersprungen, wo `tkinter` fehlt. Die Testnamen sind englisch, wie der Code.
+343 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); 19 davon
+öffnen das echte Tk-Fenster und werden nur übersprungen, wo `tkinter` fehlt. Die Testnamen sind englisch, wie der Code.
 
 ## Tests A–E der Vorgabe
 
@@ -56,7 +56,7 @@ Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
 | V27 | QDS konvergiert nicht | nicht bewertbar | FAILED / NOT EVALUATED, der nächste Fall läuft | Testdaten | `test_failed_outage_case_is_reported_and_state_is_restored` |
 | V28 | Referenz fehlt | kein behaupteter Vergleich | EXCEEDED, kein zeitgleiches Delta | Testdaten | `test_v28_without_reference_violations_are_not_called_new` |
 | V29 | unterschiedliche Zeitachsen | fensterbezogene Prüfung | Fall nicht verglichen, NOT EVALUATED | Testdaten | `test_v29_case_on_another_time_axis_is_not_compared` |
-| V30 | GUI abbrechen | keine Projektänderung | kein Lauf, keine Kopie, keine Publikation | Testdaten | `test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing`, `test_case_manager_dialog.py::test_cancel_returns_nothing` |
+| V30 | GUI abbrechen | keine Projektänderung | kein Lauf, keine Kopie, keine Publikation | Testdaten | `test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing`, `test_case_manager_dialog.py::test_gui_17_cancel_returns_nothing` |
 | V31 | GUI ohne tkinter | kontrollierter Rückfall | gespeicherte Konfiguration, sonst je FS ein Fall; auch wenn der Dialog nicht aufgebaut werden kann | Testdaten; DPL-Rückfall **nicht umgesetzt** | `test_v31_*` (2), `test_a_dialog_that_cannot_be_built_counts_as_unavailable` |
 | V32 | Ausnahme in der QDS | Zustand wiederhergestellt | Wiederherstellung in `finally`, mit Zurücklesen | Testdaten | `test_reference_failure_still_restores_option_and_result_binding`, `test_ignored_flag_that_cannot_be_restored_stops_the_run`, `test_memory_budget_stops_before_the_next_run_and_restores` |
 | V33 | mehr als sechs Fälle | vollständige Bewertung, transparente Diagramme | Tabellen in Blöcken zu sechs; Diagramme die ersten sechs mit Hinweis | Testdaten | `test_more_than_six_cases_are_all_assessed_and_compared`, `test_charts_show_at_most_six_cases_and_say_so` |
@@ -90,7 +90,36 @@ Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
 | Dialog nicht aufbaubar → Rückfall | `test_case_manager_dialog.py::test_a_dialog_that_cannot_be_built_counts_as_unavailable` |
 | Fehler in Dialog-Schaltflächen werden angezeigt | `test_case_manager_dialog.py::test_errors_in_buttons_are_shown_not_swallowed` |
 | schnelle Pfade liefern die alten Ergebnisse (Statistik, Plotpunkte, Überschreitung, Status je Schritt) | `test_extraction_builds_only_the_plotted_points_and_keeps_the_exact_statistics`, `test_array_statistics_equal_the_point_statistics`, `test_excess_function_keeps_the_definition`, `test_compare_element_agrees_with_step_status_at_every_step` |
-| Fall-Editor ohne Fenster: anlegen, kopieren, umbenennen, löschen, zuordnen, fixieren, eigene Termine, Regeln | `test_editor_*` (6) |
-| Dialog-Schaltflächen erreichen den Editor, OK liefert seine Konfiguration | `test_case_manager_dialog.py::test_buttons_reach_the_editor_and_ok_returns_its_configuration` |
 | jeder Fall wird einmal beurteilt, alle Seiten zeigen dasselbe Urteil | `test_every_case_is_judged_once_and_all_pages_show_that_verdict` |
 | Fenster nicht auf der Zeitachse: voller Vergleich, Warnung im Log | `test_windows_off_the_time_axis_are_compared_in_full_and_said_so` |
+
+## Fall-Manager-Fenster – Funktionsprüfungen 1–20
+
+Nicht in PowerFactory verifiziert; die Bearbeitungsregeln sind ohne Fenster getestet (`test_planner.py`), die Klicks im echten Tk-Fenster (`test_case_manager_dialog.py`).
+
+| Prüfung | Aktion | Erwartet | Getestet mit | Tests |
+|---|---|---|---|---|
+| 1-3 | Fall A, dann B, dann A anklicken | A zeigt sofort seine FS, B die eigenen, A unverändert | Editor + echtes Fenster | `test_gui_01_to_03_*` (2) |
+| 4 | FS aus der linken Liste hinzufügen | Falltabelle, FS-Zahl und Markierung sofort aktuell | Editor + echtes Fenster | `test_gui_04_and_06_*`, `test_gui_04_and_05_*` |
+| 5 | FS aus einem Fall entfernen | nur die Zuordnung endet | Editor + echtes Fenster | `test_gui_05_and_09_*`, `test_gui_04_and_05_*` |
+| 6 | eine FS in mehreren Fällen | erlaubt | Editor | `test_gui_04_and_06_*` |
+| 7 | Fall kopieren | Zuordnungen kopiert, beide unabhängig | Editor | `test_gui_07_*` |
+| 8 | Fall umbenennen | ID und alle Verweise bleiben | Editor + echtes Fenster | `test_gui_08_*`, `test_new_case_gets_a_generated_id_and_is_named_in_place` |
+| 9 | Fall löschen | Freischaltungen bleiben; Verweise auf den Fall entfernt | Editor | `test_gui_05_and_09_*`, `test_gui_deleting_a_case_removes_every_reference_to_it` |
+| 10 | feste Hintergrund-FS | getrennt von Fall-FS, nie beides; Rfix in der Vorschau | Editor | `test_gui_10_*` |
+| 11 | Suche nach Betriebsmittel | nur passende FS | Editor + echtes Fenster | `test_gui_11_and_12_*`, `test_gui_11_*` |
+| 12 | sehr viele FS | 5.005 FS in unter 0,5 s durchsucht; Listen scrollen | Editor | `test_gui_11_and_12_*` |
+| 13 | überlappende FS in der Zeitachse | Überlappungsband; KW10 und KW40 beide lesbar | Editor + echtes Fenster | `test_gui_13_*` (2), `test_timeline_scale_is_monotonic_and_needs_a_window` |
+| 14 | n-0 und n-1 wählen | n-0 übergeben; n-1 deaktiviert angezeigt (nicht verfügbar) und in einer Datei abgelehnt | Editor + echtes Fenster | `test_gui_14_and_16_*`, `test_gui_14_to_16_*`, `test_assessments_and_enabled_flags_are_validated` |
+| 15 | QDS-Zeitraum | der Zeitraum des aktiven ComStatsim | Editor + echtes Fenster | `test_gui_15_*`, `test_gui_14_to_16_*` |
+| 16 | keine Zeitoptimierung | keine Option, keine vorgeschlagenen Fenster; Modus fest konservativ | Editor + echtes Fenster | `test_gui_14_and_16_*`, `test_gui_14_to_16_*` |
+| 17 | Abbrechen | keine Rechnung, keine Änderung | echtes Fenster + Lauf | `test_gui_17_*`, `test_v30_*` |
+| 18 | Berechnung starten | Konfiguration an den bestehenden GridLens-Lauf übergeben | echtes Fenster + Lauf | `test_gui_18_and_19_*`, `test_a_case_with_two_outages_runs_them_together` |
+| 19 | keine Ergebnisansicht | Fenster schließt; das PDF ist das einzige Ergebnis | echtes Fenster | `test_gui_18_and_19_*` |
+| 20 | erneut öffnen | gespeicherte Zuordnungen kommen unverändert zurück | Editor + echtes Fenster | `test_gui_20_*` (2) |
+| GUI-Testwerkzeug: eigenständiges Skript mit eigener Kopie des Fallmanagers (lädt `gridlens_report.py` nie), Kopie gleich dem Produktionsfenster; Projekt-FS nur lesend; temporäre Konfigurationskopie; Demodaten; fehlendes Tk | `test_case_manager_gui.py` (8) |
+| Tabellenfilter und Sortierung: enthält / exakter Wert, Sortieren per Kopf ▲▼, Spaltenbreiten, Filter auf jedem Reiter ausgerichtet | `test_filter_rows_*`, `test_sort_rows_*`, `test_column_widths_*`, `test_gui_11_every_table_filters_per_column_and_clears`, `test_filters_stand_exactly_under_their_columns`, `test_header_click_sorts_and_shows_the_direction` |
+| Reiter, Statuszeile, Problemliste; feste FS und Regeln auf eigenem Reiter | `test_tabs_status_line_and_problem_list`, `test_fixed_outages_and_rules_live_on_their_own_tab` |
+| höchstens 5 Fälle (Fenster, gespeicherte Datei, je FS ein Fall); IDs generiert, nie getippt | `test_gui_at_most_five_cases`, `test_gui_one_case_per_outage_stops_at_five`, `test_more_than_five_cases_are_refused_where_engineers_define_them`, `test_gui_ids_are_generated_and_the_engineer_only_names_cases`, `test_new_case_gets_a_generated_id_and_is_named_in_place`, `test_new_and_copy_stop_at_five_cases` |
+| Reihenfolge im Workspace: verfügbare FS, FS des Falls, Fälle; Hover-Texte an Beziehungen, Schaltflächen, Spaltenköpfen und Filtern | `test_workspace_runs_available_outages_then_case_outages_then_cases`, `test_hover_explains_the_relations_and_the_controls` |
+| Review-Korrekturen: je FS ein Fall nur im Zeitraum; Copy übernimmt Alternativen; Delete schließt Fälle aus, die den gelöschten voraussetzen, und nennt die Änderungen; Regelauswahl trennt gleichnamige FS; eine Auflösung je Aktualisierung; Tippen schließt einen Hinweis | `test_one_case_per_outage_takes_only_outages_in_the_simulated_period`, `test_copy_keeps_the_alternatives`, `test_deleting_a_required_case_excludes_the_dependent_case`, `test_rule_choices_keep_outages_with_the_same_name_apart`, `test_statuses_problems_and_preview_share_one_resolution`, `test_hover_explains_the_relations_and_the_controls` |

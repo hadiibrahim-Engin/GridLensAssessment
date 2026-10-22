@@ -35,7 +35,7 @@ bzw. im Bericht.
 | Referenz | immer „ohne Freischaltung“ | R0 (keine) oder Rfix (feste Hintergrund-Freischaltungen) |
 | Leitungsranking | LODF aus `ComVstab` | entfernt; nur echte QDS-Lastflüsse |
 | Ergebnisobjekte | temporäres `ElmRes`, nach dem Auslesen gelöscht | ein `ElmRes` je Fall, bleibt im Study Case |
-| QDS-Zeitraum | gesamter `ComStatsim`-Zeitraum | gesamter Zeitraum (konservativ); kürzere Fenster werden nur vorgeschlagen |
+| QDS-Zeitraum | gesamter `ComStatsim`-Zeitraum | gesamter Zeitraum; der Fall-Manager bietet keine Zeitoptimierung (kürzere Fenster erscheinen nur mit `QDS_WINDOW_MODE = 'optimized'` im Skript, als Vorschlag in Log und Bericht) |
 
 ---
 
@@ -128,7 +128,7 @@ flowchart LR
     subgraph GL["gridlens_report.py"]
         AD["PowerFactory-Adapter<br/>_find_project_outages, _run_calculation,<br/>_isolate_outages, StateGuard"]
         CM["Fallverwaltung<br/>resolve_request, validate_case_config,<br/>load/save_case_config"]
-        GUI["GUI-Adapter<br/>run_case_manager, CaseManagerDialog (tkinter)<br/>CaseEditor (Logik, ohne Fenster)"]
+        GUI["GUI-Adapter (nur Konfiguration, keine Ergebnisse)<br/>run_case_manager, CaseManagerDialog: drei Bereiche (tkinter)<br/>CaseEditor (Logik, ohne Fenster)"]
         TP["Zeit- und Zustandsplaner<br/>network_states, interval_relation,<br/>calculation_windows"]
         OR["Berechnungssteuerung<br/>execute_gridlens, _run_reference,<br/>_run_planning_case, _reused_result"]
         AE["Bewertung<br/>compare_case, step_status,<br/>assess_case"]
@@ -482,11 +482,11 @@ einem Fehler oder einem `KeyboardInterrupt`.
 
 | Größe | Wo sie steht |
 |---|---|
-| geplante QDS-Läufe | Vorschau: „QDS runs: n (1 reference)“ |
-| vermiedene Läufe | identische Fälle (gleiche FS, Fenster, feste FS) übernehmen das Ergebnis: Vorschau „identical cases calculated once“, Nachweistabelle „CASE (reused)“ |
+| geplante QDS-Läufe | Vorschau im Fall-Manager: „Calculation runs: 1 reference + n case run(s)“ |
+| vermiedene Läufe | identische Fälle (gleiche FS, Fenster, feste FS) übernehmen das Ergebnis: Vorschau im Fall-Manager „n identical case(s) reused“, Nachweistabelle „CASE (reused)“ |
 | Zeitschritte je Lauf | Nachweistabelle `time_steps` |
 | gemessene Laufzeit | Nachweistabelle `elapsed_text`, Log (QDS und Vergleich getrennt) |
-| vorgeschlagene Fenster | Vorschau, Bericht (`windows_text`, `qds_mode_text`) – nicht gerechnet |
+| vorgeschlagene Fenster | nur mit `QDS_WINDOW_MODE = 'optimized'` im Skript: Log und Bericht (`windows_text`, `qds_mode_text`), nie gerechnet; der Fall-Manager zeigt keine |
 
 Grobes Modell (Vorgabe Abschnitt 27): `T ≈ (1 + m_unterschiedlich) · (τ_I + n · τ_L)`.
 Es wird keine Beschleunigung behauptet; in PowerFactory ist nichts gemessen.

@@ -1509,7 +1509,7 @@ def test_fixed_outages_stay_active_in_the_reference_and_every_case(monkeypatch):
 def test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing(monkeypatch):
     app = App((PlannedOutage("FS1"),))
     monkeypatch.setattr(gl, "CASE_SOURCE", "gui")
-    monkeypatch.setattr(gl, "run_case_manager", lambda *args: None)
+    monkeypatch.setattr(gl, "run_case_manager", lambda *args, **kwargs: None)
 
     with pytest.raises(gl.GridLensCancelled):
         gl.execute_gridlens(app)
@@ -1525,7 +1525,7 @@ def test_v31_without_tkinter_the_saved_configuration_is_used(monkeypatch):
     monkeypatch.setattr(gl, "CASE_SOURCE", "gui")
     _save_cases([{"id": "A", "name": "A", "outages": [_key(outages[1])]}])
 
-    def unavailable(*_args):
+    def unavailable(*_args, **_kwargs):
         raise gl.CaseManagerUnavailable("no display")
     monkeypatch.setattr(gl, "run_case_manager", unavailable)
 
@@ -1539,7 +1539,7 @@ def test_v31_without_tkinter_and_without_configuration_falls_back_to_one_case_pe
     app = App((PlannedOutage("FS1"), PlannedOutage("FS2")))
     monkeypatch.setattr(gl, "CASE_SOURCE", "gui")
 
-    def unavailable(*_args):
+    def unavailable(*_args, **_kwargs):
         raise gl.CaseManagerUnavailable("no display")
     monkeypatch.setattr(gl, "run_case_manager", unavailable)
 

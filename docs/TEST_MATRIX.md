@@ -9,8 +9,8 @@ Status categories:
 - **PowerFactory** – run in PowerFactory 2026 (none yet)
 - **Not verified** – open; needs PowerFactory or is not implemented
 
-Every row is **not verified in PowerFactory**. The automated suite: 292 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
-5 of them open the real Tk dialog and are skipped only where `tkinter` is missing.
+Every row is **not verified in PowerFactory**. The automated suite: 343 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
+19 of them open the real Tk window and are skipped only where `tkinter` is missing.
 
 ## Specification tests A–E
 
@@ -55,7 +55,7 @@ Every row is **not verified in PowerFactory**. The automated suite: 292 tests, a
 | V27 | QDS does not converge | not assessable | FAILED / NOT EVALUATED, next case runs | Test data | `test_failed_outage_case_is_reported_and_state_is_restored` |
 | V28 | reference missing | no claimed comparison | EXCEEDED, no coincident delta | Test data | `test_v28_without_reference_violations_are_not_called_new` |
 | V29 | different time axes | window-wise validation | case not compared, NOT EVALUATED | Test data | `test_v29_case_on_another_time_axis_is_not_compared` |
-| V30 | GUI cancel | no project change | no run, no copy, no publication | Test data | `test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing`, `test_case_manager_dialog.py::test_cancel_returns_nothing` |
+| V30 | GUI cancel | no project change | no run, no copy, no publication | Test data | `test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing`, `test_case_manager_dialog.py::test_gui_17_cancel_returns_nothing` |
 | V31 | GUI without tkinter | controlled fallback | saved configuration, else one case per outage; also when the dialog cannot be built | Test data; DPL fallback **not implemented** | `test_v31_*` (2), `test_a_dialog_that_cannot_be_built_counts_as_unavailable` |
 | V32 | exception in the QDS | state restored | restore in `finally`, verified read-back | Test data | `test_reference_failure_still_restores_option_and_result_binding`, `test_ignored_flag_that_cannot_be_restored_stops_the_run`, `test_memory_budget_stops_before_the_next_run_and_restores` |
 | V33 | more than six cases | complete assessment, transparent charts | tables in blocks of six; charts first six with note | Test data | `test_more_than_six_cases_are_all_assessed_and_compared`, `test_charts_show_at_most_six_cases_and_say_so` |
@@ -89,7 +89,36 @@ Every row is **not verified in PowerFactory**. The automated suite: 292 tests, a
 | dialog that cannot be built → fallback | `test_case_manager_dialog.py::test_a_dialog_that_cannot_be_built_counts_as_unavailable` |
 | errors in dialog buttons are shown | `test_case_manager_dialog.py::test_errors_in_buttons_are_shown_not_swallowed` |
 | fast paths give the old results (statistics, plot points, excess, step status) | `test_extraction_builds_only_the_plotted_points_and_keeps_the_exact_statistics`, `test_array_statistics_equal_the_point_statistics`, `test_excess_function_keeps_the_definition`, `test_compare_element_agrees_with_step_status_at_every_step` |
-| case editor without a window: create, copy, rename, delete, assign, fix, own dates, rules | `test_editor_*` (6) |
-| dialog buttons reach the editor, OK returns its configuration | `test_case_manager_dialog.py::test_buttons_reach_the_editor_and_ok_returns_its_configuration` |
 | every case judged once, all pages show the same verdict | `test_every_case_is_judged_once_and_all_pages_show_that_verdict` |
 | windows off the time axis: full comparison, warning in the log | `test_windows_off_the_time_axis_are_compared_in_full_and_said_so` |
+
+## Case manager window – functional checks 1–20
+
+Not verified in PowerFactory; the editing rules are tested without a window (`test_planner.py`), the clicks in the real Tk window (`test_case_manager_dialog.py`).
+
+| Check | Action | Expected | Tested with | Tests |
+|---|---|---|---|---|
+| 1-3 | click case A, then B, then A | A shows its outages at once, B its own, A unchanged | editor + real window | `test_gui_01_to_03_*` (2) |
+| 4 | add an outage from the left list | centre table, FS count and mark update at once | editor + real window | `test_gui_04_and_06_*`, `test_gui_04_and_05_*` |
+| 5 | remove an outage from a case | only the assignment ends | editor + real window | `test_gui_05_and_09_*`, `test_gui_04_and_05_*` |
+| 6 | one outage in several cases | allowed | editor | `test_gui_04_and_06_*` |
+| 7 | copy a case | assignments copied, both independent | editor | `test_gui_07_*` |
+| 8 | rename a case | ID and every reference stay | editor + real window | `test_gui_08_*`, `test_new_case_gets_a_generated_id_and_is_named_in_place` |
+| 9 | delete a case | planned outages stay; references to the case removed | editor | `test_gui_05_and_09_*`, `test_gui_deleting_a_case_removes_every_reference_to_it` |
+| 10 | fixed background outages | separate from case outages, never both; Rfix in the preview | editor | `test_gui_10_*` |
+| 11 | search by equipment | matching outages only | editor + real window | `test_gui_11_and_12_*`, `test_gui_11_*` |
+| 12 | very many outages | 5,005 outages searched in under 0.5 s; lists scroll | editor | `test_gui_11_and_12_*` |
+| 13 | overlapping outages on the timeline | overlap band; KW10 and KW40 both readable | editor + real window | `test_gui_13_*` (2), `test_timeline_scale_is_monotonic_and_needs_a_window` |
+| 14 | choose n-0 and n-1 | n-0 handed over; n-1 shown disabled (not available) and refused in a file | editor + real window | `test_gui_14_and_16_*`, `test_gui_14_to_16_*`, `test_assessments_and_enabled_flags_are_validated` |
+| 15 | QDS period | the active ComStatsim period | editor + real window | `test_gui_15_*`, `test_gui_14_to_16_*` |
+| 16 | no time optimisation | no option, no proposed windows; mode forced to conservative | editor + real window | `test_gui_14_and_16_*`, `test_gui_14_to_16_*` |
+| 17 | Cancel | no calculation, no change | real window + run | `test_gui_17_*`, `test_v30_*` |
+| 18 | Start calculation | configuration handed to the existing GridLens run | real window + run | `test_gui_18_and_19_*`, `test_a_case_with_two_outages_runs_them_together` |
+| 19 | no result view | window closes; the PDF is the only result | real window | `test_gui_18_and_19_*` |
+| 20 | reopen | saved assignments come back unchanged | editor + real window | `test_gui_20_*` (2) |
+| GUI test tool: separate script with its own copy of the case manager (never loads `gridlens_report.py`), copy identical to the production window; project outages read only; temporary configuration copy; demo data; missing Tk | `test_case_manager_gui.py` (8) |
+| table filters and sorting: contains / exact value, header sort ▲▼, column widths, filters aligned on every tab | `test_filter_rows_*`, `test_sort_rows_*`, `test_column_widths_*`, `test_gui_11_every_table_filters_per_column_and_clears`, `test_filters_stand_exactly_under_their_columns`, `test_header_click_sorts_and_shows_the_direction` |
+| tabs, status line, problem list; fixed outages and rules on their own tab | `test_tabs_status_line_and_problem_list`, `test_fixed_outages_and_rules_live_on_their_own_tab` |
+| at most 5 cases (window, saved file, one case per outage); IDs generated, never typed | `test_gui_at_most_five_cases`, `test_gui_one_case_per_outage_stops_at_five`, `test_more_than_five_cases_are_refused_where_engineers_define_them`, `test_gui_ids_are_generated_and_the_engineer_only_names_cases`, `test_new_case_gets_a_generated_id_and_is_named_in_place`, `test_new_and_copy_stop_at_five_cases` |
+| workspace order: available outages, case outages, cases; hover texts on relations, buttons, column headings and filters | `test_workspace_runs_available_outages_then_case_outages_then_cases`, `test_hover_explains_the_relations_and_the_controls` |
+| review fixes: one case per outage only in the period; Copy keeps alternatives; Delete excludes cases that required the deleted one and names the changes; rule drop-downs keep same-named outages apart; one resolution per refresh; typing closes a hint | `test_one_case_per_outage_takes_only_outages_in_the_simulated_period`, `test_copy_keeps_the_alternatives`, `test_deleting_a_required_case_excludes_the_dependent_case`, `test_rule_choices_keep_outages_with_the_same_name_apart`, `test_statuses_problems_and_preview_share_one_resolution`, `test_hover_explains_the_relations_and_the_controls` |
