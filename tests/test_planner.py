@@ -167,28 +167,26 @@ def test_d_alternative_dates_stay_separate_cases():
     fs1_kw10 = record("FS1 KW10", kw(10), kw(11), ["Project\\L100.ElmLne"])
     fs1_kw40 = record("FS1 KW40", kw(40), kw(41), ["Project\\L100.ElmLne"])
     records = gl.assign_definitions([fs1_kw10, fs1_kw40])
-    request = gl.resolve_request(config([case("A", fs1_kw10), case("B", fs1_kw40)], exclusive_groups=[["A", "B"]]), records, PERIOD)
+    request = gl.resolve_request(config([case("A", fs1_kw10), case("B", fs1_kw40)]), records, PERIOD)
 
     assert [plan["id"] for plan in request["cases"]] == ["A", "B"]
     assert all(len(plan["members"]) == 1 for plan in request["cases"])
     assert fs1_kw10["definition_id"] == fs1_kw40["definition_id"], "two occurrences of one technical outage"
 
 
-def test_d_alternatives_in_one_joint_case_are_refused():
+def test_any_explicit_combination_is_allowed():
     fs1 = record("FS1", kw(10), kw(11))
     fs2 = record("FS2", kw(40), kw(41))
-    request = gl.resolve_request(config([case("A", fs1), case("B", fs2), case("AB", includes=["A", "B"])],
-                                        exclusive_groups=[["A", "B"]]), [fs1, fs2], PERIOD)
+    request = gl.resolve_request(config([case("A", fs1), case("B", fs2), case("AB", fs1, fs2)]), [fs1, fs2], PERIOD)
 
-    joint = plans(request)["AB"]
-    assert joint["status"] == gl.PLAN_NOT_EVALUATED
-    assert "alternatives" in joint["reason"]
+    assert all(plan["status"] == gl.PLAN_READY for plan in request["cases"])
+    assert [item["name"] for item in plans(request)["AB"]["members"]] == ["FS1", "FS2"]
 
 
 def test_e_a_joint_plan_calculates_both_outages_together():
     fs1 = record("FS1", kw(10), kw(11))
     fs2 = record("FS2", kw(10), kw(11))
-    request = gl.resolve_request(config([case("A", fs1), case("B", fs2), case("AB", includes=["A", "B"])]), [fs1, fs2], PERIOD)
+    request = gl.resolve_request(config([case("A", fs1), case("B", fs2), case("AB", fs1, fs2)]), [fs1, fs2], PERIOD)
 
     joint = plans(request)["AB"]
     assert joint["status"] == gl.PLAN_READY
@@ -210,7 +208,7 @@ def test_v09_the_same_outage_twice_in_one_case_is_two_real_executions():
 
 def test_shared_outage_counts_once_in_a_joint_plan():
     fs1 = record("FS1", kw(10), kw(11))
-    request = gl.resolve_request(config([case("A", fs1), case("B", fs1), case("AB", includes=["A", "B"])]), [fs1], PERIOD)
+    request = gl.resolve_request(config([case("A", fs1), case("B", fs1), case("AB", fs1, fs1)]), [fs1], PERIOD)
 
     assert len(plans(request)["AB"]["members"]) == 1
 
@@ -240,21 +238,24 @@ def test_rules_not_overlap_order_and_together():
     assert "together" in y["reason"]
 
 
-def test_conditional_case_needs_its_precondition():
+def test_removed_relations_cannot_silently_affect_current_configurations():
     fs1 = record("FS1", kw(10), kw(11))
-    fs2 = record("FS2", kw(10), kw(11))
-    request = gl.resolve_request(config([case("A", fs1), case("B", fs2, requires=["A"]),
-                                         case("AB", includes=["A", "B"])]), [fs1, fs2], PERIOD)
-
-    assert plans(request)["B"]["status"] == gl.PLAN_NOT_EVALUATED
-    assert plans(request)["AB"]["status"] == gl.PLAN_READY
+    for field in ("includes", "requires"):
+        data = config([case("A", fs1, **{field: ["missing"]})])
+        with pytest.raises(gl.GridLensError, match="case relations are no longer supported"):
+            gl.resolve_request(data, [fs1], PERIOD)
 
 
-def test_including_cases_in_a_circle_is_refused():
+def test_legacy_cycle_is_rejected_before_assignments_can_be_lost(tmp_path):
     fs1 = record("FS1", kw(10), kw(11))
-    request = gl.resolve_request(config([case("A", fs1, includes=["B"]), case("B", fs1, includes=["A"])]), [fs1], PERIOD)
+    data = config([case("A", fs1, includes=["B"]), case("B", fs1, includes=["A"])], schema_version=1)
+    path = tmp_path / "cases.json"
+    original = json.dumps(data)
+    path.write_text(original)
 
-    assert all("include each other" in plan["reason"] for plan in request["cases"])
+    with pytest.raises(gl.GridLensError, match="include each other"):
+        gl.load_case_config(str(path))
+    assert path.read_text() == original
 
 
 def test_own_dates_are_refused_while_overrides_are_off():
@@ -525,7 +526,7 @@ def test_clock_change_keeps_every_time_label_unique(monkeypatch):
     (lambda data: data["cases"].append({"id": "B", "outages": "FS1"}), "outages must be a list"),
     (lambda data: data["cases"].append({"id": "C", "outages": [], "overrides": {"FS1": [5]}}), "own dates"),
     (lambda data: data["cases"].append({"id": "D", "outages": [], "overrides": {"FS1": [9, 5]}}), "own dates"),
-    (lambda data: data.update(exclusive_groups=["A|B"]), "exclusive_groups"),
+    (lambda data: data.update(exclusive_groups=[["A", "B"]]), "alternatives are no longer supported"),
     (lambda data: data.update(rules=[{"kind": "order", "first": "FS1"}]), "needs a first and a second"),
     (lambda data: data.update(background="FS0"), "background"),
 ])
@@ -756,26 +757,27 @@ def test_gui_07_copying_a_case_copies_its_assignments_and_stays_independent(edit
     assert edit.case("C1")["name"] == "Case A (copy)"
 
 
-def test_gui_08_renaming_keeps_the_id_and_every_reference(editor):
+def test_gui_08_renaming_keeps_the_id_and_other_cases(editor):
     edit, _ = editor
-    edit.set_includes("B", ["A"])
+    other = json.loads(json.dumps(edit.case("B")))
 
     edit.rename_case("A", "  Summer measures  ")
 
     assert edit.case("A")["name"] == "Summer measures"
-    assert edit.includes("B") == ["A"]
+    assert edit.case("A")["id"] == "A"
+    assert edit.case("B") == other
 
 
-def test_gui_deleting_a_case_removes_every_reference_to_it(editor):
+def test_gui_deleting_a_case_keeps_shared_assignments_in_other_cases(editor):
     edit, _ = editor
-    third, _ = edit.add_case("Third")
-    edit.set_includes(third, ["A"])
-    edit.set_requires(third, ["B"])
-    edit.set_alternatives("A", ["B", third])
+    third, _ = edit.copy_case("A")
+    other = json.loads(json.dumps(edit.case(third)))
 
-    edit.delete_case("B")
+    edit.delete_case("A")
 
-    assert edit.requires(third) == [] and edit.alternatives("A") == [third] and edit.includes(third) == ["A"]
+    assert edit.case("A") is None
+    assert edit.case(third) == other
+    assert edit.case_statuses()[third] == "ready"
     assert gl.validate_case_config(edit.config) == []
 
 
@@ -876,18 +878,19 @@ def test_gui_switched_off_cases_are_neither_calculated_nor_lost(editor):
     assert dict(edit.summary()[0])["Cases selected"] == "1 of 2: Case A"
 
 
-def test_gui_relations_by_selection_keep_other_alternatives(editor):
-    edit, _ = editor
-    third, _ = edit.add_case("Third")
-    edit.config["exclusive_groups"] = [["A", "B", third]]
+def test_cases_can_freely_share_outages_without_affecting_each_other(editor):
+    edit, outages = editor
+    key = outages[0]["key"]
+    assert edit.add_outage("B", key) is None
+    before = json.loads(json.dumps(edit.case("B")))
 
-    assert edit.alternatives("A") == ["B", third]
-    edit.set_alternatives("A", [third])
+    edit.remove_outage("A", key)
+    edit.set_enabled("A", False)
+    edit.delete_case("A")
 
-    assert sorted(map(sorted, edit.config["exclusive_groups"])) == [["A", third], ["B", third]]
-    edit.set_includes("A", ["A", "B", "missing"])
-    assert edit.includes("A") == ["B"]
-    assert edit.relation_options("A") == [("B", "Case B"), (third, "Third")], "names, not IDs"
+    assert edit.case("B") == before
+    assert key in edit.case("B")["outages"]
+    assert edit.case_statuses()["B"] == "ready"
 
 
 def test_gui_rules_between_outages_are_checked(editor):
@@ -973,30 +976,42 @@ def test_one_case_per_outage_takes_only_outages_in_the_simulated_period():
     assert [row[2] for row in edit.case_rows()] == ["FS0", "FS1", "FS2", "FS3", "FS4"]
 
 
-def test_copy_keeps_the_alternatives(editor):
-    edit, _ = editor
-    edit.set_alternatives("A", ["B"])
-    copy, _ = edit.copy_case("A")
-
-    assert edit.alternatives(copy) == ["B"]
-    assert sorted(edit.alternatives("B")) == ["A", copy]
-
-
-def test_deleting_a_required_case_excludes_the_dependent_case(editor):
+def test_copy_keeps_own_dates_independent(editor):
     edit, outages = editor
-    joint, _ = edit.add_case("Joint")
-    edit.set_includes(joint, ["A"])
-    edit.set_requires("B", ["A"])
-    edit.set_alternatives("A", [joint])
+    key = outages[0]["key"]
+    edit.case("A")["overrides"] = {key: [kw(10), kw(11)]}
+    copy, _ = edit.copy_case("A")
+    edit.case(copy)["overrides"][key][0] = kw(9)
 
-    effects = edit.delete_effects("A")
+    assert edit.case("A")["overrides"][key] == [kw(10), kw(11)]
+    assert edit.case(copy)["overrides"][key][0] == kw(9)
+    assert "includes" not in edit.case(copy) and "requires" not in edit.case(copy)
+
+
+def test_legacy_cases_are_flattened_once_and_then_stay_independent(tmp_path):
+    fs1, fs2 = record("FS1", kw(10), kw(11)), record("FS2", kw(10), kw(11))
+    data = config([case("A", fs1, overrides={fs1["key"]: [kw(20), kw(21)]}),
+                   case("B", fs2, includes=["A"], requires=["A"]),
+                   case("C", includes=["B", "A"])], schema_version=1, exclusive_groups=[["A", "B"]])
+    path = tmp_path / "cases.json"
+    original = json.dumps(data)
+    path.write_text(original)
+
+    loaded = gl.load_case_config(str(path))
+    assert path.read_text() == original, "loading or cancelling must not rewrite the saved configuration"
+    assert loaded["schema_version"] == 2 and "exclusive_groups" not in loaded
+    assert all("includes" not in item and "requires" not in item for item in loaded["cases"])
+    assert loaded["cases"][1]["outages"] == [fs2["key"], fs1["key"]]
+    assert loaded["cases"][2]["outages"] == [fs2["key"], fs1["key"]]
+    assert loaded["cases"][2]["overrides"] == {fs1["key"]: [kw(20), kw(21)]}
+    edit = gl.CaseEditor([fs1, fs2], loaded, PERIOD)
+    assert any("independent" in text for _, text in edit.problem_rows())
     edit.delete_case("A")
-
-    assert effects == ["Joint no longer contains its planned outages.",
-                       "Case B is only valid with it and will be excluded from the calculation.",
-                       "Joint loses it as alternative."]
-    assert edit.case("B")["enabled"] is False and edit.requires("B") == []
-    assert edit.case_statuses()["B"] == "excluded", "never calculated on its own once its condition is gone"
+    edit.remove_outage("B", fs1["key"])
+    assert edit.case("C")["outages"] == [fs2["key"], fs1["key"]]
+    assert edit.case("B").get("enabled", True) is True
+    gl.save_case_config(str(path), edit.config)
+    assert gl.load_case_config(str(path)) == json.loads(path.read_text())
 
 
 def test_rule_choices_keep_outages_with_the_same_name_apart():
@@ -1023,6 +1038,26 @@ def test_statuses_problems_and_preview_share_one_resolution(editor, monkeypatch)
     edit.remove_outage("A", outages[0]["key"])
     edit.case_statuses()
     assert len(calls) == 2, "a change resolves again"
+
+
+def test_calculation_preview_lists_effective_settings_and_keeps_blocked_cases_out(editor):
+    edit, outages = editor
+    edit.set_fixed(outages[4]['key'], True)
+    clone, _ = edit.copy_case('A')
+    empty, _ = edit.add_case('Empty')
+    preview = edit.calculation_preview()
+    assert 'Reference: Rfix' in preview
+    assert 'Shared background: FS0 Background' in preview
+    assert 'reuse result from A' in preview
+    assert 'n-0; complete QDS period' in preview
+    assert 'FS1: ' + gl._format_pf_time(outages[0]['window'][0]) in preview
+    assert 'Not calculated: Empty' in preview
+    assert 'Empty ({})'.format(empty) not in preview
+    edit.set_enabled('A', False)
+    preview = edit.calculation_preview()
+    assert 'Case A (A)' not in preview
+    assert 'reuse result from A' not in preview
+    assert 'Case A (copy) ({})'.format(clone) in preview
 
 
 def test_more_than_five_cases_are_refused_where_engineers_define_them():
@@ -1136,3 +1171,34 @@ def test_column_widths_fill_the_table_and_keep_flexible_columns_readable(width):
         assert widths[1] >= 0.6 * 140 - 1
     else:
         assert widths[1] / 140.0 == pytest.approx(widths[0] / 66.0 * 0.6, rel=0.1), "everything shrinks in proportion"
+
+
+@pytest.mark.parametrize("changes", [
+    {"includes": "A"}, {"requires": [None]}, {"includes": ["missing"]},
+])
+def test_invalid_legacy_references_are_reported_without_rewriting_the_file(tmp_path, changes):
+    data = config([case("A", **changes)], schema_version=1)
+    path = tmp_path / "cases.json"
+    original = json.dumps(data)
+    path.write_text(original)
+    with pytest.raises(gl.GridLensError, match="cannot be upgraded"):
+        gl.load_case_config(str(path))
+    assert path.read_text() == original
+
+
+def test_migration_preserves_parent_first_dates_and_explicit_disabled_cases():
+    fs1 = record("FS1", kw(10), kw(11))
+    data = config([case("A", fs1, includes=["B"], overrides={fs1["key"]: [kw(20), kw(21)]}),
+                   case("B", fs1, enabled=False, overrides={fs1["key"]: [kw(30), kw(31)]})], schema_version=1)
+    upgraded = gl.upgrade_case_config(data)
+    assert upgraded["cases"][0]["outages"] == [fs1["key"]]
+    assert upgraded["cases"][0]["overrides"][fs1["key"]] == [kw(20), kw(21)]
+    assert upgraded["cases"][1]["enabled"] is False
+    assert data["schema_version"] == 1 and data["cases"][0]["includes"] == ["B"]
+
+
+def test_plain_legacy_configuration_opens_without_a_migration_warning():
+    data = config([case("A", includes=[], requires=[])], schema_version=1, exclusive_groups=[])
+    upgraded = gl.upgrade_case_config(data)
+    assert gl.validate_case_config(upgraded) == []
+    assert "migration_note" not in upgraded

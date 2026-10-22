@@ -219,10 +219,7 @@ classDiagram
     class PlanningCase {
         id, name, description
         outages (occurrence keys)
-        includes, requires, overrides
-    }
-    class PlanningScenario {
-        "a PlanningCase with includes"
+        enabled, overrides
     }
     class AssessmentRequest {
         source, revision, mode
@@ -247,7 +244,6 @@ classDiagram
     }
     OutageDefinition "1" --> "*" OutageOccurrence
     PlanningCase "*" --> "*" OutageOccurrence : CaseMembership
-    PlanningScenario --|> PlanningCase
     AssessmentRequest "1" --> "*" ResolvedPlan
     ResolvedPlan "1" --> "*" CalculationWindow
     ResolvedPlan "1" --> "0..1" CaseRun
@@ -261,26 +257,28 @@ classDiagram
 | `OutageOccurrence` | the record of one `IntPlannedout` (`_outage_record`) | identity = full PowerFactory path, never the display name |
 | `CaseMembership` | `cases[].outages` (list of occurrence keys) | many-to-many; an occurrence may be in any number of cases |
 | `PlanningCase` | `cases[]` in the configuration | id: letters, digits, `_`, `-`, ≤ 16 characters, not `REF` (it becomes part of the `ElmRes` name; a dot would read as a class separator) |
-| `PlanningScenario` | a case with `includes` | joint plan A+B only when the engineer defines it; `_case_tree` resolves hierarchies and rejects cycles |
 | `AssessmentRequest` | `resolve_request(...)` result | source, revision, mode, background, resolved plans |
 | `CalculationWindow` | `calculation_windows(...)` | warm-up 24 h before each window, windows < 48 h apart merged; proposal only |
 | `ReferenceRun` | result with id `REF` | R0 or Rfix, `run_note` states which |
 | `CaseRun` | result of `_run_planning_case` or `_reused_result` | `result_object`, `provenance`, `elapsed` |
 | `AssessmentResult` | `result['comparison']`, `result['assessment']`, `assess_case(...)` | per element and per case |
 
-**Alternative vs. repeated execution.** Two occurrences of FS1 (KW10 and
-KW40) in *one* case mean the outage really takes place twice (F05). In *two*
-cases they are alternatives (F02); listing those cases in an exclusive group
-prevents any joint case from containing both (B02).
+**Independent cases.** Every case contains only its directly assigned outage
+occurrences. Put both outages directly into a third case to assess a joint plan.
+Changes, exclusion or deletion of one case do not affect another. Copy creates
+an independent variant. There are no case dependencies or alternative groups.
 
-**Case relations.**
+**Saved configuration.** Schema version 2 stores direct memberships only.
+`upgrade_case_config` converts version 1 on load: inherited memberships and
+first-effective own dates become direct assignments; dependencies and exclusions
+are removed. A migration notice is shown in Review & start and the log. Loading
+does not rewrite the file. Invalid legacy references/cycles stop migration.
+
+**Rules between outage occurrences.**
 
 | Rule | Configuration | Check |
 |---|---|---|
 | B01 same case | `outages` | common time line |
-| B02 alternatives | `exclusive_groups` | a case containing two of them is NOT EVALUATED |
-| B03/B06 joint plan, hierarchy | `includes` | resolved recursively, every occurrence once (B05) |
-| B04 conditional | `requires` | a case without its precondition is NOT EVALUATED |
 | B08/F11 must not overlap | rule `not_overlap` | overlapping windows refused |
 | B09/F10 order | rule `order` | second must start after the first has ended |
 | B10 together | rule `together` | both present and overlapping |
@@ -456,7 +454,7 @@ reduce the case run to ~16 days; this is shown, not executed.
 | Tk missing, or the dialog cannot be built | treated as "dialog unavailable": saved configuration, else one case per outage; the report says so | `run_case_manager`, `obtain_case_request` |
 | error in a dialog button | shown in a message box; the dialog stays open; nothing calculated | `report_callback_exception` |
 | dialog crashes while open | run stops, nothing calculated | `run_case_manager` |
-| Cancel | run stops, nothing calculated, nothing saved | `GridLensCancelled` |
+| Cancel | run stops, nothing calculated, nothing saved or published; `main` logs CANCELLED and propagates the cancellation to the report caller instead of returning normally, so the caller cannot treat the extension as successful | `GridLensCancelled`, `main`; actual IntReport handling still needs a PowerFactory check |
 | `outserv` cannot be written | that case FAILED; settings restored | `_isolate_outages`, `StateGuard` |
 | QDS fails or its `ElmRes` cannot be read | that case FAILED; the next case runs | `_run_planning_case` |
 | comparison fails unexpectedly | that case NOT EVALUATED with the reason; its `ElmRes` is kept; the next case runs | `_run_planning_case` |
@@ -464,7 +462,8 @@ reduce the case run to ~16 days; this is shown, not executed.
 | a setting cannot be restored | run stops with expected and found value | `StateRestoreError` |
 | reference fails | run stops (no case could be compared); state restored | `_run_reference` |
 | result object records no loading or voltage (no `c:loading`/`m:loading` of lines and transformers, no `m:u`/`m:u1` of terminals) | the message names what is needed, lists what the `ElmRes` records instead and says to add the variables in the QDS result variables or choose another study case; all-de-energised terminals are named as such | `collect_series`, `missing_series_message` |
-| run ends without publication (error or Cancel) | the last log line says that no report tables were published, so generating the report fails with "Scripted... not found" in `ReportsNet.log`; a successful run names the IntReport to generate from | `main`, `NO_REPORT_DATA`, `execute_gridlens` |
+| run fails without publication | the script ends with exit code 1 (`NO_REPORT_EXIT_CODE`) so that PowerFactory does not render the report; the last log line says so (a report generated by hand would fail with "Scripted... not found" in `ReportsNet.log`); a successful run ends with 0 and names the IntReport | `main`, `exit_code`, `NO_REPORT_DATA`; needs a PowerFactory check |
+| run fails without publication | the last log line says that no report tables were published, so generating the report fails with "Scripted... not found" in `ReportsNet.log`; a successful run names the IntReport to generate from. Cancel follows the separate propagation path above. | `main`, `NO_REPORT_DATA`, `execute_gridlens` |
 | coverage below 99.9 % | never "NO LIMIT EXCEEDED"; text never shows "100 %" | `assess_case`, `percent_text` |
 | outage windows cannot be placed on the time axis | every time step compared (slower); warning in the log, note in the report | `compare_case`, `_run_planning_case` |
 | verdict computed several times could drift | each case is judged once after the runs; log, case table and summary read that verdict | `judge_cases`, `judged` |
@@ -483,6 +482,16 @@ All restore steps run in `finally`, so they also run after an error or a
 | time steps per run | evidence table `time_steps` |
 | measured run time | evidence table `elapsed_text`, log (QDS and comparison separately) |
 | proposed windows | only with `QDS_WINDOW_MODE = 'optimized'` in the script: log and report (`windows_text`, `qds_mode_text`), never executed; the case manager shows none |
+
+The GUI updates changed native table rows instead of deleting and reinserting
+all rows. Filtering detaches rows and clearing the filter reattaches them;
+rows removed from the data are deleted, including filtered-out ones. Scroll
+and visible selection are preserved; keyboard focus is cleared when filtered out.
+Empty rule lists avoid building and sorting all outage names on every refresh.
+A local Tk 8.6 profile with 5,000 synthetic outages, four case switches and one
+checkbox toggle took 0.758 s before and 0.358 s after the change: 25,000 inserts
+became 81 row updates, with no inserts/deletes after opening. These are local
+GUI measurements, not PowerFactory or QDS performance results.
 
 Rough model (spec section 27): `T ≈ (1 + m_distinct) · (τ_I + n · τ_L)`. No
 speed-up is claimed; nothing has been measured in PowerFactory.

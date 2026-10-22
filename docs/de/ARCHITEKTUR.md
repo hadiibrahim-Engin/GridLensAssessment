@@ -223,10 +223,7 @@ classDiagram
     class PlanningCase {
         id, name, description
         outages (Vorkommen-Schlüssel)
-        includes, requires, overrides
-    }
-    class PlanningScenario {
-        "PlanningCase mit includes"
+        enabled, overrides
     }
     class AssessmentRequest {
         source, revision, mode
@@ -251,7 +248,6 @@ classDiagram
     }
     OutageDefinition "1" --> "*" OutageOccurrence
     PlanningCase "*" --> "*" OutageOccurrence : CaseMembership
-    PlanningScenario --|> PlanningCase
     AssessmentRequest "1" --> "*" ResolvedPlan
     ResolvedPlan "1" --> "*" CalculationWindow
     ResolvedPlan "1" --> "0..1" CaseRun
@@ -265,26 +261,29 @@ classDiagram
 | `OutageOccurrence` (FS-Vorkommen) | Datensatz einer `IntPlannedout` (`_outage_record`) | Identität = voller PowerFactory-Pfad, nie der Anzeigename |
 | `CaseMembership` (Fallzuordnung) | `cases[].outages` (Liste von Vorkommen-Schlüsseln) | viele-zu-viele; ein Vorkommen darf in beliebig vielen Fällen stehen |
 | `PlanningCase` (Bewertungsfall) | `cases[]` der Konfiguration | ID: Buchstaben, Ziffern, `_`, `-`, höchstens 16 Zeichen, nicht `REF` (Teil des `ElmRes`-Namens; ein Punkt würde als Klassentrenner gelesen) |
-| `PlanningScenario` (Gesamtplanung) | Fall mit `includes` | A+B nur, wenn der Ingenieur ihn anlegt; `_case_tree` löst Hierarchien auf und lehnt Zyklen ab |
 | `AssessmentRequest` (Bewertungsauftrag) | Ergebnis von `resolve_request(...)` | Quelle, Revision, Modus, Hintergrund, aufgelöste Fälle, Warnungen |
 | `CalculationWindow` (Berechnungsfenster) | `calculation_windows(...)` | 24 h Vorlauf je Fenster, Fenster mit < 48 h Abstand zusammengefasst; nur Vorschlag |
 | `ReferenceRun` | Ergebnis mit ID `REF` | R0 oder Rfix, `run_note` nennt welche |
 | `CaseRun` | Ergebnis von `_run_planning_case` oder `_reused_result` | `result_object`, `provenance`, `elapsed` |
 | `AssessmentResult` | `result['comparison']`, `result['assessment']`, `assess_case(...)` | je Element und je Fall |
 
-**Alternative oder mehrmalige Durchführung.** Zwei Vorkommen von FS1 (KW10
-und KW40) in *einem* Fall bedeuten, dass FS1 tatsächlich zweimal stattfindet
-(F05). In *zwei* Fällen sind sie Alternativen (F02); stehen diese Fälle in einer
-Alternativgruppe, darf kein gemeinsamer Fall beide enthalten (B02).
+**Unabhängige Fälle.** Jeder Fall enthält nur seine direkt zugeordneten
+FS-Vorkommen. Für eine gemeinsame Planung beide FS direkt einem dritten Fall
+zuordnen. Ändern, Ausschließen oder Löschen eines Falls verändert keinen anderen
+Fall. Kopieren erzeugt eine unabhängige Variante. Voraussetzungen und
+Alternativgruppen zwischen Fällen gibt es nicht mehr.
 
-**Fallbeziehungen.**
+**Gespeicherte Konfiguration.** Schemaversion 2 speichert direkte Zuordnungen.
+`upgrade_case_config` überführt Version 1 beim Laden: übernommene FS und ihre
+zuerst wirksamen eigenen Termine werden direkte Zuordnungen; Voraussetzungen
+und Ausschlüsse entfallen. Review & start und Log zeigen einen Umstellungshinweis.
+Laden schreibt die Datei nicht neu. Ungültige alte Verweise/Kreise stoppen die Umstellung.
+
+**Regeln zwischen FS-Vorkommen.**
 
 | Regel | Konfiguration | Prüfung |
 |---|---|---|
 | B01 gleicher Fall | `outages` | gemeinsame Zeitachse |
-| B02 Alternativen | `exclusive_groups` | ein Fall mit zweien davon wird NOT EVALUATED |
-| B03/B06 Gesamtplanung, Hierarchie | `includes` | rekursiv aufgelöst, jedes Vorkommen nur einmal (B05) |
-| B04 bedingter Fall | `requires` | ein Fall ohne seine Voraussetzung wird NOT EVALUATED |
 | B08/F11 dürfen nicht überlappen | Regel `not_overlap` | überlappende Fenster abgelehnt |
 | B09/F10 Reihenfolge | Regel `order` | die zweite FS muss nach dem Ende der ersten beginnen |
 | B10 nur gemeinsam | Regel `together` | beide vorhanden und überlappend |
@@ -462,7 +461,7 @@ wird angezeigt, nicht gerechnet.
 | Tk fehlt oder Dialog lässt sich nicht aufbauen | gilt als „Dialog nicht verfügbar“: gespeicherte Konfiguration, sonst je FS ein Fall; der Bericht nennt die Quelle | `run_case_manager`, `obtain_case_request` |
 | Fehler in einer Dialog-Schaltfläche | in einem Meldungsfenster angezeigt; Dialog bleibt offen; nichts gerechnet | `report_callback_exception` |
 | Dialog bricht während der Bedienung ab | Lauf stoppt, nichts gerechnet | `run_case_manager` |
-| Abbrechen | Lauf endet, nichts gerechnet, nichts gespeichert | `GridLensCancelled` |
+| Abbrechen | Lauf endet, nichts gerechnet, gespeichert oder publiziert; `main` protokolliert CANCELLED und reicht den Abbruch an den aufrufenden Reportablauf weiter, statt normal zurückzukehren. Der Aufrufer erhält damit keinen erfolgreichen Skriptabschluss. | `GridLensCancelled`, `main`; tatsächliche Behandlung durch IntReport noch in PowerFactory prüfen |
 | `outserv` nicht schreibbar | dieser Fall FAILED; Einstellungen zurückgesetzt | `_isolate_outages`, `StateGuard` |
 | QDS scheitert oder `ElmRes` nicht lesbar | dieser Fall FAILED; der nächste Fall läuft | `_run_planning_case` |
 | Vergleich scheitert unerwartet | dieser Fall NOT EVALUATED mit Grund; sein `ElmRes` bleibt; der nächste Fall läuft | `_run_planning_case` |
@@ -470,7 +469,8 @@ wird angezeigt, nicht gerechnet.
 | Einstellung nicht rücksetzbar | Lauf stoppt mit erwartetem und gelesenem Wert | `StateRestoreError` |
 | Referenz scheitert | Lauf stoppt (kein Fall vergleichbar); Zustand zurückgesetzt | `_run_reference` |
 | Ergebnisobjekt zeichnet weder Auslastung noch Spannung auf (kein `c:loading`/`m:loading` von Leitungen und Trafos, kein `m:u`/`m:u1` von Knoten) | die Meldung nennt, was gebraucht wird, listet, was das `ElmRes` stattdessen aufzeichnet, und sagt, die Variablen in den Result Variables der QDS zu ergänzen oder einen anderen Study Case zu wählen; nur spannungslose Knoten werden als solche benannt | `collect_series`, `missing_series_message` |
-| Lauf endet ohne Publikation (Fehler oder Abbrechen) | die letzte Logzeile sagt, dass keine Berichtstabellen publiziert wurden und das Erzeugen des Berichts daher mit „Scripted... not found“ in `ReportsNet.log` scheitert; ein erfolgreicher Lauf nennt den IntReport, aus dem der Bericht erzeugt wird | `main`, `NO_REPORT_DATA`, `execute_gridlens` |
+| Lauf scheitert ohne Publikation | das Skript endet mit Exit-Code 1 (`NO_REPORT_EXIT_CODE`), damit PowerFactory den Bericht nicht erzeugt; die letzte Logzeile sagt das (ein von Hand erzeugter Bericht scheitert mit „Scripted... not found“ in `ReportsNet.log`); ein erfolgreicher Lauf endet mit 0 und nennt den IntReport | `main`, `exit_code`, `NO_REPORT_DATA`; in PowerFactory zu prüfen |
+| Lauf scheitert ohne Publikation | die letzte Logzeile sagt, dass keine Berichtstabellen publiziert wurden und das Erzeugen des Berichts daher mit „Scripted... not found“ in `ReportsNet.log` scheitert; ein erfolgreicher Lauf nennt den IntReport, aus dem der Bericht erzeugt wird. Abbrechen nimmt den separaten Pfad mit Weitergabe des Abbruchs oben. | `main`, `NO_REPORT_DATA`, `execute_gridlens` |
 | Abdeckung unter 99,9 % | nie „NO LIMIT EXCEEDED“; der Text zeigt nie „100 %“ | `assess_case`, `percent_text` |
 | Fenster nicht auf der Zeitachse platzierbar | jeder Zeitschritt wird verglichen (langsamer); Warnung im Log, Hinweis im Bericht | `compare_case`, `_run_planning_case` |
 | mehrfach berechnetes Urteil könnte abweichen | jeder Fall wird nach den Läufen einmal beurteilt; Log, Falltabelle und Übersicht lesen dieses Urteil | `judge_cases`, `judged` |
@@ -489,6 +489,16 @@ einem Fehler oder einem `KeyboardInterrupt`.
 | Zeitschritte je Lauf | Nachweistabelle `time_steps` |
 | gemessene Laufzeit | Nachweistabelle `elapsed_text`, Log (QDS und Vergleich getrennt) |
 | vorgeschlagene Fenster | nur mit `QDS_WINDOW_MODE = 'optimized'` im Skript: Log und Bericht (`windows_text`, `qds_mode_text`), nie gerechnet; der Fall-Manager zeigt keine |
+
+Die GUI aktualisiert geänderte Tabellenzeilen, statt alle zu löschen und neu
+anzulegen. Filter blenden Zeilen aus und wieder ein; aus den Daten entfernte
+Zeilen werden auch dann gelöscht, wenn ein Filter sie verbirgt. Scrollposition
+und sichtbare Auswahl bleiben erhalten; der Tastaturfokus wird beim Ausfiltern
+zurückgesetzt. Ohne FS-Regeln entfällt das Sortieren aller FS-Namen je Aktualisierung.
+Ein lokales Tk-8.6-Profil mit 5.000 künstlichen FS, vier Fallwechseln und einem
+Häkchen benötigte vorher 0,758 s, danach 0,358 s: aus 25.000 neu angelegten Zeilen
+wurden 81 Zeilenupdates, ohne Neuanlegen/Löschen nach dem Öffnen. Das sind lokale
+GUI-Messungen, keine PowerFactory- oder QDS-Laufzeitmessungen.
 
 Grobes Modell (Vorgabe Abschnitt 27): `T ≈ (1 + m_unterschiedlich) · (τ_I + n · τ_L)`.
 Es wird keine Beschleunigung behauptet; in PowerFactory ist nichts gemessen.

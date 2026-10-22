@@ -1500,6 +1500,37 @@ def test_a_run_without_publication_says_that_the_report_cannot_be_generated(monk
     assert app.report.tables == {}, "nothing was published"
 
 
+def test_cancel_or_a_failure_ends_the_script_with_an_error_code_so_no_report_is_rendered(monkeypatch):
+    import runpy
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "powerfactory", types.SimpleNamespace(GetApplication=lambda: None))
+
+    with pytest.raises(SystemExit) as stopped:
+        runpy.run_path(str(SCRIPT), run_name="__main__")
+
+    assert stopped.value.code == gl.NO_REPORT_EXIT_CODE == 1
+    assert gl.exit_code(True) == 0 and gl.exit_code(False) == 1
+
+
+def test_cancel_says_that_the_report_is_not_generated(monkeypatch):
+    import sys
+    import types
+    app = App((PlannedOutage("FS1"),))
+    monkeypatch.setitem(sys.modules, "powerfactory", types.SimpleNamespace(GetApplication=lambda: app))
+
+    def cancelled(_app):
+        raise gl.GridLensCancelled("Cancelled in the case manager. Nothing was calculated and nothing was changed.")
+    monkeypatch.setattr(gl, "execute_gridlens", cancelled)
+
+    # The cancellation reaches PowerFactory as an error, so an IntReport stops before it renders.
+    with pytest.raises(gl.GridLensCancelled):
+        gl.main()
+    line = [message for message in app.messages if "CANCELLED" in message][-1]
+    assert "Report generation cancelled" in line
+    assert app.report.tables == {}
+
+
 def test_a_successful_run_names_the_report_to_generate():
     app = App((PlannedOutage("FS1"),))
 
@@ -1567,6 +1598,32 @@ def test_a_case_with_two_outages_runs_them_together(monkeypatch):
     assert cases[1, "outage_names"] == "FS1, FS2"
 
 
+def test_saved_legacy_relations_become_independent_case_runs(monkeypatch):
+    import json
+
+    outages = (PlannedOutage("FS1"), PlannedOutage("FS2"))
+    app = App(outages)
+    monkeypatch.setattr(gl, "CASE_SOURCE", "saved")
+    data = gl.empty_case_config()
+    data.update(schema_version=1, exclusive_groups=[["A", "B"]], cases=[
+        {"id": "A", "name": "North", "outages": [_key(outages[0])]},
+        {"id": "B", "name": "South", "outages": [_key(outages[1])], "requires": ["A"]},
+        {"id": "AB", "name": "Both", "outages": [], "includes": ["A", "B"]},
+    ])
+    path = gl.case_config_path(_key(app.project))
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    original = json.dumps(data)
+    Path(path).write_text(original)
+
+    gl.execute_gridlens(app)
+
+    assert app.qds.active_outages == [["FS1", "FS2"], ["FS1"], ["FS2"], ["FS1", "FS2"]]
+    assert app.qds.outage_options == [0, 1, 1, 1]
+    assert Path(path).read_text() == original
+    assert any("Cases are now independent" in line for line in app.messages)
+    assert app.report.tables["Cases"]["values"][3, "case_name"] == "Both"
+
+
 def test_identical_cases_are_calculated_once_and_say_so(monkeypatch):
     outages = (PlannedOutage("FS1"), PlannedOutage("FS2"))
     app = App(outages)
@@ -1608,6 +1665,51 @@ def test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing(monkeypat
     assert app.qds.execute_calls == 0
     assert app.study.copies == []
     assert app.report.reset_calls == 0
+
+
+@pytest.mark.parametrize("previous_report", [False, True])
+def test_cancel_reaches_the_report_caller_instead_of_returning_success(monkeypatch, previous_report):
+    import sys
+    import types
+    from copy import deepcopy
+
+    app = App((PlannedOutage("FS1"),))
+    if previous_report:
+        gl.execute_gridlens(app)
+    tables = deepcopy(app.report.tables)
+    reset_calls = app.report.reset_calls
+    execute_calls = app.qds.execute_calls
+    copies = list(app.study.copies)
+    original_clock = (app.study_time.cDate, app.study_time.cTime)
+    monkeypatch.setitem(sys.modules, "powerfactory", types.SimpleNamespace(GetApplication=lambda: app))
+    monkeypatch.setattr(gl, "CASE_SOURCE", "gui")
+    monkeypatch.setattr(gl, "run_case_manager", lambda *args, **kwargs: None)
+
+    with pytest.raises(gl.GridLensCancelled):
+        gl.main()
+
+    assert app.qds.execute_calls == execute_calls
+    assert app.study.copies == copies
+    assert app.report.reset_calls == reset_calls
+    assert app.report.tables == tables, "Cancel must neither publish nor overwrite an earlier report"
+    assert app.qds.results is app.original_result
+    assert app.qds.iopt_maint == 0 and app.outages[0].outserv == 0
+    assert (app.study_time.cDate, app.study_time.cTime) == original_clock
+    assert "CANCELLED" in app.messages[-1] and "Report generation cancelled" in app.messages[-1]
+    assert "ReportsNet.log" not in app.messages[-1]
+    assert not any("FAILED" in line for line in app.messages)
+
+
+def test_main_still_returns_success_after_publishing_a_report(monkeypatch):
+    import sys
+    import types
+
+    app = App((PlannedOutage("FS1"),))
+    monkeypatch.setitem(sys.modules, "powerfactory", types.SimpleNamespace(GetApplication=lambda: app))
+
+    assert gl.main() is True
+    assert app.report.reset_calls == 1
+    assert app.report.tables
 
 
 def test_v31_without_tkinter_the_saved_configuration_is_used(monkeypatch):

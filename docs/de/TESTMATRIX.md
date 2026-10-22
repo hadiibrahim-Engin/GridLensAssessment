@@ -10,7 +10,7 @@ Statuskategorien:
 - **Nicht verifiziert** – offen; braucht PowerFactory oder ist nicht umgesetzt
 
 Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
-355 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); 22 davon
+375 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); 28 davon
 öffnen das echte Tk-Fenster und werden nur übersprungen, wo `tkinter` fehlt. Die Testnamen sind englisch, wie der Code.
 
 ## Tests A–E der Vorgabe
@@ -20,7 +20,7 @@ Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
 | A | REF 80 %, 60 %; Fall 70 %, 85 % | Differenz der Maxima +5 pp, zeitgleiches Delta +25 pp | +5 / +25 um 11:00 | Testdaten | `test_planner.py::test_a_coincident_delta_is_not_the_difference_of_the_maxima` |
 | B | FS1 08–13, FS2 10–15, FS3 11–14 | 5 Zustände wie in Abschnitt 7 der Vorgabe | identisch | Testdaten | `test_b_three_overlapping_outages_pass_through_five_states` |
 | C | FS1 KW10, FS2 KW40 in einem Fall | nicht 52 Wochen, *falls* Trennung nachgewiesen; keine unbewiesene Lücke | 2 Fenster vorgeschlagen, nicht gerechnet (Trennung nicht nachweisbar) → konservativ ganzer Zeitraum | Testdaten; Ausführung der Fenster **nicht umgesetzt** | `test_c_kw10_and_kw40_give_two_proposed_windows_but_run_conservatively` |
-| D | A: FS1 KW10, B: FS1 KW40 | kein automatisches A+B | zwei Fälle; ein gemeinsamer Fall mit einem Alternativpaar wird abgelehnt | Testdaten | `test_d_alternative_dates_stay_separate_cases`, `test_d_alternatives_in_one_joint_case_are_refused` |
+| D | A: FS1 KW10, B: FS1 KW40 | kein automatisches A+B | unabhängige Fälle; jeder ausdrücklich zugeordnete gemeinsame Fall ist erlaubt | Testdaten | `test_d_alternative_dates_stay_separate_cases`, `test_any_explicit_combination_is_allowed` |
 | E | A: FS1 KW10, B: FS2 KW10, gemeinsam AB | FS1+FS2 zusammen | AB enthält beide, ein Zustand | Testdaten | `test_e_a_joint_plan_calculates_both_outages_together` |
 
 ## Funktionsmatrix V01–V40
@@ -37,7 +37,7 @@ Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
 | V08 | gleiche FS in alternativen Wochen | Terminvarianten | je Termin eine `IntPlannedout`; eigene Termine erfasst, nicht angewendet | Testdaten | `test_d_alternative_dates_stay_separate_cases`, `test_own_dates_are_refused_while_overrides_are_off` |
 | V09 | gleiche FS tatsächlich zweimal | beide Vorkommen | zwei Mitglieder, Zustände 1 → ∅ → 1 | Testdaten | `test_v09_the_same_outage_twice_in_one_case_is_two_real_executions` |
 | V10 | alternative Fälle zur gleichen Zeit | keine ungeplante Kombination | nie automatisch kombiniert | Testdaten | `test_no_combination_is_generated_automatically` |
-| V11 | gemeinsam gültige Fälle | ausdrücklicher Gesamtplan | `includes` | Testdaten | Test E |
+| V11 | gemeinsam gültige Fälle | ausdrücklicher Gesamtplan | direkte FS-Zuordnung | Testdaten | Test E |
 | V12 | teilweise identische Fälle | Wiederverwendung nur bei voller Gleichheit | Fingerabdruck über FS, Fenster, feste FS; übernommenes Ergebnis gekennzeichnet | Testdaten | `test_v12_identical_cases_share_a_fingerprint_and_others_do_not`, `test_identical_cases_are_calculated_once_and_say_so` |
 | V13 | zwei FS auf derselben Leitung | konsistenter Zustand | keine Warnung, Überlappung ist normale Planung; PF-Verhalten unbekannt (P4) | Testdaten; PF offen | `test_v13_overlapping_outages_are_normal_planning_not_a_warning` |
 | V14 | FS mit dauerhafter Umschaltung | Nachwirkung berücksichtigt | Spill-over-Zeilen bewertet und gemeldet | Testdaten | `test_effect_after_the_window_is_assessed_as_well` |
@@ -56,7 +56,7 @@ Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
 | V27 | QDS konvergiert nicht | nicht bewertbar | FAILED / NOT EVALUATED, der nächste Fall läuft | Testdaten | `test_failed_outage_case_is_reported_and_state_is_restored` |
 | V28 | Referenz fehlt | kein behaupteter Vergleich | EXCEEDED, kein zeitgleiches Delta | Testdaten | `test_v28_without_reference_violations_are_not_called_new` |
 | V29 | unterschiedliche Zeitachsen | fensterbezogene Prüfung | Fall nicht verglichen, NOT EVALUATED | Testdaten | `test_v29_case_on_another_time_axis_is_not_compared` |
-| V30 | GUI abbrechen | keine Projektänderung | kein Lauf, keine Kopie, keine Publikation | Testdaten | `test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing`, `test_case_manager_dialog.py::test_gui_17_cancel_returns_nothing` |
+| V30 | GUI abbrechen | keine Projektänderung; aufrufender Reportablauf erhält den Abbruch | kein Lauf, keine Kopie, keine Publikation; Abbruch verlässt `main`, mit und ohne vorhandene Berichtstabellen | Testdaten; IntReport-Behandlung noch in PF prüfen | `test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing`, `test_cancel_reaches_the_report_caller_instead_of_returning_success`, `test_case_manager_dialog.py::test_gui_17_cancel_returns_nothing` |
 | V31 | GUI ohne tkinter | kontrollierter Rückfall | gespeicherte Konfiguration, sonst je FS ein Fall; auch wenn der Dialog nicht aufgebaut werden kann | Testdaten; DPL-Rückfall **nicht umgesetzt** | `test_v31_*` (2), `test_a_dialog_that_cannot_be_built_counts_as_unavailable` |
 | V32 | Ausnahme in der QDS | Zustand wiederhergestellt | Wiederherstellung in `finally`, mit Zurücklesen | Testdaten | `test_reference_failure_still_restores_option_and_result_binding`, `test_ignored_flag_that_cannot_be_restored_stops_the_run`, `test_memory_budget_stops_before_the_next_run_and_restores` |
 | V33 | mehr als sechs Fälle | vollständige Bewertung, transparente Diagramme | Tabellen in Blöcken zu sechs; Diagramme die ersten sechs mit Hinweis | Testdaten | `test_more_than_six_cases_are_all_assessed_and_compared`, `test_charts_show_at_most_six_cases_and_say_so` |
@@ -76,8 +76,9 @@ Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
 | halboffene Fenster `[Beginn, Ende)` | `test_windows_are_half_open` |
 | Dauer mit ungleichen Zeitschritten gewichtet | `test_violation_duration_weights_uneven_time_steps` |
 | eindeutige Zeitlabels bei der Herbst-Zeitumstellung | `test_clock_change_keeps_every_time_label_unique` |
-| Regelkonflikte, bedingte Fälle, Zyklen | `test_rules_*`, `test_conditional_case_needs_its_precondition`, `test_including_cases_in_a_circle_is_refused` |
+| FS-Regeln, entfernte Fallbeziehungen und alte Zyklen | `test_rules_*`, `test_removed_relations_cannot_silently_affect_current_configurations`, `test_legacy_cycle_is_rejected_before_assignments_can_be_lost` |
 | gespeicherte Konfiguration, Revision, beschädigte Datei | `test_configuration_is_saved_with_a_revision_and_read_back`, `test_damaged_configuration_is_reported_not_ignored` |
+| alte Konfiguration wird unabhängige Fälle; Datei bis zum Speichern unverändert | `test_legacy_cases_are_flattened_once_and_then_stay_independent`, `test_saved_legacy_relations_become_independent_case_runs` |
 | Ergebnisobjekt je Fall erhalten und benannt | `test_reference_runs_without_and_every_outage_runs_as_its_own_case` |
 | geschriebene Tabellen passen zur MRT und ihrem SQL | `test_executed_publisher_output_matches_mrt_and_all_sql_queries` |
 | beschädigte Konfiguration vor der Verwendung benannt (8 Varianten) | `test_damaged_configuration_is_named_before_anything_reads_it` |
@@ -104,8 +105,8 @@ Nicht in PowerFactory verifiziert; die Bearbeitungsregeln sind ohne Fenster gete
 | 5 | FS aus einem Fall entfernen | nur die Zuordnung endet | Editor + echtes Fenster | `test_gui_05_and_09_*`, `test_gui_04_and_05_*` |
 | 6 | eine FS in mehreren Fällen | erlaubt | Editor | `test_gui_04_and_06_*` |
 | 7 | Fall kopieren | Zuordnungen kopiert, beide unabhängig | Editor | `test_gui_07_*` |
-| 8 | Fall umbenennen | ID und alle Verweise bleiben | Editor + echtes Fenster | `test_gui_08_*`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window` |
-| 9 | Fall löschen | Freischaltungen bleiben; Verweise auf den Fall entfernt | Editor | `test_gui_05_and_09_*`, `test_gui_deleting_a_case_removes_every_reference_to_it` |
+| 8 | Fall umbenennen | ID und andere Fälle bleiben unverändert | Editor + echtes Fenster | `test_gui_08_*`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window` |
+| 9 | Fall löschen | Freischaltungen bleiben; andere Fälle unverändert | Editor | `test_gui_05_and_09_*`, `test_gui_deleting_a_case_keeps_shared_assignments_in_other_cases` |
 | 10 | feste Hintergrund-FS | getrennt von Fall-FS, nie beides; Rfix in der Vorschau | Editor | `test_gui_10_*` |
 | 11 | Suche nach Betriebsmittel | nur passende FS | Editor + echtes Fenster | `test_gui_11_and_12_*`, `test_gui_11_*` |
 | 12 | sehr viele FS | 5.005 FS in unter 0,5 s durchsucht; Listen scrollen | Editor | `test_gui_11_and_12_*` |
@@ -121,8 +122,12 @@ Nicht in PowerFactory verifiziert; die Bearbeitungsregeln sind ohne Fenster gete
 | Tabellenfilter und Sortierung: enthält / exakter Wert, Sortieren per Kopf ▲▼, Spaltenbreiten, Filter auf jedem Reiter ausgerichtet | `test_filter_rows_*`, `test_sort_rows_*`, `test_column_widths_*`, `test_gui_11_every_table_filters_per_column_and_clears`, `test_filters_stand_exactly_under_their_columns`, `test_header_click_sorts_and_shows_the_direction` |
 | Reiter, Statuszeile, Problemliste; feste FS und Regeln auf eigenem Reiter | `test_tabs_status_line_and_problem_list`, `test_fixed_outages_and_rules_live_on_their_own_tab` |
 | höchstens 5 Fälle (Fenster, gespeicherte Datei, je FS ein Fall); IDs generiert, nie getippt | `test_gui_at_most_five_cases`, `test_gui_one_case_per_outage_stops_at_five`, `test_more_than_five_cases_are_refused_where_engineers_define_them`, `test_gui_ids_are_generated_and_the_engineer_only_names_cases`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window`, `test_new_and_copy_stop_at_five_cases` |
-| Reihenfolge im Workspace: verfügbare FS, FS des Falls, Fälle; Hover-Texte an Beziehungen, Schaltflächen, Spaltenköpfen und Filtern | `test_workspace_runs_available_outages_then_case_outages_then_cases`, `test_hover_explains_the_relations_and_the_controls` |
-| Review-Korrekturen: je FS ein Fall nur im Zeitraum; Copy übernimmt Alternativen; Delete schließt Fälle aus, die den gelöschten voraussetzen, und nennt die Änderungen; Regelauswahl trennt gleichnamige FS; eine Auflösung je Aktualisierung; Tippen schließt einen Hinweis | `test_one_case_per_outage_takes_only_outages_in_the_simulated_period`, `test_copy_keeps_the_alternatives`, `test_deleting_a_required_case_excludes_the_dependent_case`, `test_rule_choices_keep_outages_with_the_same_name_apart`, `test_statuses_problems_and_preview_share_one_resolution`, `test_hover_explains_the_relations_and_the_controls` |
+| Reihenfolge im Workspace: verfügbare FS, FS des Falls, Fälle; Hover-Texte an Beziehungen, Schaltflächen, Spaltenköpfen und Filtern | `test_workspace_runs_available_outages_then_case_outages_then_cases`, `test_hover_explains_the_controls_without_case_relations` |
+| Review-Korrekturen: je FS ein Fall nur im Zeitraum; Copy und Delete lassen andere Fälle unverändert; alte Beziehungen werden direkte Zuordnungen; Regelauswahl trennt gleichnamige FS; eine Auflösung je Aktualisierung; Tippen schließt einen Hinweis | `test_one_case_per_outage_takes_only_outages_in_the_simulated_period`, `test_copy_keeps_own_dates_independent`, `test_legacy_cases_are_flattened_once_and_then_stay_independent`, `test_rule_choices_keep_outages_with_the_same_name_apart`, `test_statuses_problems_and_preview_share_one_resolution`, `test_hover_explains_the_controls_without_case_relations` |
 | zweites Review: eine gespeicherte Datei mit mehr als fünf Fällen öffnet sich trotzdem (ausgeschlossen bleibt ausgeschlossen); der GUI-Test übersteht eine beschädigte gespeicherte Datei und importiert, was sein eigener Code braucht; Vorschau-Labels werden wiederverwendet; ein direktes Rendern bricht das ausstehende ab; je FS ein Fall leert den Fallfilter | `test_a_saved_file_with_too_many_cases_still_opens_so_cases_can_be_deleted`, `test_a_damaged_saved_configuration_does_not_stop_the_gui_test`, `test_the_copied_case_manager_matches_gridlens_report`, `test_refreshes_reuse_widgets_and_render_once` |
 | Häkchen in der FS-Liste (anhaken nimmt auf, abhaken entfernt, ein schneller zweiter Klick ist kein Doppelklick), Name und Beschreibung im eigenen Fenster (Doppelklick, Edit, New), nur `IntPlannedout` gelesen (keine Demand Transfers) | `test_the_check_box_adds_and_removes_one_outage`, `test_ticking_the_box_adds_and_removes_an_outage`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window`, `test_double_click_on_a_case_opens_name_and_description`, `test_only_planned_outages_are_read_not_demand_transfers` |
 | klare Meldung bei einem Ergebnisobjekt ohne Auslastung oder Spannung; das Laufende sagt, ob Berichtstabellen publiziert wurden | `test_a_result_object_without_loading_or_voltage_says_what_is_missing_and_what_to_do`, `test_a_result_object_with_only_dead_terminals_says_so`, `test_an_unusable_result_object_is_named_in_the_run_error`, `test_a_run_without_publication_says_that_the_report_cannot_be_generated`, `test_a_successful_run_names_the_report_to_generate` |
+| große FS-Tabelle: Zeilen bei Häkchen/Fallwechsel weiterverwenden; Scrollposition und Auswahl erhalten; Filter und Löschen | `test_large_outage_table_updates_one_checkbox_without_rebuilding_or_scrolling`, `test_filtered_rows_reattach_with_current_values_and_removed_rows_stay_gone` |
+| sichtbare Erklärung mit Beispielen für Hintergrund-FS und jede Regel; Häkchen erklärt; Bedienelemente und Hilfe bei 1000×620 und 1280×800 sichtbar | `test_fixed_tab_explains_shared_outages_rules_and_optional_use_without_hover`, `test_explanations_and_rule_controls_fit_the_window` (2 Größen) |
+| Run flags: click, Space, filtering and live settings preview; background, windows, reuse, blocked and excluded cases | `test_run_flags_toggle_the_clicked_case_and_update_the_settings_preview`, `test_calculation_preview_lists_effective_settings_and_keeps_blocked_cases_out` |
+| Abbrechen oder ein gescheiterter Lauf beenden das Skript mit Exit-Code 1, es wird kein Bericht erzeugt | `test_cancel_or_a_failure_ends_the_script_with_an_error_code_so_no_report_is_rendered`, `test_cancel_says_that_the_report_is_not_generated` |

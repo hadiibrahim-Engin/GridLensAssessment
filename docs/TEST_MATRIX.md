@@ -9,8 +9,8 @@ Status categories:
 - **PowerFactory** – run in PowerFactory 2026 (none yet)
 - **Not verified** – open; needs PowerFactory or is not implemented
 
-Every row is **not verified in PowerFactory**. The automated suite: 355 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
-22 of them open the real Tk window and are skipped only where `tkinter` is missing.
+Every row is **not verified in PowerFactory**. The automated suite: 375 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
+28 of them open the real Tk window and are skipped only where `tkinter` is missing.
 
 ## Specification tests A–E
 
@@ -19,7 +19,7 @@ Every row is **not verified in PowerFactory**. The automated suite: 355 tests, a
 | A | REF 80 %, 60 %; case 70 %, 85 % | difference of maxima +5 pp, coincident delta +25 pp | +5 / +25 at 11:00 | Test data | `test_planner.py::test_a_coincident_delta_is_not_the_difference_of_the_maxima` |
 | B | FS1 08–13, FS2 10–15, FS3 11–14 | 5 states as in section 7 | identical | Test data | `test_b_three_overlapping_outages_pass_through_five_states` |
 | C | FS1 KW10, FS2 KW40 in one case | not 52 weeks *if* separation proven; no unproven gap | 2 windows proposed, not executed (separation not provable) → conservative full period | Test data; execution of windows **not implemented** | `test_c_kw10_and_kw40_give_two_proposed_windows_but_run_conservatively` |
-| D | A: FS1 KW10, B: FS1 KW40 | no automatic A+B | two cases; a joint case with an exclusive pair is refused | Test data | `test_d_alternative_dates_stay_separate_cases`, `test_d_alternatives_in_one_joint_case_are_refused` |
+| D | A: FS1 KW10, B: FS1 KW40 | no automatic A+B | independent cases; any explicitly assigned joint case is allowed | Test data | `test_d_alternative_dates_stay_separate_cases`, `test_any_explicit_combination_is_allowed` |
 | E | A: FS1 KW10, B: FS2 KW10, joint AB | FS1+FS2 together | AB has both, one state | Test data | `test_e_a_joint_plan_calculates_both_outages_together` |
 
 ## Function matrix V01–V40
@@ -36,7 +36,7 @@ Every row is **not verified in PowerFactory**. The automated suite: 355 tests, a
 | V08 | same FS in alternative weeks | date variants | one `IntPlannedout` per date; own dates recorded but not applied | Test data | `test_d_alternative_dates_stay_separate_cases`, `test_own_dates_are_refused_while_overrides_are_off` |
 | V09 | same FS really twice | both occurrences | two members, states 1 → ∅ → 1 | Test data | `test_v09_the_same_outage_twice_in_one_case_is_two_real_executions` |
 | V10 | alternative cases at the same time | no unplanned combination | never combined automatically | Test data | `test_no_combination_is_generated_automatically` |
-| V11 | jointly valid cases | explicit joint plan | `includes` | Test data | test E |
+| V11 | jointly valid cases | explicit joint plan | direct outage assignments | Test data | test E |
 | V12 | partly identical cases | reuse only on full identity | fingerprint over outages, windows, fixed outages; reused result marked | Test data | `test_v12_identical_cases_share_a_fingerprint_and_others_do_not`, `test_identical_cases_are_calculated_once_and_say_so` |
 | V13 | two FS on the same line | consistent state | no warning, overlap is normal planning; PF semantics unknown (P4) | Test data; PF open | `test_v13_overlapping_outages_are_normal_planning_not_a_warning` |
 | V14 | FS with lasting switching | after-effect considered | spill-over rows assessed and reported | Test data | `test_effect_after_the_window_is_assessed_as_well` |
@@ -55,7 +55,7 @@ Every row is **not verified in PowerFactory**. The automated suite: 355 tests, a
 | V27 | QDS does not converge | not assessable | FAILED / NOT EVALUATED, next case runs | Test data | `test_failed_outage_case_is_reported_and_state_is_restored` |
 | V28 | reference missing | no claimed comparison | EXCEEDED, no coincident delta | Test data | `test_v28_without_reference_violations_are_not_called_new` |
 | V29 | different time axes | window-wise validation | case not compared, NOT EVALUATED | Test data | `test_v29_case_on_another_time_axis_is_not_compared` |
-| V30 | GUI cancel | no project change | no run, no copy, no publication | Test data | `test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing`, `test_case_manager_dialog.py::test_gui_17_cancel_returns_nothing` |
+| V30 | GUI cancel | no project change; report caller receives cancellation | no run, no copy, no publication; cancellation propagates from `main`, with and without previous report tables | Test data; IntReport handling needs PF verification | `test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing`, `test_cancel_reaches_the_report_caller_instead_of_returning_success`, `test_case_manager_dialog.py::test_gui_17_cancel_returns_nothing` |
 | V31 | GUI without tkinter | controlled fallback | saved configuration, else one case per outage; also when the dialog cannot be built | Test data; DPL fallback **not implemented** | `test_v31_*` (2), `test_a_dialog_that_cannot_be_built_counts_as_unavailable` |
 | V32 | exception in the QDS | state restored | restore in `finally`, verified read-back | Test data | `test_reference_failure_still_restores_option_and_result_binding`, `test_ignored_flag_that_cannot_be_restored_stops_the_run`, `test_memory_budget_stops_before_the_next_run_and_restores` |
 | V33 | more than six cases | complete assessment, transparent charts | tables in blocks of six; charts first six with note | Test data | `test_more_than_six_cases_are_all_assessed_and_compared`, `test_charts_show_at_most_six_cases_and_say_so` |
@@ -75,8 +75,9 @@ Every row is **not verified in PowerFactory**. The automated suite: 355 tests, a
 | half-open windows `[start, end)` | `test_windows_are_half_open` |
 | duration weighted by uneven steps | `test_violation_duration_weights_uneven_time_steps` |
 | unique labels at the autumn clock change | `test_clock_change_keeps_every_time_label_unique` |
-| rule conflicts, conditional cases, cycles | `test_rules_*`, `test_conditional_case_needs_its_precondition`, `test_including_cases_in_a_circle_is_refused` |
+| outage rules, removed case relations and legacy cycles | `test_rules_*`, `test_removed_relations_cannot_silently_affect_current_configurations`, `test_legacy_cycle_is_rejected_before_assignments_can_be_lost` |
 | saved configuration, revision, damaged file | `test_configuration_is_saved_with_a_revision_and_read_back`, `test_damaged_configuration_is_reported_not_ignored` |
+| legacy configuration becomes independent cases; file unchanged until save | `test_legacy_cases_are_flattened_once_and_then_stay_independent`, `test_saved_legacy_relations_become_independent_case_runs` |
 | result object per case kept and named | `test_reference_runs_without_and_every_outage_runs_as_its_own_case` |
 | emitted tables match the MRT and its SQL | `test_executed_publisher_output_matches_mrt_and_all_sql_queries` |
 | damaged configuration named before use (8 variants) | `test_damaged_configuration_is_named_before_anything_reads_it` |
@@ -103,8 +104,8 @@ Not verified in PowerFactory; the editing rules are tested without a window (`te
 | 5 | remove an outage from a case | only the assignment ends | editor + real window | `test_gui_05_and_09_*`, `test_gui_04_and_05_*` |
 | 6 | one outage in several cases | allowed | editor | `test_gui_04_and_06_*` |
 | 7 | copy a case | assignments copied, both independent | editor | `test_gui_07_*` |
-| 8 | rename a case | ID and every reference stay | editor + real window | `test_gui_08_*`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window` |
-| 9 | delete a case | planned outages stay; references to the case removed | editor | `test_gui_05_and_09_*`, `test_gui_deleting_a_case_removes_every_reference_to_it` |
+| 8 | rename a case | ID and other cases stay unchanged | editor + real window | `test_gui_08_*`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window` |
+| 9 | delete a case | planned outages stay; other cases unchanged | editor | `test_gui_05_and_09_*`, `test_gui_deleting_a_case_keeps_shared_assignments_in_other_cases` |
 | 10 | fixed background outages | separate from case outages, never both; Rfix in the preview | editor | `test_gui_10_*` |
 | 11 | search by equipment | matching outages only | editor + real window | `test_gui_11_and_12_*`, `test_gui_11_*` |
 | 12 | very many outages | 5,005 outages searched in under 0.5 s; lists scroll | editor | `test_gui_11_and_12_*` |
@@ -120,8 +121,12 @@ Not verified in PowerFactory; the editing rules are tested without a window (`te
 | table filters and sorting: contains / exact value, header sort ▲▼, column widths, filters aligned on every tab | `test_filter_rows_*`, `test_sort_rows_*`, `test_column_widths_*`, `test_gui_11_every_table_filters_per_column_and_clears`, `test_filters_stand_exactly_under_their_columns`, `test_header_click_sorts_and_shows_the_direction` |
 | tabs, status line, problem list; fixed outages and rules on their own tab | `test_tabs_status_line_and_problem_list`, `test_fixed_outages_and_rules_live_on_their_own_tab` |
 | at most 5 cases (window, saved file, one case per outage); IDs generated, never typed | `test_gui_at_most_five_cases`, `test_gui_one_case_per_outage_stops_at_five`, `test_more_than_five_cases_are_refused_where_engineers_define_them`, `test_gui_ids_are_generated_and_the_engineer_only_names_cases`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window`, `test_new_and_copy_stop_at_five_cases` |
-| workspace order: available outages, case outages, cases; hover texts on relations, buttons, column headings and filters | `test_workspace_runs_available_outages_then_case_outages_then_cases`, `test_hover_explains_the_relations_and_the_controls` |
-| review fixes: one case per outage only in the period; Copy keeps alternatives; Delete excludes cases that required the deleted one and names the changes; rule drop-downs keep same-named outages apart; one resolution per refresh; typing closes a hint | `test_one_case_per_outage_takes_only_outages_in_the_simulated_period`, `test_copy_keeps_the_alternatives`, `test_deleting_a_required_case_excludes_the_dependent_case`, `test_rule_choices_keep_outages_with_the_same_name_apart`, `test_statuses_problems_and_preview_share_one_resolution`, `test_hover_explains_the_relations_and_the_controls` |
+| workspace order: available outages, case outages, cases; case relations removed; hover texts on buttons, column headings and filters | `test_workspace_runs_available_outages_then_case_outages_then_cases`, `test_hover_explains_the_controls_without_case_relations` |
+| review fixes: one case per outage only in the period; Copy and Delete leave other cases unchanged; legacy relations become direct assignments; rule drop-downs keep same-named outages apart; one resolution per refresh; typing closes a hint | `test_one_case_per_outage_takes_only_outages_in_the_simulated_period`, `test_copy_keeps_own_dates_independent`, `test_legacy_cases_are_flattened_once_and_then_stay_independent`, `test_rule_choices_keep_outages_with_the_same_name_apart`, `test_statuses_problems_and_preview_share_one_resolution`, `test_hover_explains_the_controls_without_case_relations` |
 | second review: a saved file with more than five cases still opens (excluded stays excluded); the GUI test survives a damaged saved file and imports what its own code needs; preview labels reused; a direct render cancels the pending one; one case per outage clears the case filter | `test_a_saved_file_with_too_many_cases_still_opens_so_cases_can_be_deleted`, `test_a_damaged_saved_configuration_does_not_stop_the_gui_test`, `test_the_copied_case_manager_matches_gridlens_report`, `test_refreshes_reuse_widgets_and_render_once` |
 | check box in the outage list (tick adds, untick removes, a quick second click is no double-click), name and description in their own window (double-click, Edit, New), only `IntPlannedout` read (no demand transfers) | `test_the_check_box_adds_and_removes_one_outage`, `test_ticking_the_box_adds_and_removes_an_outage`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window`, `test_double_click_on_a_case_opens_name_and_description`, `test_only_planned_outages_are_read_not_demand_transfers` |
 | clear message for a result object without loading or voltage; run end says whether report tables were published | `test_a_result_object_without_loading_or_voltage_says_what_is_missing_and_what_to_do`, `test_a_result_object_with_only_dead_terminals_says_so`, `test_an_unusable_result_object_is_named_in_the_run_error`, `test_a_run_without_publication_says_that_the_report_cannot_be_generated`, `test_a_successful_run_names_the_report_to_generate` |
+| large outage table: reuse rows on checkbox/case changes; preserve scroll and selection; filter reattachment and deletion | `test_large_outage_table_updates_one_checkbox_without_rebuilding_or_scrolling`, `test_filtered_rows_reattach_with_current_values_and_removed_rows_stay_gone` |
+| visible purpose/examples for shared outages and each rule; keep/skip explanation; controls and help fit at 1000×620 and 1280×800 | `test_fixed_tab_explains_shared_outages_rules_and_optional_use_without_hover`, `test_explanations_and_rule_controls_fit_the_window` (2 sizes) |
+| Run flags: click, Space, filtering and live settings preview; background, windows, reuse, blocked and excluded cases | `test_run_flags_toggle_the_clicked_case_and_update_the_settings_preview`, `test_calculation_preview_lists_effective_settings_and_keeps_blocked_cases_out` |
+| Cancel or a failed run ends the script with exit code 1, so no report is rendered | `test_cancel_or_a_failure_ends_the_script_with_an_error_code_so_no_report_is_rendered`, `test_cancel_says_that_the_report_is_not_generated` |

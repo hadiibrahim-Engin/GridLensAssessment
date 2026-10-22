@@ -123,7 +123,7 @@ def test_gui_04_and_05_add_and_remove_update_the_table_immediately(monkeypatch, 
         dialog.member_tree.selection_set(records[0]["key"])
         _button(root, "Remove from case").invoke()
         seen["removed"] = _members(dialog)
-        seen["case_count"] = dialog.case_tree.item("A", "values")[1]
+        seen["case_count"] = dialog.case_tree.item("A", "values")[2]
         dialog.start()
 
     outcome, seen = _run(monkeypatch, records, config, steps)
@@ -155,7 +155,7 @@ def test_gui_11_every_table_filters_per_column_and_clears(monkeypatch, records, 
         table.clear_filters()
         seen["all"] = len(table.tree.get_children())
         cases = dialog.case_table
-        cases.values[0].set("north")
+        cases.values[1].set("north")
         cases.render()
         seen["cases"] = list(cases.tree.get_children())
 
@@ -235,13 +235,69 @@ def test_fixed_outages_and_rules_live_on_their_own_tab(monkeypatch, records, con
         dialog.rule_second.set("FS2")
         _button(root, "Add rule").invoke()
         seen["rules"] = [dialog.rule_tree.item(item, "values") for item in dialog.rule_tree.get_children()]
-        seen["status_A"] = dialog.case_tree.item("A", "values")[2]
+        seen["status_A"] = dialog.case_tree.item("A", "values")[3]
 
     _, seen = _run(monkeypatch, records, config, steps)
 
     assert seen["fixed"] == ["FS4"] and seen["mark"] == gl.MARK_FIXED
     assert seen["rules"] == [("FS1", "must not overlap", "FS2")]
     assert seen["status_A"] == "not calculated", "case A breaks the new rule"
+
+
+def test_fixed_tab_explains_shared_outages_rules_and_optional_use_without_hover(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        dialog.notebook.select(1)
+        root.update()
+        seen["visible"] = [_safe_text(widget) for widget in _widgets(root) if widget.winfo_ismapped()]
+        dialog.notebook.select(0)
+        root.update()
+        seen["case_help"] = [_safe_text(widget) for widget in _widgets(root) if widget.winfo_ismapped()]
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    text = "\n".join(value for value in seen["visible"] if isinstance(value, str))
+    assert "leave both sections empty" in text
+    assert "reference and every case" in text and "own time window" in text
+    assert "Reference: T1" in text and "Case A: T1 + line North" in text and "Case B: T1 + line South" in text
+    assert "reported but not calculated" in text and "never create cases or change outage dates" in text
+    assert "must not overlap: their time windows must not overlap" in text
+    assert "second starts after the first ends" in text
+    assert "both belong to the case and their windows overlap" in text
+    assert any("Excluded cases stay saved" in str(text) for text in seen["case_help"])
+
+
+@pytest.mark.parametrize("size", [(1000, 620), (1280, 800)])
+def test_explanations_and_rule_controls_fit_the_window(monkeypatch, records, config, size):
+    def steps(dialog, root, seen):
+        root.geometry('{}x{}'.format(*size))
+        dialog.notebook.select(1)
+        root.update()
+        widgets = [dialog.rule_first, dialog.rule_kind, dialog.rule_second,
+                   _button(root, 'Add rule'), _button(root, 'Remove rule'),
+                   _button(root, 'Remove from fixed background'), _button(root, 'Start calculation'), dialog.status_line]
+        widgets += [widget for widget in _widgets(root) if widget.winfo_class() == 'TLabel' and widget.winfo_ismapped() and
+                    _safe_text(widget) and str(widget.cget('style')) in ('Inset.TLabel', 'InsetTitle.TLabel')]
+        seen['bounds'] = [(str(widget), widget.winfo_rootx() - root.winfo_rootx(),
+                           widget.winfo_rooty() - root.winfo_rooty(), widget.winfo_width(), widget.winfo_height())
+                          for widget in widgets]
+        seen['labels_fit'] = all(widget.winfo_height() >= widget.winfo_reqheight() for widget in widgets
+                                if widget.winfo_class() == 'TLabel')
+        seen['window'] = (root.winfo_width(), root.winfo_height())
+        seen['table_height'] = dialog.rule_tree.winfo_height()
+        dialog.notebook.select(2)
+        root.update()
+        seen['preview_bounds'] = (dialog.case_preview.winfo_rooty() - root.winfo_rooty(),
+                                  dialog.case_preview.winfo_height())
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    width, height = seen['window']
+    assert all(0 <= x and 0 <= y and x + w <= width and y + h <= height
+               for _, x, y, w, h in seen['bounds']), seen
+    assert seen['labels_fit'], seen
+    assert seen['table_height'] >= 26, seen
+    top, preview_height = seen['preview_bounds']
+    assert top >= 0 and preview_height >= 26 and top + preview_height <= height, seen
 
 
 def test_gui_13_timeline_draws_every_outage_of_the_case(monkeypatch, records, config):
@@ -256,6 +312,9 @@ def test_gui_13_timeline_draws_every_outage_of_the_case(monkeypatch, records, co
 
     assert "FS1" in seen["labels"] and "FS2" in seen["labels"]
     assert len(seen["bars"]) >= 3, "two bars and their overlap"
+    assert not any(character.isdigit() for label in seen["labels"] if label not in ("FS1", "FS2", "FS3", "FS4")
+                   for character in label), "no dates and no numbers on the timeline"
+    assert all(label in ("FS1", "FS2", "FS3", "FS4") for label in seen["labels"]), seen["labels"]
 
 
 def test_gui_14_to_16_options_n1_disabled_period_shown_no_optimisation(monkeypatch, records, config):
@@ -322,9 +381,9 @@ def test_new_case_gets_a_standard_name_without_any_extra_window(monkeypatch, rec
 
     _, seen = _run(monkeypatch, records, config, steps)
 
-    assert seen["selected"] == ("C1",) and seen["row"][0] == "Case 1"
+    assert seen["selected"] == ("C1",) and seen["row"][1] == "Case 1"
     assert "Toplevel" not in seen["new_windows"] and seen["editing"] is None
-    assert seen["headings"] == ["Planning case", "Outages", "Status"], "no ID column"
+    assert seen["headings"] == ["Run", "Planning case", "Outages", "Status"], "no ID column"
     assert seen["buttons"] == ["Copy", "Delete", "New"], "no Edit button"
 
 
@@ -332,7 +391,7 @@ def test_double_click_renames_a_case_in_place(monkeypatch, records, config):
     def steps(dialog, root, seen):
         tree = dialog.case_tree
         _select_case(dialog, root, "B")
-        x, y, _, height = tree.bbox("B")
+        x, y, _, height = tree.bbox("B", "name")
         dialog.on_case_double_click(type("Event", (), {"x": x + 5, "y": y + height // 2})())
         root.update()
         entry = dialog.inline_edit["entry"]
@@ -341,17 +400,17 @@ def test_double_click_renames_a_case_in_place(monkeypatch, records, config):
         entry.insert(0, "Winter")
         entry.event_generate("<Return>")
         root.update()
-        seen["renamed"] = (tree.item("B", "values")[0], dialog.inline_edit, entry.winfo_exists())
+        seen["renamed"] = (tree.item("B", "values")[1], dialog.inline_edit, entry.winfo_exists())
         seen["still_open"] = root.winfo_exists()
         dialog.rename_in_place("B")
         dialog.inline_edit["entry"].delete(0, "end")
         dialog.inline_edit["entry"].event_generate("<Escape>")
         root.update()
-        seen["escape"] = (tree.item("B", "values")[0], root.winfo_exists())
+        seen["escape"] = (tree.item("B", "values")[1], root.winfo_exists())
         dialog.rename_in_place("B")
         dialog.inline_edit["entry"].delete(0, "end")
         dialog.finish_editing()
-        seen["empty"] = tree.item("B", "values")[0]
+        seen["empty"] = tree.item("B", "values")[1]
 
     _, seen = _run(monkeypatch, records, config, steps)
 
@@ -448,11 +507,11 @@ def test_refreshes_reuse_widgets_and_render_once(monkeypatch, records, config):
         time.sleep(0.2)  # longer than the 120 ms pause of a typed filter
         root.update()
         seen["renders"] = len(renders)
-        dialog.case_table.values[0].set("Summer")
+        dialog.case_table.values[1].set("Summer")
         dialog.case_table.render()
         dialog.messagebox.askyesno = lambda *_args, **_kw: True
         dialog.one_case_per_outage()
-        seen["case_filter"] = dialog.case_table.values[0].get()
+        seen["case_filter"] = dialog.case_table.values[1].get()
         seen["shown"] = len(dialog.case_tree.get_children())
 
     _, seen = _run(monkeypatch, records, config, steps)
@@ -460,6 +519,84 @@ def test_refreshes_reuse_widgets_and_render_once(monkeypatch, records, config):
     assert seen["same_labels"], "the preview updates its labels instead of rebuilding them"
     assert seen["pending"] is None and seen["renders"] == 1
     assert seen["case_filter"] == "" and seen["shown"] == len(records)
+
+
+def test_large_outage_table_updates_one_checkbox_without_rebuilding_or_scrolling(monkeypatch, records, config):
+    many = records + [dict(records[3], key="P\\Extra{}".format(i), id="Extra{}".format(i),
+                           name="Extra{}".format(i)) for i in range(1000)]
+
+    def steps(dialog, root, seen):
+        tree = dialog.available_tree
+        key = many[504]["key"]
+        tree.selection_set(key)
+        tree.see(key)
+        root.update()
+        scroll = tree.yview()
+        operations = {"insert": 0, "delete": 0, "item": 0}
+        for name in operations:
+            original = getattr(tree, name)
+
+            def counted(*args, name=name, original=original, **kwargs):
+                if name != "item" or kwargs:
+                    operations[name] += 1
+                return original(*args, **kwargs)
+            monkeypatch.setattr(tree, name, counted)
+
+        dialog.toggle_outage(key)
+        root.update()
+        seen["operations"] = dict(operations)
+        seen["scroll"] = (scroll, tree.yview())
+        seen["selection"] = tree.selection()
+        seen["mark"] = tree.item(key, "values")[0]
+        _select_case(dialog, root, "B")
+        seen["switch_operations"] = dict(operations)
+        seen["switched_mark"] = tree.item(key, "values")[0]
+
+    _, seen = _run(monkeypatch, many, config, steps)
+
+    assert seen["operations"] == {"insert": 0, "delete": 0, "item": 1}
+    assert seen["scroll"][1] == pytest.approx(seen["scroll"][0])
+    assert seen["selection"] == (many[504]["key"],)
+    assert seen["mark"] == gl.MARK_IN_CASE and seen["switched_mark"] == gl.MARK_FREE
+    assert seen["switch_operations"]["insert"] == seen["switch_operations"]["delete"] == 0
+
+
+def test_filtered_rows_reattach_with_current_values_and_removed_rows_stay_gone(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        table, tree = dialog.available_table, dialog.available_tree
+        key = records[3]["key"]
+        tree.selection_set(key)
+        tree.focus(key)
+        table.toggle_sort(1)
+        table.values[0].set("in case")
+        table.render()
+        seen["filtered"] = tree.get_children()
+        seen["selection"] = tree.selection()
+        seen["focus"] = tree.focus()
+        dialog.toggle_outage(key)
+        seen["added"] = tree.get_children()
+        seen["mark"] = tree.item(key, "values")[0]
+        dialog.toggle_outage(key)
+        seen["hidden_again"] = key not in tree.get_children()
+        table.clear_filters()
+        seen["restored"] = (len(tree.get_children()), tree.item(key, "values")[0])
+        table.values[0].set("in case")
+        table.render()
+        table.set_rows([row for row in table.rows if row[0] != key])
+        table.clear_filters()
+        seen["deleted"] = (tree.exists(key), key in tree.get_children())
+        seen["sorted"] = [tree.item(item, "values")[1] for item in tree.get_children()]
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    assert seen["filtered"] == (records[0]["key"], records[1]["key"])
+    assert seen["selection"] == ()
+    assert seen["focus"] == "", "keyboard actions must not target a filtered-out row"
+    assert seen["added"] == (records[0]["key"], records[1]["key"], records[3]["key"])
+    assert seen["mark"] == gl.MARK_IN_CASE and seen["hidden_again"]
+    assert seen["restored"] == (len(records), gl.MARK_FREE)
+    assert seen["deleted"] == (False, False)
+    assert seen["sorted"] == sorted(seen["sorted"])
 
 
 def test_workspace_runs_available_outages_then_case_outages_then_cases(monkeypatch, records, config):
@@ -478,18 +615,16 @@ def test_workspace_runs_available_outages_then_case_outages_then_cases(monkeypat
     assert seen["cases_share"] < 0.3
 
 
-def test_hover_explains_the_relations_and_the_controls(monkeypatch, records, config):
+def test_hover_explains_the_controls_without_case_relations(monkeypatch, records, config):
     def steps(dialog, root, seen):
-        seen["relations"] = {name: dialog.tip_text(dialog.relation_labels[name]) for name in dialog.relation_labels}
-        seen["lists"] = {name: dialog.tip_text(box) for name, box in dialog._relation_lists.items()}
-        seen["labels"] = [label.cget("text") for label in dialog.relation_labels.values()]
+        seen["texts"] = _texts(root)
         seen["buttons"] = {label: dialog.tip_text(_button(root, label))
                            for label in ("New", "Copy", "Delete", "Add to case", "Set as fixed background",
                                          "Remove from case", "Start calculation", "Cancel")}
-        status = dialog.case_table.labels[2]
+        status = dialog.case_table.labels[3]
         seen["status_header"] = dialog.tip_text(status)
         seen["filter"] = dialog.tip_text(dialog.member_table.inputs[0])
-        tooltip = next(tip for tip in dialog.tooltips if tip.widget is dialog.relation_labels["requires"])
+        tooltip = next(tip for tip in dialog.tooltips if tip.widget is _button(root, "Copy"))
         tooltip.show()
         root.update()
         seen["shown"] = tooltip.window is not None and tooltip.window.winfo_ismapped()
@@ -506,16 +641,12 @@ def test_hover_explains_the_relations_and_the_controls(monkeypatch, records, con
 
     _, seen = _run(monkeypatch, records, config, steps)
 
-    assert seen["labels"] == [label + " ⓘ" for _, label in gl.RELATION_LABELS]
-    for name in ("includes", "requires", "alternatives"):
-        assert seen["relations"][name] == seen["lists"][name] == gl.HELP_TEXTS[name]
-    assert "joint plan" in seen["relations"]["includes"] and "one QDS run" in seen["relations"]["includes"]
-    assert "NOT EVALUATED" in seen["relations"]["requires"] and "Also contains" in seen["relations"]["requires"]
-    assert "either - or" in seen["relations"]["alternatives"] and "both ways" in seen["relations"]["alternatives"]
+    assert not any(label in text for text in seen["texts"]
+                   for label in ("Relations to other cases", "Also contains", "Only valid with", "Alternative to"))
     assert all(seen["buttons"].values()), seen["buttons"]
     assert "excluded" in seen["status_header"] and "sort" in seen["status_header"]
     assert "contains this text" in seen["filter"]
-    assert seen["shown"] and seen["shown_text"] == [gl.HELP_TEXTS["requires"]]
+    assert seen["shown"] and seen["shown_text"] == [gl.HELP_TEXTS["Copy"]]
     assert seen["hidden"][0], seen["hidden"][1]
 
 
@@ -542,3 +673,41 @@ def test_errors_in_buttons_are_shown_not_swallowed(monkeypatch, records):
 
     assert outcome is None
     assert shown == ["ValueError: bad input"]
+
+
+def test_run_flags_toggle_the_clicked_case_and_update_the_settings_preview(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        tree = dialog.case_tree
+        seen["initial"] = dialog.case_preview.get('1.0', 'end')
+        x, y, width, height = tree.bbox('B', 'enabled')
+        tree.event_generate('<Button-1>', x=x + width // 2, y=y + height // 2)
+        root.update()
+        seen["off"] = (dialog.editor.case('A').get('enabled', True), dialog.editor.case('B')['enabled'],
+                       tree.item('B', 'values')[0], tree.item('B', 'values')[3])
+        seen["preview_off"] = dialog.case_preview.get('1.0', 'end')
+        seen["panel_removed"] = 'Selected case' not in _texts(root)
+        tree.focus_force()
+        tree.focus('B')
+        tree.event_generate('<space>')
+        root.update()
+        seen["on"] = (dialog.editor.case('B')['enabled'], tree.item('B', 'values')[0])
+        seen["preview_on"] = dialog.case_preview.get('1.0', 'end')
+        seen["read_only"] = str(dialog.case_preview.cget('state'))
+        seen["editing"] = dialog.inline_edit
+        dialog.case_table.values[0].set('included')
+        dialog.case_table.render()
+        seen["filter_before"] = tree.get_children()
+        dialog.toggle_case_enabled('B')
+        seen["filter_after"] = tree.get_children()
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    assert 'Summer (A)' in seen['initial'] and 'North-east (B)' in seen['initial']
+    assert 'Assessment: n-0' in seen['initial'] and 'QDS period: test period' in seen['initial']
+    assert 'FS1:' in seen['initial'] and 'FS3:' in seen['initial']
+    assert seen['off'] == (True, False, '☐', 'excluded')
+    assert 'North-east (B)' not in seen['preview_off']
+    assert 'Excluded (Run flag off): North-east' in seen['preview_off']
+    assert seen['on'] == (True, '☑') and 'North-east (B)' in seen['preview_on']
+    assert seen['read_only'] == 'disabled' and seen['editing'] is None and seen['panel_removed']
+    assert seen['filter_before'] == ('A', 'B') and seen['filter_after'] == ('A',)

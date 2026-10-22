@@ -15,6 +15,7 @@ package.
 
 ## Layout
 
+The window opens centred at about 86 % of the screen (at most 1480 × 860, never larger than the screen).
 Three tabs; a status line and the action bar stay visible on every tab:
 
 ```
@@ -26,11 +27,9 @@ Three tabs; a status line and the action bar stay visible on every tab:
 | ☑ in case FS Bedarf 1 NE_L1  ...     | [          ][     ][    ][   ][  ] | Summer         2  ready|
 | ☐       FS Bedarf 3    NE_L7  ...    | FS Bedarf 1    NE_L1  ...          | North-east     1  ready|
 | fixed   FS Hintergrund NE_L5  ...    | FS Bedarf 2    NE_L2  ...          | 4 shown                |
-| 48 shown                             | 2 shown                            | [New][Copy][Edit][Del.]|
+| 48 shown                             | 2 shown                            | [New][Copy][Delete]    |
 |                                      | [Remove from case] [Details]       | Selected case          |
 | [Add to case] [Set as fixed] [Det.]  | Timeline of the case               |  [x] Include           |
-|                                      |   |=====FS Bedarf 1=====|          |  Relations to other ⓘ  |
-|                                      |     |====FS Bedarf 2====|          |  Also | Only | Altern. |
 |                                      |                                    |                        |
 +--------------------------------------+------------------------------------+------------------------+
  [Save configuration] [Load saved]   QDS ... · n-0 · 3 of 4 cases ready · 1 problem  [Cancel] [Start calculation]
@@ -54,15 +53,12 @@ Three tabs; a status line and the action bar stay visible on every tab:
     the table; at five, *New* and *Copy* are locked. Table *Planning case, Outages*
     (number of outages), *Status* (`ready`, `not calculated`, `excluded`).
     Nobody types an ID: GridLens numbers the cases itself (C1 … C5, the lowest
-    free number) and uses that ID only internally (relations, result objects
-    `GridLens_<stamp>_C1`, report). Below: *New, Copy, Edit, Delete*, *One case
+    free number) and uses that ID only internally (result objects
+    `GridLens_<stamp>_C1`, report). Below: *New, Copy, Delete*, *One case
     per planned outage* (creates at most five), and for the selected case
-    *Include in the calculation* and its *Relations to other cases*, chosen by clicking: *Also contains* (joint plan), *Only valid with*
-    (conditional case), *Alternative to* (either – or). Name and description
-    take no room here: a **double-click on the case** (or *Edit*) opens a small
-    window with both; the centre shows the description next to the case name. See
-    [Relations between planning cases](#relations-between-planning-cases).
-- **Fixed background & rules** – left the fixed background outages (Rfix) with
+    *Run*. Every case contains only the outages assigned
+    directly to it. Copying, editing or deleting a case leaves the others unchanged.
+- **Fixed background & rules** – visible explanations show when to use each optional section, the T1 / North / South example and what each rule checks. Leave both empty for independent cases with no shared outages or extra rules. Left: the fixed background outages (Rfix) with
   *Remove from fixed background*; right the rules between planned outages with three
   drop-downs (*outage, rule, outage*; a name that occurs twice in the project
   carries its PowerFactory path), *Add rule*, *Remove rule*.
@@ -90,53 +86,52 @@ Three tabs; a status line and the action bar stay visible on every tab:
 ### Hover help
 
 Resting the mouse on a control for about half a second shows what it does to
-the calculation: every button, the three relation headings and lists (marked
-ⓘ), *Include in the calculation*, the name and description fields, the case
+the calculation: every button, *Run*, the name and description fields, the case
 counter, the column headings with categories (*Status*, *In case*, *Outages*,
 *Priority*, *Rule*; each also says how sorting works), every filter field, the
 timeline legend, the rule drop-down, n-1, the QDS period and the status line.
 The texts are in `HELP_TEXTS` and `COLUMN_HELP` of `gridlens_report.py`
 (class `Tooltip`, standard library only).
 
-## Relations between planning cases
+## Window design and visible guidance
 
-A planning case is a set of planned outages. The three relations say how
-cases belong together. They are set on the **right**, in *Selected case* →
-*Relations to other cases*: select a case in the table, then click other
-cases in one of the three lists (a click selects a case and highlights it, a second click
-deselects it; several are allowed). Every list shows only the other cases. The effect is
-visible at once in the status line and on *Review & start*.
+A navy header identifies the planning workspace. The tables use a shared blue-grey
+palette, larger native text, 26-pixel rows and distinct selected rows. Instructions
+wrap to the pane width; the status line sits above the action row so it cannot
+push Cancel or Start calculation out of the window. Ctrl+Tab navigates the tabs.
+The first case-table column is a Run flag (☑/☐). Click it or press Space on a focused row to include or exclude that case. Excluded cases remain saved and are omitted from calculation and report. The separate Selected case checkbox panel is removed. The rule editor has labelled,
+flexible-width fields. All widgets remain standard Tk/ttk; no new dependency or
+animation was added. Both the publisher and standalone GUI test use the same design.
 
-| Relation (configuration field) | Meaning | What GridLens does |
-|---|---|---|
-| **Also contains** (`includes`) | joint plan: this case contains every planned outage of the selected cases, and what those contain | one QDS run with all of them active at the same time; the selected cases keep their own runs unless they are excluded. A case that contains itself through others (a cycle) is refused. |
-| **Only valid with** (`requires`) | condition: this case only makes sense together with the selected cases | the case is calculated only if it also contains them (through *Also contains*, directly or indirectly). Otherwise it is reported as NOT EVALUATED with the reason; nothing is added automatically. Deleting a required case excludes this case. |
-| **Alternative to** (`exclusive_groups`) | either – or: alternative plans for the same work | each is calculated on its own; a case that contains two alternatives through *Also contains* is NOT EVALUATED. The relation works both ways. |
+## Independent planning cases
 
-Example with three cases:
+Build every case by assigning its planned outages directly. For example:
 
-- *Line north* (C1: FS Nord) and *Line south* (C2: FS Süd) are separate measures.
-- *Joint* (C3) has no outage of its own and **also contains** C1 and C2: one
-  run with both lines out. A change to C1 carries over to C3.
-- *Bypass* (C4: switching measure) is **only valid with** C1: it is calculated
-  only after C4 also contains C1 (select C1 under *Also contains* as well);
-  otherwise Review & start lists *case C4 may only be evaluated together with
-  case C1*.
-- *Week 10* (C5) is an **alternative to** *Line north* (same work, other
-  date): both are calculated on their own, but a case that contains both is
-  refused.
+- C1: FS North.
+- C2: FS South.
+- C3: FS North and FS South, both assigned directly.
 
-The rules on *Fixed background & rules* work one level lower, between two
+The same outage can belong to several cases. No case inherits outages from
+another case, depends on it or excludes a combination. To create a variant,
+copy a case and change the copy. Deleting or excluding C1 leaves C2 and C3 unchanged.
+
+Saved version 1 configurations are converted to version 2 in memory when opened:
+formerly inherited outages and their effective own dates become direct assignments;
+case dependencies and alternatives are removed. Review & start shows a migration
+notice if relations were present. The original file stays unchanged until you save.
+Invalid legacy references or cycles are reported with the file path rather than
+silently losing assignments.
+
+The rules on *Fixed background & rules* apply between two
 **planned outages** in every case: *must not overlap* (windows must not
 overlap), *second only after the first* (the second starts after the first
-has ended), *only together* (a case with one contains the other, at the same
-time). A case that breaks a rule is not calculated and is reported.
+has ended), *only together* (a case with one contains the other and their windows overlap). A case that breaks a rule is not calculated and is reported.
 
 ## What a click does
 
 | Action | Effect |
 |---|---|
-| Click a case on the right (`<<TreeviewSelect>>`) | the centre shows its planned outages at once; the left marks them `in case`; name, description, relations, timeline, the other tabs and the status line follow. No extra window. |
+| Click a case on the right (`<<TreeviewSelect>>`) | the centre shows its planned outages at once; the left marks them `in case`; name, description, timeline, the other tabs and the status line follow. No extra window. |
 | Type into a filter field / choose in a filter list | the table shows only matching rows at once; *Clear filters* shows all again |
 | Click a column header | sorts by that column; a second click reverses the order |
 | Click a case in a relation list | selects (highlights) or deselects it; the relation applies at once |
@@ -147,14 +142,15 @@ time). A case that breaks a rule is not calculated and is reported.
 | *Remove from case* or Delete key in the centre | only the assignment ends; the planned outage in PowerFactory is untouched. |
 | Double-click in the centre or *Details* | a compact window with what PowerFactory holds for the outage (object, class, equipment, actions, window, priority, status, cases it is used in) and its own dates in this case. |
 | *Set as fixed background* | the outage becomes part of the reference and of every case (Rfix). Refused while the outage is assigned to a case, so it never acts twice. |
-| *New* | creates *Case n* with the next generated ID (C1 … C5), selects it and opens its name and description window. Locked at five cases. |
-| *Copy* | new generated ID, name *… (copy)*, same outages, own dates and relations (including *Alternative to*); independent afterwards. Locked at five cases. |
-| Double-click a case, *Edit* or Enter in the case list | a small window *Planning case* with *Name* and *Description*; *OK* (Enter) applies, *Cancel* (Escape) leaves both unchanged; an empty name is refused. The generated ID that relations and result objects use stays. |
+| *New* | creates *Case n* with the next generated ID (C1 … C5) and selects it; no extra window. Locked at five cases. |
+| *Copy* | new generated ID, name *… (copy)*, same outages and own dates; fully independent. Locked at five cases. |
+| Double-click a case (or F2 / Enter) in the case list | the name becomes editable right in its row; Enter or a click elsewhere applies, Escape cancels only the edit; an empty name keeps the old one. The generated ID used for result objects stays. |
+| Double-click the description next to the case name in the centre | the description becomes editable in place, the same way; without one it reads *(double-click to add a description)* |
 | Double-click a row in the left list | the details window of that planned outage |
-| *Delete* | asks once and names the cases that change; removes the case and every reference to it (other cases' relations, alternatives). A case that is only valid with the deleted one is excluded, so it is never calculated without its condition. The planned outages stay. |
+| *Delete* | asks once and removes only the selected case. Other cases and the PowerFactory planned outages stay unchanged. |
 | *One case per planned outage* | replaces the cases by one per outage in the simulated period, at most five (and says so when outages are left out); ignored and fixed outages get none. |
 | *Save configuration* / *Load saved configuration* | writes / reads the project's JSON file with revision, user and time; the project is not touched. |
-| *Cancel*, Escape, window close | ends the run: nothing calculated, nothing saved, nothing in the project changed. |
+| *Cancel*, Escape, window close | ends the run: nothing calculated, saved or published, nothing in the project changed. The cancellation is passed to the report caller; the extension does not finish normally and hand control back for rendering. IntReport behaviour still needs verification in PowerFactory. |
 | *Start calculation* | checks (see below), closes the window and hands the configuration to GridLens; then the existing calculation and PDF publication run. No result window follows. |
 
 ## Timeline
@@ -162,8 +158,8 @@ time). A case that breaks a rule is not calculated and is reported.
 The timeline is a planning check only (no load flow, voltage or other
 result). One row per case outage (blue) and per fixed outage (grey); light blue
 shading marks times when more than one is active. Overlapping outages are
-normal planning: they are neither a warning nor an error; date labels at the start and
-end of every busy period. A long empty period (e.g. between KW10 and KW40)
+normal planning: they are neither a warning nor an error. The timeline shows
+no dates and no numbers, only the order and the overlap. A long empty period (e.g. between KW10 and KW40)
 is drawn as a short light band, so far-apart outages stay readable
 (`timeline_scale`).
 
@@ -180,11 +176,11 @@ is drawn as a short light band, so far-apart outages stay readable
 
 ## Checks on Start calculation
 
-1. The configuration is valid (IDs, references, own dates, rules, relations).
+1. The configuration is valid (IDs, outage paths, own dates, outage rules).
 2. At least one case can be calculated; otherwise GridLens asks whether to
    calculate the reference only.
-3. Cases that cannot be calculated (missing planned outage, alternatives
-   combined, rule broken, outside the period, own dates) are listed with
+3. Cases that cannot be calculated (missing planned outage, broken outage
+   rule, outside the period, own dates) are listed with
    their reason; GridLens asks whether to continue and reports them as
    NOT EVALUATED / NOT SIMULATED.
 4. Only n-0 is requested.
@@ -194,7 +190,7 @@ is drawn as a short light band, so far-apart outages stay readable
 ```mermaid
 flowchart LR
     W["Case manager (CaseManagerDialog)"] -- "every click" --> E["CaseEditor: configuration copy"]
-    E -- "Start calculation" --> C["configuration (cases, background, relations, rules, assessments)"]
+    E -- "Start calculation" --> C["configuration (cases, background, rules, assessments)"]
     C --> R["resolve_request: checked planning cases, reference type"]
     R --> G["execute_gridlens: REF + one QDS per case (unchanged)"]
     G --> P["publish_report: tables for the PDF (unchanged)"]
@@ -223,22 +219,22 @@ project. New fields since the redesign: `assessments` (`["n-0"]`) and per case
 cases (e.g. saved by GridLens 8.0) still opens in the case manager, shows *6 of 5
 cases* in red and the reason under *Review & start*, so cases can be deleted;
 calculating, saving or `CASE_SOURCE = 'saved'` refuse it with that reason; only `CASE_SOURCE = 'per_outage'` (no window)
-still creates one case per outage without a limit. A case excluded with *Include in the calculation* is neither calculated nor
-reported but can still be part of another case.
+still creates one case per outage without a limit. A case excluded with *Run* is neither calculated nor
+reported; other cases are unaffected.
 
 ## What changed against the previous window
 
 | Kept | Changed |
 |---|---|
-| cases: new, copy, rename, delete, description, one case per outage | case list as a filterable table with FS count and status, **at most 5 cases**, **IDs generated (C1 … C5), never typed**; new case without dialog; rename in place; delete cleans references |
+| cases: new, copy, rename, delete, description, one case per outage | case list as a filterable table with FS count and status, **at most 5 cases**, **IDs generated (C1 … C5), never typed**; new case without dialog; rename in place; delete affects only the selected case |
 | assignment of outages, an outage in several cases | assignment from a separate list of available outages with search, filter and *Add to case*; the case table shows only the case's outages |
 | fixed background outages (Rfix) | own section and own button; a fixed outage cannot also be a case outage |
-| relations *includes*, *requires*, alternatives | chosen from lists of existing cases instead of typed IDs |
+| – | **removed:** relations between cases; assign outages directly to independent cases |
 | rules `not_overlap`, `order`, `together` | added with three drop-downs instead of typed text lines |
 | own dates per case (recorded, not applied) | in the details window of the outage |
 | save configuration, preview, Cancel, OK | preview as short lines; *Load saved configuration*; OK is now *Start calculation* |
 | – | **removed:** Conservative/Optimized choice and the proposal of shorter windows |
-| – | **new:** three tabs (Workspace, Fixed background & rules, Review & start), a filter row and header sorting in every table, status line, problem list, timeline, n-0/n-1 choice, per-case *Include in the calculation* |
+| – | **new:** three tabs (Workspace, Fixed background & rules, Review & start), a filter row and header sorting in every table, status line, problem list, timeline, n-0/n-1 choice, per-case *Run* |
 
 ## Trying it in PowerFactory
 
@@ -257,3 +253,13 @@ The copy is marked in the file and written by `tools/sync_case_manager_copy.py`
 `gridlens_report.py` runs `python3 tools/sync_case_manager_copy.py`;
 `test_the_copied_case_manager_matches_gridlens_report` fails while the copy is
 out of date.
+
+## Case settings preview
+
+Review & start includes a read-only, scrollable Cases to calculate preview.
+It updates immediately when Run flags or case settings change. Each ready case
+lists its name, description, planned outages and effective time windows, n-0
+assessment, full QDS period and shared background. The common settings name the
+reference, background outage windows and planning rules. Identical cases show
+which result is planned for reuse. Blocked cases show their reason; cases with
+the Run flag off are listed separately as excluded. Previewing starts no calculation.
