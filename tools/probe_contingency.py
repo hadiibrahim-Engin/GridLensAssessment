@@ -34,7 +34,7 @@ rules with artificial objects; that is no guarantee for an unknown real project
 
 import sys
 
-PROBE_VERSION = "2.2"
+PROBE_VERSION = "2.3"
 PRIVACY_MODE = "STRICT"
 
 # --- What may be called, checked and printed --------------------------------
@@ -43,12 +43,13 @@ PRIVACY_MODE = "STRICT"
 #   DataObject.GetClassName / GetContents / HasAttribute / GetAttributeType,
 #   ElmRes.Load / Release / GetNumberOfRows / GetNumberOfColumns / GetValue / GetVariable,
 #   ComOutage.GetObject ("get the element stored in line ..."),
-#   ElmRes.GetRelCase ("get the contingency object for the given case number"), called with fixed numbers only.
+#   ElmRes.GetRelCase ("get the contingency object for the given case number"), called with fixed numbers only,
+#   ElmRes.GetObjectValue ("returns a value from a result object for row iX"; only the class of the object is used).
 ALLOWED_CALLS = frozenset((
     "GetActiveStudyCase", "GetActiveProject", "GetInterfaceVersion", "GetCalcRelevantObjects",
     "GetClassName", "GetContents", "HasAttribute", "GetAttributeType",
     "Load", "Release", "GetNumberOfRows", "GetNumberOfColumns", "GetValue", "GetVariable",
-    "GetObject", "GetRelCase",
+    "GetObject", "GetRelCase", "GetObjectValue",
 ))
 # Attribute values that may be read: references to the result objects, used and never shown.
 REFERENCE_ATTRIBUTES = frozenset(("p_rescnt", "p_rescntDC"))
@@ -64,6 +65,8 @@ SIMOUTAGE_ATTRIBUTES = (
 SIMOUTAGE_METHODS = ("Execute", "ExecuteAndCheck", "AddCntcy", "AddContingencies", "RemoveContingencies",
                      "ClearCont", "Reset", "Update", "GetNTopLoadedElms")
 OUTAGE_ATTRIBUTES = ("outserv", "n_k", "number")
+STATSIM_ATTRIBUTES = ("iopt_maint", "startTime", "endTime", "stepSize", "stepUnit", "calcPeriod", "results")
+SUBRESULT_ATTRIBUTES = ("cnttime", "pResElm")
 NMINK_ATTRIBUTES = ("optSel", "iopt_lne", "iopt_trf", "iopt_sym", "iopt_n1", "iopt_n2")
 NMINK_METHODS = ("AddRef", "Clear", "GenerateContingenciesForAnalysis", "GetAll")
 ELMRES_READ_METHODS = ("Load", "Release", "GetNumberOfRows", "GetNumberOfColumns", "GetValue", "GetVariable",
@@ -106,7 +109,7 @@ ATTRIBUTE_TYPES = frozenset(("INTEGER", "INTEGER64", "DOUBLE", "STRING", "OBJECT
 # Labels whose value is a small integer (validated) instead of a token.
 INTEGER_LABELS = frozenset(("Interface version", "Python major", "Python minor"))
 SECTIONS = ("PowerFactory API", "Study case", "Contingency Analysis", "Contingency set", "Contingency Definition",
-            "ElmRes", "Result Structure", "Network scope", "Storage", "Privacy")
+            "QDS command", "ElmRes", "Result Structure", "Network scope", "Storage", "Privacy")
 ERROR_CODES = {section: "ERROR_{:02d}".format(number) for number, section in enumerate(SECTIONS, 1)}
 PRIVACY_LABELS = ("Object names collected", "Project paths collected", "Network parameters collected",
                   "Raw result values output", "Time stamps output", "Counts or sizes output", "Files written",
@@ -120,7 +123,7 @@ def _labels():
     labels |= {"Time sweep interface", "Planned outage interface", "Recording limit interface",
                "Result interface", "Time phase interface", "Remedial action interface",
                "Regional analysis interface"}
-    for attribute in SIMOUTAGE_ATTRIBUTES + OUTAGE_ATTRIBUTES + NMINK_ATTRIBUTES:
+    for attribute in SIMOUTAGE_ATTRIBUTES + OUTAGE_ATTRIBUTES + NMINK_ATTRIBUTES + STATSIM_ATTRIBUTES + SUBRESULT_ATTRIBUTES:
         labels |= {"Attribute {}".format(attribute), "Type {}".format(attribute)}
     labels |= {"ComSimoutage.{}".format(name) for name in SIMOUTAGE_METHODS}
     labels |= {"ComNmink.{}".format(name) for name in NMINK_METHODS}
@@ -132,7 +135,9 @@ def _labels():
                "Loading variables recorded", "Voltage variables recorded", "Contingency identification",
                "Time phase identification", "Time identification", "Sub-result rows present",
                "Sub-result columns present", "Index column status", "Index column status (column -1)",
-               "Row-to-contingency mapping (GetRelCase)"}
+               "Row-to-contingency mapping (GetRelCase)", "Row objects are contingencies (GetObjectValue)",
+               "Column objects are equipment (GetObject)"}
+    labels |= {"QDS time definition attributes", "IntPlannedout instances"}
     labels |= {"Variable {}".format(name) for name in REPORTED_VARIABLES}
     labels |= {"Grids readable", "Element grid attribute"}
     labels |= {"{} instances".format(name) for name in STORAGE_CLASSES}
@@ -344,6 +349,17 @@ def check_contingency_set(api, report, state):
                                                 "PRESENT", "ABSENT"))
 
 
+def check_statsim(api, report, state):
+    """The QDS command of the same study case: whether its time definition can be compared with the sweep."""
+    command = state.get("ComStatsim")
+    if command is None:
+        report.add("QDS time definition attributes", "NOT_APPLICABLE")
+        return
+    present = _attributes(api, report, command, STATSIM_ATTRIBUTES)
+    report.add("QDS time definition attributes", flag(all(present[name] for name in ("startTime", "endTime", "stepSize",
+                                                                                     "stepUnit")), "PRESENT", "ABSENT"))
+
+
 def check_nmink(api, report, state):
     command = state.get("ComNmink")
     if command is None:
@@ -383,7 +399,7 @@ def _inspect(api, result):
     """Structure of one result object as booleans and status codes; values are never kept or shown."""
     found = dict.fromkeys(("readable", "rows", "columns", "index", "sparse", "contingency", "phase", "loading",
                            "voltage", "relcase"), False)
-    found.update(variables=set(), index_code=None, index_code_last=None)
+    found.update(variables=set(), index_code=None, index_code_last=None, row_objects=False, column_objects=False)
     try:
         api.call(result, "Load")
     except ProbeError:
@@ -412,6 +428,13 @@ def _inspect(api, result):
             found["index_code_last"] = last if found["index_code_last"] is None else found["index_code_last"]
             for column in range(min(columns, SAMPLE_COLUMNS)):
                 found["sparse"] |= _status(api.call(result, "GetValue", row, column)) == CODE_SPARSE
+        for row in range(min(rows, SAMPLE_ROWS)):
+            returned = api.call(result, "GetObjectValue", row)
+            # Only the class of a returned object is looked at, never the object itself.
+            if isinstance(returned, (list, tuple)) and len(returned) > 1 and returned[0] == CODE_OK:
+                found["row_objects"] |= api.class_of(returned[1]) == "ComOutage"
+        for column in range(min(columns, SAMPLE_COLUMNS)):
+            found["column_objects"] |= api.class_of(api.call(result, "GetObject", column)) in EQUIPMENT_CLASSES
         for number in REL_CASE_NUMBERS:
             try:
                 case = api.call(result, "GetRelCase", number)
@@ -449,6 +472,10 @@ def check_result_structure(api, report, state):
     # The first status code of the index column, with the column omitted and with column -1; never the value.
     report.add("Index column status", _code_token(sample["index_code"]))
     report.add("Index column status (column -1)", _code_token(sample["index_code_last"]))
+    report.add("Row objects are contingencies (GetObjectValue)", flag(sample["row_objects"], "DETECTED", "NOT_DETECTED"))
+    report.add("Column objects are equipment (GetObject)", flag(sample["column_objects"], "DETECTED", "NOT_DETECTED"))
+    if children:
+        _attributes(api, report, children[0], SUBRESULT_ATTRIBUTES)
     relcase = sample["relcase"] or top["relcase"]
     report.add("Row-to-contingency mapping (GetRelCase)", flag(relcase, "DETECTED", "NOT_DETECTED"))
     for name in REPORTED_VARIABLES:
@@ -478,6 +505,8 @@ def check_storage(api, report, state):
         project = api.call(api.app, "GetActiveProject")
     except ProbeError:
         project = None
+    report.add("IntPlannedout instances", flag(project is not None and api.of_class(project, "IntPlannedout", recursive=True),
+                                               "DETECTED", "NOT_DETECTED"))
     for class_name in STORAGE_CLASSES:
         # Stored anywhere in the project, so the search is recursive (GetContents(pattern, 1)).
         found = project is not None and bool(api.of_class(project, class_name, recursive=True))
@@ -491,6 +520,7 @@ CHECKS = (
     ("Contingency Analysis", check_simoutage),
     ("Contingency set", check_contingency_set),
     ("Contingency Definition", check_nmink),
+    ("QDS command", check_statsim),
     ("ElmRes", check_elmres),
     ("Result Structure", check_result_structure),
     ("Network scope", check_network_scope),
