@@ -52,6 +52,8 @@ class App:
         self.folder = Obj("Outages", "IntPrjfolder")
         self.project = Obj("Grid", "IntPrj")
         self.folder.GetContents = self.project.GetContents = lambda pattern, *_: [o for o in outages if pattern.endswith(o.kind)]
+        self.study = Obj("Study", "IntCase")
+        self.study.GetContents = lambda pattern, *_: [self.qds] if pattern == "*.ComStatsim" else []
         self.lines = []
         self.executed = []
         self.qds.Execute = lambda: self.executed.append("QDS")
@@ -67,8 +69,11 @@ class App:
     def GetActiveProject(self):
         return self.project
 
+    def GetActiveStudyCase(self):
+        return self.study
+
     def GetFromStudyCase(self, name):
-        return self.qds if name == "ComStatsim" else None
+        raise AssertionError("GetFromStudyCase creates a missing command; the read-only tool must not use it")
 
 
 def outage(name, day):
@@ -84,8 +89,9 @@ def opened(monkeypatch, tmp_path):
     seen = {}
 
     def answer(result):
-        def run_case_manager(records, config, period, config_path, user="", qds_text=""):
-            seen.update(records=records, config=config, period=period, config_path=config_path, qds_text=qds_text)
+        def run_case_manager(records, config, period, config_path, user="", qds_text="", qds_info=None):
+            seen.update(records=records, config=config, period=period, config_path=config_path, qds_text=qds_text,
+                        qds_info=qds_info)
             return result(records, config) if callable(result) else result
         monkeypatch.setattr(gl, "run_case_manager", run_case_manager)
     return gl, seen, answer
@@ -100,6 +106,7 @@ def test_the_tool_opens_its_case_manager_with_the_project_outages(opened):
 
     assert [record["id"] for record in seen["records"]] == ["FS Bedarf 1", "FS Bedarf 2"]
     assert seen["period"] == PERIOD and seen["qds_text"] == gl.qds_period_text(PERIOD)
+    assert dict(seen["qds_info"])["QDS start"] == gl._format_pf_time(PERIOD[0])
     text = "\n".join(app.lines)
     assert "Cases selected" in text and "PASS" in text and '"assessments": [' in text
     assert app.executed == [], "no QDS is started"

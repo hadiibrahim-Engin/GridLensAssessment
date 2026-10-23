@@ -123,40 +123,26 @@ def test_v37_fifty_outages_in_one_case_are_not_limited():
 
 
 # ---------------------------------------------------------------------------
-# Test C - outages far apart: two windows proposed, nothing skipped unproven
+# Test C - outages far apart: no time optimisation, the complete period runs
 # ---------------------------------------------------------------------------
-def test_c_kw10_and_kw40_give_two_proposed_windows_but_run_conservatively():
+def test_c_kw10_and_kw40_run_over_the_complete_period_without_proposed_windows():
     fs1 = record("FS1", kw(10), kw(11))
     fs2 = record("FS2", kw(40), kw(41))
     request = gl.resolve_request(config([case("A", fs1, fs2)], mode="optimized"), [fs1, fs2], PERIOD)
 
     plan = request["cases"][0]
-    assert len(plan["calc_windows"]) == 2
-    assert plan["calc_windows"][0][0] == kw(10) - gl.WINDOW_WARMUP_HOURS * H
-    summary = gl.optimization_summary(request, PERIOD)
-    assert summary["executed"] is False and summary["admissible"] is False
-    assert "2 window(s)" in summary["summary"]
-    assert gl.qds_mode_text(dict(request, optimization=summary)).startswith("Conservative")
+    assert plan["status"] == gl.PLAN_READY and "calc_windows" not in plan
+    assert "mode" not in request and "optimization" not in request
+    assert gl.qds_mode_text(request).startswith("Complete ComStatsim period")
+    assert "proposed" not in gl.preview_text(request, PERIOD)
 
 
-def test_close_windows_share_one_calculation_window():
-    windows = [(kw(10), kw(10) + 10 * H), (kw(10) + 20 * H, kw(10) + 30 * H)]
-
-    assert gl.calculation_windows(windows, warmup_hours=0, merge_gap_hours=48) == [(kw(10), kw(10) + 30 * H)]
-
-
-def test_time_coupled_models_make_shorter_windows_inadmissible():
-    class App:
-        def GetCalcRelevantObjects(self, pattern):
-            return [object()] if pattern == "*.ElmQdsl" else []
-
-    fs1 = record("FS1", kw(10), kw(11))
-    request = gl.resolve_request(config([case("A", fs1)], mode="optimized"), [fs1], PERIOD)
-
-    summary = gl.optimization_summary(request, PERIOD, App())
-
-    assert summary["time_coupled"] == ["1 ElmQdsl"]
-    assert "time-coupled" in summary["reason"]
+def test_no_time_optimisation_remains_in_the_runtime():
+    for name in ("QDS_WINDOW_MODE", "WINDOW_WARMUP_HOURS", "WINDOW_MERGE_GAP_HOURS", "calculation_windows",
+                 "optimization_summary"):
+        assert not hasattr(gl, name), name
+    saved = gl.empty_case_config()
+    assert "mode" not in saved
 
 
 # ---------------------------------------------------------------------------
@@ -836,10 +822,11 @@ def test_gui_14_and_16_n1_is_refused_and_no_time_optimisation_remains(editor):
 
     assert edit.set_assessments(False, False) == "Select at least one assessment."
     assert "not available" in edit.set_assessments(True, True)
+    assert "not available" in edit.set_assessments(True, False, True)
     assert edit.set_assessments(True, False) is None
-    assert edit.config["assessments"] == ["n-0"] and edit.config["mode"] == "conservative"
+    assert edit.config["assessments"] == ["n-0"] and "mode" not in edit.config
     optimised = gl.CaseEditor(edit.records, dict(edit.config, mode="optimized"), PERIOD)
-    assert optimised.config["mode"] == "conservative"
+    assert "mode" not in optimised.config
     assert not any("optimi" in (label + value).lower() or "window" in label.lower() for label, value in edit.summary()[0])
 
 

@@ -172,8 +172,10 @@ def test_filters_stand_exactly_under_their_columns(monkeypatch, records, config)
     def steps(dialog, root, seen):
         root.update()
         for tab, name in ((0, "case_table"), (0, "member_table"), (0, "available_table"), (1, "fixed_table"),
-                          (1, "rule_table"), (2, "problem_table")):
+                          (1, "rule_table"), (0, "problem_table")):
             dialog.notebook.select(tab)  # a table on a hidden tab is laid out when its tab is shown
+            if tab == 1:
+                dialog.settings_book.select(dialog.fixed_page)
             root.update()
             table = getattr(dialog, name)
             table.layout()
@@ -218,10 +220,11 @@ def test_tabs_status_line_and_problem_list(monkeypatch, records, config):
 
     _, seen = _run(monkeypatch, records, config, steps)
 
-    assert seen["tabs"] == ["Workspace", "Fixed background & rules", "Review & start (1)"]
+    assert seen["tabs"] == ["Case Manager (1)", "Settings"], "exactly two main tabs, no results tab"
     assert "2 of 3 cases ready" in seen["status"] and "1 problem or warning" in seen["status"]
+    assert "default settings" in seen["status"]
     assert seen["problems"] == [("Empty", "Not calculated: no planned outage is assigned.")]
-    assert seen["selected_tab"] == "Review & start (1)"
+    assert seen["selected_tab"] == "Case Manager (1)"
 
 
 def test_fixed_outages_and_rules_live_on_their_own_tab(monkeypatch, records, config):
@@ -247,6 +250,7 @@ def test_fixed_outages_and_rules_live_on_their_own_tab(monkeypatch, records, con
 def test_fixed_tab_explains_shared_outages_rules_and_optional_use_without_hover(monkeypatch, records, config):
     def steps(dialog, root, seen):
         dialog.notebook.select(1)
+        dialog.settings_book.select(dialog.fixed_page)
         root.update()
         seen["visible"] = [_safe_text(widget) for widget in _widgets(root) if widget.winfo_ismapped()]
         dialog.notebook.select(0)
@@ -271,6 +275,7 @@ def test_explanations_and_rule_controls_fit_the_window(monkeypatch, records, con
     def steps(dialog, root, seen):
         root.geometry('{}x{}'.format(*size))
         dialog.notebook.select(1)
+        dialog.settings_book.select(dialog.fixed_page)
         root.update()
         widgets = [dialog.rule_first, dialog.rule_kind, dialog.rule_second,
                    _button(root, 'Add rule'), _button(root, 'Remove rule'),
@@ -284,7 +289,8 @@ def test_explanations_and_rule_controls_fit_the_window(monkeypatch, records, con
                                 if widget.winfo_class() == 'TLabel')
         seen['window'] = (root.winfo_width(), root.winfo_height())
         seen['table_height'] = dialog.rule_tree.winfo_height()
-        dialog.notebook.select(2)
+        dialog.notebook.select(0)
+        dialog.toggle_preview(True)
         root.update()
         seen['preview_bounds'] = (dialog.case_preview.winfo_rooty() - root.winfo_rooty(),
                                   dialog.case_preview.winfo_height())
@@ -320,7 +326,10 @@ def test_gui_13_timeline_draws_every_outage_of_the_case(monkeypatch, records, co
 def test_gui_14_to_16_options_n1_disabled_period_shown_no_optimisation(monkeypatch, records, config):
     def steps(dialog, root, seen):
         seen["texts"] = _texts(root)
-        seen["n1_state"] = str(_button(root, "n-1 - contingency analysis").cget("state"))
+        n1 = _button(root, "n-1 - reference contingency analysis")
+        prime = _button(root, "(n-1)' - contingency analysis with planned-outage scenarios")
+        seen["states"] = (str(n1.cget("state")), str(prime.cget("state")))
+        seen["tips"] = (dialog.tip_text(n1), dialog.tip_text(prime), dialog.tip_text(_button(root, "n-0 - reference QDS")))
         dialog.n0_var.set(False)
         dialog.apply_assessments = lambda: None  # no message box in the test
         seen["n0"] = dialog.n0_var.get()
@@ -328,9 +337,11 @@ def test_gui_14_to_16_options_n1_disabled_period_shown_no_optimisation(monkeypat
     _, seen = _run(monkeypatch, records, config, steps)
 
     assert "QDS: test period" in seen["texts"]
-    assert seen["n1_state"] == "disabled"
+    assert seen["states"] == ("disabled", "disabled")
+    assert all(gl.N1_UNAVAILABLE in tip for tip in seen["tips"][:2])
+    assert "without planned outages and without additional contingencies" in seen["tips"][2]
     assert not any("ptimi" in text or "onservative" in text for text in seen["texts"])
-    assert "n-0 - quasi-dynamic simulation (QDS)" in seen["texts"]
+    assert "n-0 - reference QDS" in seen["texts"]
 
 
 def test_gui_17_cancel_returns_nothing(monkeypatch, records, config):
@@ -346,7 +357,7 @@ def test_gui_18_and_19_start_hands_over_the_configuration_and_opens_nothing_else
 
     outcome, _ = _run(monkeypatch, records, config, steps)
 
-    assert outcome["assessments"] == ["n-0"] and outcome["mode"] == "conservative"
+    assert outcome["assessments"] == ["n-0"] and "mode" not in outcome and outcome["settings"] == {}
     assert [case["id"] for case in outcome["cases"]] == ["A", "B"]
 
 
@@ -742,3 +753,103 @@ def test_run_flags_toggle_the_clicked_case_and_update_the_settings_preview(monke
     assert seen['on'] == (True, '☑') and 'North-east (B)' in seen['preview_on']
     assert seen['read_only'] == 'disabled' and seen['editing'] is None and seen['panel_removed']
     assert seen['filter_before'] == ('A', 'B') and seen['filter_after'] == ('A',)
+
+
+# ---------------------------------------------------------------------------
+# Settings tab
+# ---------------------------------------------------------------------------
+def test_settings_tab_shows_every_setting_with_source_and_hover_text(monkeypatch, records, config):
+    config["settings"] = {"line_limit": 110.0}
+
+    def steps(dialog, root, seen):
+        dialog.notebook.select(dialog.settings_tab)
+        root.update()
+        seen["pages"] = [dialog.settings_book.tab(page, "text") for page in dialog.settings_book.tabs()]
+        seen["keys"] = set(dialog.setting_vars)
+        seen["line_limit"] = (dialog.setting_vars["line_limit"].get(), dialog.setting_sources["line_limit"].cget("text"))
+        seen["warning"] = dialog.setting_sources["line_warning"].cget("text")
+        seen["read_only"] = {key: dialog.setting_inputs[key].instate(["disabled"]) for key in dialog.setting_vars
+                             if not gl.SETTINGS_BY_KEY[key]["editable"]}
+        seen["tips"] = {key: dialog.tip_text(dialog.setting_inputs[key]) for key in dialog.setting_vars}
+        seen["buttons"] = {label: dialog.tip_text(_button(root, label))
+                           for label in ("Restore defaults", "Apply settings", "Save settings")}
+        seen["texts"] = _texts(root)
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    assert seen["pages"] == ["Limits", "Classification", "Contingency analysis", "QDS time base", "Fixed background & rules"]
+    assert seen["keys"] == set(gl.SETTINGS_BY_KEY)
+    assert seen["line_limit"] == ("110", gl.SOURCE_USER) and seen["warning"] == gl.SOURCE_GRIDLENS
+    assert seen["read_only"] and all(seen["read_only"].values()), "category B and post-fault fields are read only"
+    assert all(len(text) > 40 for text in seen["tips"].values()), seen["tips"]
+    assert all(seen["buttons"].values())
+    assert any("not yet inside the PowerFactory project" in text for text in seen["texts"])
+    assert "QDS start" in seen["texts"] and "Time definition" in seen["texts"]
+
+
+def test_invalid_setting_is_marked_and_blocks_the_start(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        errors = []
+        dialog.messagebox.showerror = lambda title, text, **_kw: errors.append(text)
+        dialog.setting_vars["line_limit"].set("-5")
+        root.update()
+        seen["style"] = str(dialog.setting_inputs["line_limit"].cget("style"))
+        seen["message"] = dialog.setting_messages["line_limit"].cget("text")
+        seen["tab"] = dialog.notebook.tab(dialog.settings_tab, "text")
+        _button(root, "Start calculation").invoke()
+        seen["errors"] = list(errors)
+        seen["open"] = bool(root.winfo_exists())
+        seen["selected"] = dialog.notebook.tab(dialog.notebook.select(), "text")
+
+    outcome, seen = _run(monkeypatch, records, config, steps)
+
+    assert outcome is None, "no calculation with invalid settings"
+    assert seen["style"] == "Invalid.TEntry" and "greater than 0" in seen["message"]
+    assert seen["tab"] == "Settings (!)" and seen["selected"] == "Settings (!)"
+    assert seen["errors"] and "greater than 0" in seen["errors"][0]
+
+
+def test_apply_override_and_restore_defaults(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        dialog.setting_vars["transformer_limit"].set("120")
+        root.update()
+        seen["pending"] = dialog.setting_sources["transformer_limit"].cget("text")
+        _button(root, "Apply settings").invoke()
+        seen["applied"] = (dialog.editor.settings_overrides(), dialog.setting_sources["transformer_limit"].cget("text"))
+        seen["status"] = dialog.status_line.cget("text")
+        _button(root, "Restore defaults").invoke()
+        seen["restored"] = (dialog.editor.settings_overrides(), dialog.setting_vars["transformer_limit"].get())
+        dialog.setting_vars["line_warning"].set("85")
+        root.update()
+        _button(root, "Start calculation").invoke()  # applies the edited value first
+
+    outcome, seen = _run(monkeypatch, records, config, steps)
+
+    assert seen["pending"] == "edited, not applied"
+    assert seen["applied"] == ({"transformer_limit": 120.0}, gl.SOURCE_USER)
+    assert "1 settings override" in seen["status"]
+    assert seen["restored"] == ({}, "100")
+    assert outcome["settings"] == {"line_warning": 85.0}
+
+
+def test_tooltip_appears_after_the_delay_and_goes_on_leave(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        widget = _button(root, "Start calculation")
+        tip = next(tip for tip in dialog.tooltips if tip.widget is widget)
+        seen["delay"] = tip.DELAY
+        tip._schedule()
+        root.update()
+        seen["before"] = tip.window is None
+        time.sleep(tip.DELAY / 1000.0 + 0.15)
+        root.update()
+        seen["shown"] = tip.window is not None
+        widget.event_generate("<Leave>")
+        root.update()
+        seen["gone"] = tip.window is None
+        seen["text"] = tip.text
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    assert 400 <= seen["delay"] <= 600
+    assert seen["before"] and seen["shown"] and seen["gone"]
+    assert "separate step" in seen["text"], "the start tooltip does not promise an automatic PDF"

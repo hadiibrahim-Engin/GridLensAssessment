@@ -16,26 +16,30 @@ package.
 ## Layout
 
 The window opens centred at about 86 % of the screen (at most 1480 × 860, never larger than the screen).
-Three tabs; a status line and the action bar stay visible on every tab:
+**Exactly two tabs**, *Case Manager* and *Settings*; there is no results tab. A status
+line and the action bar stay visible on both tabs:
 
 ```
- [ Workspace ] [ Fixed background & rules ] [ Review & start (1) ]
+ [ Case Manager (1) ] [ Settings ]
 +--------------------------------------+------------------------------------+------------------------+
 | Available planned outages            | Case A - Summer measures           | Planning cases  2 of 5 |
 | In case  Planned outage Equip. Start | 2 case outages · 1 fixed backgr.   | Planning case Outg Stat|
-| [All  v][            ][     ][     ] | Planned outage Equip. Start End Pr | [            ][  ][ v ]|
-| ☑ in case FS Bedarf 1 NE_L1  ...     | [          ][     ][    ][   ][  ] | Summer         2  ready|
-| ☐       FS Bedarf 3    NE_L7  ...    | FS Bedarf 1    NE_L1  ...          | North-east     1  ready|
-| fixed   FS Hintergrund NE_L5  ...    | FS Bedarf 2    NE_L2  ...          | 4 shown                |
-| 48 shown                             | 2 shown                            | [New][Copy][Delete]    |
-|                                      | [Remove from case] [Details]       | Selected case          |
-| [Add to case] [Set as fixed] [Det.]  | Timeline of the case               |  [x] Include           |
-|                                      |                                    |                        |
+| ☑ in case FS Bedarf 1 NE_L1  ...     | FS Bedarf 1    NE_L1  ...          | Summer         2  ready|
+| ☐       FS Bedarf 3    NE_L7  ...    | FS Bedarf 2    NE_L2  ...          | North-east     1  ready|
+| [Add to case] [Set as fixed] [Det.]  | [Remove from case] [Details]       | [New][Copy][Delete]    |
+|                                      | Timeline of the case               |                        |
 +--------------------------------------+------------------------------------+------------------------+
- [Save configuration] [Load saved]   QDS ... · n-0 · 3 of 4 cases ready · 1 problem  [Cancel] [Start calculation]
+| Calculation                                  | Problems and warnings                                 |
+| [x] n-0 - reference QDS                      | Where        Problem                                  |
+| [ ] n-1 - reference contingency analysis     | Empty        Not calculated: no planned outage ...    |
+| [ ] (n-1)' - ... planned-outage scenarios    |                                                       |
+| QDS: ...        [Show calculation preview]   |                                                       |
++----------------------------------------------+-------------------------------------------------------+
+ QDS ... · n-0 · 3 of 4 cases ready · 1 problem · default settings
+ [Save configuration] [Load saved]                                    [Cancel] [Start calculation]
 ```
 
-- **Workspace** – three panes, about 40 % / 38 % / 22 %, dividers draggable.
+- **Case Manager** – the three panes on top, about 40 % / 38 % / 22 %, dividers draggable.
   Left to right the way an outage travels: from the library, into the
   selected case, which is chosen on the right.
   - **Available planned outages** (left): every planned outage (`IntPlannedout`)
@@ -58,16 +62,59 @@ Three tabs; a status line and the action bar stay visible on every tab:
     per planned outage* (creates at most five), and for the selected case
     *Run*. Every case contains only the outages assigned
     directly to it. Copying, editing or deleting a case leaves the others unchanged.
-- **Fixed background & rules** – visible explanations show when to use each optional section, the T1 / North / South example and what each rule checks. Leave both empty for independent cases with no shared outages or extra rules. Left: the fixed background outages (Rfix) with
-  *Remove from fixed background*; right the rules between planned outages with three
-  drop-downs (*outage, rule, outage*; a name that occurs twice in the project
-  carries its PowerFactory path), *Add rule*, *Remove rule*.
-- **Review & start** – *Calculation* (n-0, n-1 disabled, QDS period of the
-  active ComStatsim), *What will be calculated* in short lines, and the table
-  *Problems and warnings*. The tab label shows the number of problems, e.g.
-  *Review & start (1)*.
-- **Status line** (every tab): QDS period, assessment, ready cases, problem
-  count in red; a click opens *Review & start*.
+  - **Calculation** (below, left): *n-0 - reference QDS*, *n-1 - reference
+    contingency analysis* and *(n-1)' - contingency analysis with planned-outage
+    scenarios*. n-1 and (n-1)' are visible but **disabled** until the
+    PowerFactory contingency interface is verified (part 3); their hover text
+    says so. The QDS period of the active ComStatsim and *Show calculation
+    preview* (collapsible, see below).
+  - **Problems and warnings** (below, right): everything that stops or limits
+    the calculation, including invalid settings. The tab label shows the
+    number, e.g. *Case Manager (1)*.
+- **Settings** – an action bar (*Restore defaults*, *Apply settings*, *Save
+  settings*, state of the settings) and five pages:
+  - *Limits*: thermal limits (warning thresholds and n-0 limits, lines and
+    transformers separately; limit handling for n-1 and (n-1)') and voltage
+    limits (three kV bands and 0.95–1.05 p.u. for any other nominal voltage,
+    marked as GridLens proposal; post-fault voltage limits read only).
+  - *Classification*: n-0 change tolerances and the n-1 / (n-1)'
+    classification parameters (rules version 1.0).
+  - *Contingency analysis*: contingency set, categories, monitored scope,
+    AC/DC, islanding, unsupplied load, load shedding, post-fault phases,
+    remedial actions – category B, **read only** (`not verified yet`).
+  - *QDS time base*: start, end, time step and time definition of the active
+    ComStatsim, read only.
+  - *Fixed background & rules*: the former tab of that name, unchanged: the
+    fixed background outages (Rfix) with *Remove from fixed background* and the
+    rules between planned outages with three drop-downs, *Add rule*, *Remove rule*.
+- **Status line** (both tabs): QDS period, assessment, ready cases, problem
+  count in red, number of settings overrides; a click opens *Case Manager*.
+
+### Settings fields
+
+Every row: *Setting, Value, Unit, Source, Category* and a message. *Source* is
+`GridLens` (GridLens default), `PowerFactory` (read from the model or the
+calculation configuration – today only the read-only category-B fields, shown
+as `not verified yet`), `user` (an applied override) or `edited, not applied`.
+*Category* is `A · evaluation` (interprets results, never changes a load flow,
+a rating or the model) or `B · calculation` (would change what PowerFactory
+calculates; read only until verified).
+
+Each entry is checked while it is typed: finite number, positive limits,
+non-negative tolerances, a value from the list for the n-1 limit handling. On
+*Apply* also minimum < maximum for every voltage band and warning ≤ limit. An
+invalid field turns red with its message, the tab reads *Settings (!)* and
+*Start calculation* and *Save* refuse with the list of problems. *Start
+calculation* and *Save* apply edited values first. *Restore defaults* removes
+every override.
+
+Only overrides are stored, under `settings` in the case configuration file.
+**This JSON storage is provisional** (part 2); a native storage inside the
+PowerFactory project and a stored settings snapshot per run follow once the
+probe has identified a suitable object. At the start of a run the settings
+are fixed as a snapshot (values, sources, overrides, settings version 1.0,
+classification rules 1.0) and named in the log and in the report (*Model
+Quality Assurance*, row *Settings*).
 
 ### Filtering and sorting – every table
 
@@ -89,9 +136,14 @@ Resting the mouse on a control for about half a second shows what it does to
 the calculation: every button, *Run*, the name and description fields, the case
 counter, the column headings with categories (*Status*, *In case*, *Outages*,
 *Priority*, *Rule*; each also says how sorting works), every filter field, the
-timeline legend, the rule drop-down, n-1, the QDS period and the status line.
-The texts are in `HELP_TEXTS` and `COLUMN_HELP` of `gridlens_report.py`
-(class `Tooltip`, standard library only).
+timeline legend, the rule drop-down, n-0, n-1, (n-1)', the QDS period, the
+status line and every field and button of *Settings*. The delay is 450 ms; the
+text disappears when the mouse leaves, on a click or on a key. Bindings are added
+(`add='+'`), never replaced, and a tooltip never starts a calculation. The texts
+are in `HELP_TEXTS`, `SETTING_HELP` and `COLUMN_HELP` of `gridlens_report.py`
+(class `Tooltip`, standard library only); the texts for n-0, n-1, (n-1)',
+planned outages, QDS time step, contingency set, limits, classification and the
+settings follow the master prompt, translated into English.
 
 ## Window design and visible guidance
 
@@ -117,7 +169,7 @@ copy a case and change the copy. Deleting or excluding C1 leaves C2 and C3 uncha
 
 Saved version 1 configurations are converted to version 2 in memory when opened:
 formerly inherited outages and their effective own dates become direct assignments;
-case dependencies and alternatives are removed. Review & start shows a migration
+case dependencies and alternatives are removed. *Problems and warnings* shows a migration
 notice if relations were present; saving drops the notice, so it appears only until
 the reviewed cases are saved. The original file stays unchanged even then (see below).
 Invalid legacy references or cycles are reported with the file path rather than
@@ -159,7 +211,10 @@ Every list can be used without the mouse (`KEYBOARD_SHORTCUTS` in `gridlens_repo
 | Click a column header | sorts by that column; a second click reverses the order |
 | Click a case in a relation list | selects (highlights) or deselects it; the relation applies at once |
 | Rest the mouse on a control | after about half a second an explanation appears; it closes when the mouse leaves or on a click |
-| Click the status line | opens *Review & start* |
+| Click the status line | opens *Case Manager* |
+| Type into a *Settings* field | checked at once: red with the reason when invalid, *edited, not applied* until applied |
+| *Apply settings* / *Save settings* / *Restore defaults* | validates and takes the values / also saves the configuration file / removes every override |
+| *Show calculation preview* | opens or closes the read-only preview below the problems |
 | Tick or untick the box in the first column of the left list (or Space) | that one outage is added to or removed from the selected case at once; a fixed outage cannot be ticked and says why |
 | *Add to case* or Enter in the left list | the selected outages are assigned; centre table, outage count, marks and preview update at once. An outage already in the case or fixed is refused with the reason. |
 | *Remove from case* or Delete key in the centre | only the assignment ends; the planned outage in PowerFactory is untouched. |
@@ -172,9 +227,9 @@ Every list can be used without the mouse (`KEYBOARD_SHORTCUTS` in `gridlens_repo
 | Double-click a row in the left list | the details window of that planned outage |
 | *Delete* | asks once and removes only the selected case. Other cases and the PowerFactory planned outages stay unchanged. |
 | *One case per planned outage* | replaces the cases by one per outage in the simulated period, at most five (and says so when outages are left out); ignored and fixed outages get none. |
-| *Save configuration* / *Load saved configuration* | writes / reads the project's JSON file with revision, user and time; the project is not touched. |
+| *Save configuration* / *Load saved configuration* | writes / reads the project's JSON file (cases, fixed outages, rules, settings) with revision, user and time; the project is not touched. |
 | *Cancel*, Escape, window close | ends the run: nothing calculated, saved or published, nothing in the project changed. The cancellation is passed to the report caller; the extension does not finish normally and hand control back for rendering. IntReport behaviour still needs verification in PowerFactory. |
-| *Start calculation* | checks (see below), closes the window and hands the configuration to GridLens; then the existing calculation and PDF publication run. No result window follows. |
+| *Start calculation* | applies edited settings, checks (see below), closes the window and hands the configuration to GridLens; then the existing calculation and table publication run. The PDF report is rendered in PowerFactory as a separate step. No result window follows. |
 
 ## Timeline
 
@@ -188,13 +243,18 @@ is drawn as a short light band, so far-apart outages stay readable
 
 ## Calculation options
 
-- **n-0 – quasi-dynamic simulation (QDS)**: always on; it is the only
-  assessment GridLens has.
-- **n-1 – contingency analysis**: shown but disabled, with the note that this
-  GridLens version has no contingency analysis. A configuration file that
-  asks for n-1 is refused with that reason instead of being ignored.
-- **QDS period**: taken from the active ComStatsim and shown only. There is
-  no time-optimisation option and no shortened calculation window; every run
+- **n-0 – reference QDS**: the base state without planned outages and without
+  additional contingencies, with the ComStatsim load and infeed profiles. It is
+  the only assessment that can be chosen today; the existing reference and
+  case QDS runs stay as they are.
+- **n-1 – reference contingency analysis** and **(n-1)' – contingency analysis
+  with planned-outage scenarios**: shown but disabled. The hover text says
+  that the native PowerFactory contingency analysis is enabled once its
+  interface is verified. Nothing of n-1 is calculated or reported; a
+  configuration that asks for it is refused with that reason.
+- **QDS period**: taken from the active ComStatsim and shown only (also on
+  *Settings → QDS time base*). There is no time optimisation: no shortened
+  window, no segmentation, no extra time step, no changed time step; every run
   covers the complete ComStatsim period.
 
 ## Checks on Start calculation
@@ -207,15 +267,18 @@ is drawn as a short light band, so far-apart outages stay readable
    their reason; GridLens asks whether to continue and reports them as
    NOT EVALUATED / NOT SIMULATED.
 4. Only n-0 is requested.
+5. Every setting is valid (edited values are applied first); otherwise the
+   *Settings* tab opens with the list of problems and nothing starts.
 
 ## Hand-over to GridLens
 
 ```mermaid
 flowchart LR
     W["Case manager (CaseManagerDialog)"] -- "every click" --> E["CaseEditor: configuration copy"]
-    E -- "Start calculation" --> C["configuration (cases, background, rules, assessments)"]
+    E -- "Start calculation" --> C["configuration (cases, background, rules, assessments, settings)"]
     C --> R["resolve_request: checked planning cases, reference type"]
-    R --> G["execute_gridlens: REF + one QDS per case (unchanged)"]
+    R --> S["activate_settings: snapshot for the whole run"]
+    S --> G["execute_gridlens: REF + one QDS per case (unchanged)"]
     G --> P["publish_report: tables for the PDF (unchanged)"]
     W -- "Cancel" --> X(["stop, nothing changed"])
 ```
@@ -239,10 +302,12 @@ equipment, never writes PowerFactory and never starts a QDS.
 Configuration file: `CASE_CONFIG_DIR` (default `~/GridLens/cases`), one per
 project, saved as `<project>_<hash>.v2.json`. The schema-1 file `<project>_<hash>.json`
 of the delivered gridlens-powerfactory script is only read (as long as no `.v2.json`
-exists) and never overwritten, so both versions keep working on the same project. New fields since the redesign: `assessments` (`["n-0"]`) and per case
-`enabled` (true/false). A saved or hand-edited configuration with more than five
+exists) and never overwritten, so both versions keep working on the same project. New fields since the redesign: `assessments` (`["n-0"]`), per case
+`enabled` (true/false) and `settings` (overrides only, provisional). The field
+`mode` of earlier versions (time optimisation) is ignored on reading and no
+longer saved. A saved or hand-edited configuration with more than five
 cases (e.g. saved by GridLens 8.0) still opens in the case manager, shows *6 of 5
-cases* in red and the reason under *Review & start*, so cases can be deleted;
+cases* in red and the reason under *Problems and warnings*, so cases can be deleted;
 calculating, saving or `CASE_SOURCE = 'saved'` refuse it with that reason; only `CASE_SOURCE = 'per_outage'` (no window)
 still creates one case per outage without a limit. A case excluded with *Run* is neither calculated nor
 reported; other cases are unaffected.
@@ -259,7 +324,8 @@ reported; other cases are unaffected.
 | own dates per case (recorded, not applied) | in the details window of the outage |
 | save configuration, preview, Cancel, OK | preview as short lines; *Load saved configuration*; OK is now *Start calculation* |
 | – | **removed:** Conservative/Optimized choice and the proposal of shorter windows |
-| – | **new:** three tabs (Workspace, Fixed background & rules, Review & start), a filter row and header sorting in every table, status line, problem list, timeline, n-0/n-1 choice, per-case *Run* |
+| – | **new:** a filter row and header sorting in every table, status line, problem list, timeline, per-case *Run* |
+| three tabs (Workspace, Fixed background & rules, Review & start) | **since part 2:** exactly two tabs, *Case Manager* (workspace, calculation choice, problems, collapsible preview) and *Settings* (limits, classification, contingency analysis read only, QDS time base, fixed background & rules); n-0 / n-1 / (n-1)' choice; tooltips on every setting |
 
 ## Trying it in PowerFactory
 
@@ -281,10 +347,12 @@ out of date.
 
 ## Case settings preview
 
-Review & start includes a read-only, scrollable Cases to calculate preview.
+*Show calculation preview* on the Case Manager tab opens a read-only, scrollable
+preview below the problems (closed by default).
 It updates immediately when Run flags or case settings change. Each ready case
 lists its name, description, planned outages and effective time windows, n-0
 assessment, full QDS period and shared background. The common settings name the
-reference, background outage windows and planning rules. Identical cases show
+reference, background outage windows, planning rules and the settings
+overrides; n-1 and (n-1)' are named as not available. Identical cases show
 which result is planned for reuse. Blocked cases show their reason; cases with
 the Run flag off are listed separately as excluded. Previewing starts no calculation.

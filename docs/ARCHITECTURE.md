@@ -1,6 +1,6 @@
 # GridLens 8.0 – Planning-Case Manager: Architecture and Method
 
-Status: 22 October 2026 · Publisher 8.0.0 · MRT 6.0.0 · data contract 6.0
+Status: 23 October 2026 · Publisher 8.0.0 · MRT 6.0.0 · data contract 6.0 (unchanged by part 2) · settings 1.0 · classification rules 1.0
 
 GridLens 8 turns the single-outage pre-check of 7.x into an assessment of
 **engineer-defined planning cases**. A planning case is any set of planned
@@ -17,6 +17,7 @@ Related documents:
 - [CASE_MANAGER.md](CASE_MANAGER.md) – operating the dialog, configuration file, fallbacks
 - [REPORT_MIGRATION.md](REPORT_MIGRATION.md) – data contract 5.0 → 6.0 and template changes
 - [TEST_MATRIX.md](TEST_MATRIX.md) – V01–V40 and tests A–E with their verification status
+- [superpowers/specs/2026-10-23-n1-settings-design.md](superpowers/specs/2026-10-23-n1-settings-design.md) – design of parts 1 and 2 (n-1 preparation, settings)
 - German version: [de/ARCHITEKTUR.md](de/ARCHITEKTUR.md) and the other files in [de/](de/)
 
 ---
@@ -32,7 +33,7 @@ Related documents:
 | Reference | always "no planned outage" | R0 (none) or Rfix (fixed background outages) |
 | Line ranking | LODF from `ComVstab` | removed; real QDS load flows only |
 | Result objects | temporary `ElmRes`, deleted after extraction | one `ElmRes` per case, kept in the study case |
-| QDS period | complete `ComStatsim` period | complete period; the case manager offers no time optimisation (shorter windows only appear when `QDS_WINDOW_MODE = 'optimized'` is set in the script, as a proposal in log and report) |
+| QDS period | complete `ComStatsim` period | complete period with the ComStatsim time step; no time optimisation at all (removed with part 2: no proposed windows, no `QDS_WINDOW_MODE`) |
 
 ---
 
@@ -88,9 +89,9 @@ design and are historical.
 | P5 | `ElmRes` time stamp vs. window boundaries (02:00 effect seen in the 29 Sep test) | half-open windows | open; the spill-over check now detects and assesses such effects |
 | P6 | `AddCopy` of the configured `ElmRes`, renaming, `ComStatsim.results` binding | result objects per case | used since 6.x, not end-to-end verified |
 | P7 | writing `IntPlannedout.starttime/endtime` | own dates per case | not used (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
-| P8 | writing `ComStatsim.startTime/endTime` and initial state of time-coupled models | shorter QDS windows | not used (preview only) |
+| P8 | writing `ComStatsim.startTime/endTime` and initial state of time-coupled models | – | not used; shorter QDS windows were removed |
 | P9 | `tkinter` / Tcl/Tk inside PowerFactory's Python | case manager | tested only with `tools/FS_CaseManager_GUI_Test_PowerFactory2026.py` design; result not recorded |
-| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` lists time-coupled models | optimization check | not verified; class list `TIME_COUPLED_CLASSES` is a starting point |
+| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` lists time-coupled models | state consistency for part 3 | not verified; counted by `tools/probe_contingency.py` |
 
 ---
 
@@ -105,7 +106,7 @@ design and are historical.
 | Case manager inside PowerFactory | Tk may not start or may block the UI | dialog opens before any state change; failure → saved configuration → one case per outage; Cancel changes nothing | Tk behaviour in PF unverified (P9) |
 | Saved configuration outside the project | file lost or edited by hand | schema + version checked on load; damaged file stops the run with its path | not versioned with the project |
 | Own dates per case | overwrite of the original outage | not applied in 8.0; case reported NOT EVALUATED | none |
-| Shorter QDS windows | skipping a time-coupled state | never executed in 8.0; only proposed with the reason | none (conservative) |
+| Settings (part 2) | an override changes the n-0 assessment unnoticed | overrides are validated, named in log and report (row *Settings*, WARNING); defaults reproduce the previous report exactly | stored provisionally outside the project |
 | Removing LODF | users miss the ranking | ranking by coincident delta in Metric View, trend and summary | none |
 
 ---
@@ -271,7 +272,7 @@ an independent variant. There are no case dependencies or alternative groups.
 **Saved configuration.** Schema version 2 stores direct memberships only.
 `upgrade_case_config` converts version 1 on load: inherited memberships and
 first-effective own dates become direct assignments; dependencies and exclusions
-are removed. A migration notice is shown in Review & start and the log. Loading
+are removed. A migration notice is shown under Problems and warnings and in the log. Loading
 does not rewrite the file. Invalid legacy references/cycles stop migration.
 
 **Rules between outage occurrences.**
@@ -374,9 +375,9 @@ flowchart TD
 An element takes its most severe step status (NEW > WORSENED > EXCEEDED >
 DE-ENERGISED > PRE-EXISTING > IMPROVED > RESOLVED > OK). Equipment the case
 itself switches off is OUT OF SERVICE, never RESOLVED. Values exactly on a
-limit are no violation. Loading limit 100 % (unchanged fallback; element
-ratings are already inside `c:loading`), voltage bands per nominal voltage as
-in 7.x.
+limit are no violation. Loading limit 100 % by default (element ratings are
+already inside `c:loading`), voltage bands per nominal voltage as in 7.x; both
+are settings since part 2 (7.5).
 
 Case verdict, first match wins:
 
@@ -392,7 +393,87 @@ Case verdict, first match wins:
 
 Missing or failed results never produce NO LIMIT EXCEEDED.
 
-### 7.5 Statement A and statement B
+### 7.5 Settings (part 2)
+
+Every limit and tolerance of the assessment is a **setting** (`SETTINGS` in
+`gridlens_report.py`, version `SETTINGS_VERSION = '1.0'`). Defaults are the
+values of the code: loading warning 80 %, n-0 loading limit 100 % (lines and
+transformers separately), the kV bands of `VOLTAGE_LIMITS_KV`, 0.95–1.05 p.u.
+for any other nominal voltage (marked as a GridLens proposal), change
+tolerances 0.1 %-points / 0.001 p.u.
+
+| Category | Meaning | Examples | Editable |
+|---|---|---|---|
+| A – evaluation | interprets calculated results; never changes a load flow, a rating or the model | warning thresholds, assessment limits, voltage bands, tolerances | yes, validated |
+| B – calculation | would change what PowerFactory calculates | contingency set, post-fault phases, remedial actions, AC/DC, islanding, unsupplied load, load shedding | **no**: read only until the interface is verified |
+
+At the start of a run (after the case manager closes) `activate_settings`
+fixes a snapshot: values, source per value (`GridLens`, `PowerFactory`,
+`user`), overrides, settings and classification versions. The assessment reads
+limits only through `loading_limit()`, `loading_warning()`, `voltage_bands()`,
+`default_voltage_limits()` and `change_tolerance()`; `reset_settings()` restores
+the defaults at the end. With the defaults the published report tables are
+identical to the previous version (test
+`test_default_settings_reproduce_the_n0_report_exactly`, exact equality of every
+row except the generation time). The report names the settings in *Model
+Quality Assurance* (row *Settings*, WARNING when an override is active).
+
+Storage: only overrides, under `settings` in the case configuration file
+(JSON). **Provisional** – a native storage inside the PowerFactory project and an
+immutable snapshot object per run are open until the probe (part 1) shows a
+suitable object. Settings and results are never mixed: the file holds no
+result.
+
+### 7.6 Classification n-1 against (n-1)' (part 2, rules version 1.0)
+
+`classify_comparison(reference, scenario, parameters)` is one pure function for
+every scenario (`CLASSIFICATION_VERSION = '1.0'`). It is implemented and tested,
+but **not used by a calculation yet**: n-1 and (n-1)' follow in part 3. The n-0
+QDS keeps its own statuses (`step_status`: `PRE-EXISTING`, `DE-ENERGISED`, …),
+unchanged.
+
+Comparable only with the same time step, contingency, monitored element,
+quantity, post-fault phase and limit definition. With the scenario `c`, the
+contingency `k`, the element `e` and the time `t`:
+
+- coincident delta `ΔL = L(n-1)',c,k(e,t) − L(n-1),k(e,t)` in %-points; never a
+  difference of independent maxima,
+- loading violation `V_L = max(0, L − L_lim)`,
+- voltage violation `V_U = max(0, U_min − U, U − U_max)`.
+
+| Code | Status | Condition |
+|---|---|---|
+| 0 | OK | neither side violated |
+| 1 | NEW | only the scenario violated |
+| 2 | WORSENED | both violated, `V_s − V_r > worsened tolerance + numeric tolerance` |
+| 3 | PRE_EXISTING | both violated, change within the tolerances |
+| 4 | IMPROVED | both violated, `V_r − V_s > improved tolerance + numeric tolerance` |
+| 5 | RESOLVED | only the reference violated |
+| 90 | FAILED | a calculation failed or did not converge; never a proven violation |
+| 91 | NOT_EVALUATED | a value or the limit is missing or invalid (NaN, ±∞, None, boolean, text) |
+| 92 | NOT_APPLICABLE | the contingency cannot be applied, e.g. its element is already switched off by a planned outage |
+| 93 | NOT_COMPARABLE | time, contingency, element, quantity, phase or limit definition differ |
+
+A side is violated when `V > limit tolerance + numeric tolerance` (defaults 0
+and 1e-9: exactly on the limit is no violation, rounding noise neither).
+
+Decision order: 1 FAILED, 2 NOT_APPLICABLE, 3 NOT_COMPARABLE, 4 NOT_EVALUATED,
+5 numeric decision. Applicability is checked before missing values, because a
+contingency that cannot be applied legitimately has no value and must keep
+that reason. Every non-numeric finding is kept in `reasons`, so the precedence
+never hides a second cause. Missing values are never replaced by zero.
+`MARGIN_REDUCED` is an indicator, never a status: an OK result whose reserve to
+the limit shrank by more than the WORSENED tolerance (for loading only from the
+reduced-margin warning, default 80 %).
+
+Defaults and their reasons: limit tolerance 0 (the existing rule "on the limit is
+no violation"); numeric tolerance 1e-9 (far below any meaningful %-point or p.u.
+difference); WORSENED and IMPROVED tolerances 0.1 %-points / 0.001 p.u. (the
+existing n-0 change tolerances, so both assessments use the same resolution);
+n-1 limits "use PowerFactory limits" = 100 % of the rating PowerFactory relates
+the loading to (whether that is the post-fault rating is open, see 12).
+
+### 7.7 Statement A and statement B
 
 The report states on the cases page: statement A (what the planned outages
 add) is what the cases assess. Statement B (the network is permissible over
@@ -413,17 +494,13 @@ gantt
     section Case A
     FS1                        :crit, 2026-03-02, 7d
     FS2                        :crit, 2026-09-28, 7d
-    section Proposed windows (not executed)
-    warm-up + FS1              :2026-03-01, 8d
-    warm-up + FS2              :2026-09-27, 8d
 ```
 
 1. **Read.** Both `IntPlannedout` objects are read (key, window, components).
 2. **Assign.** The engineer puts FS1 and FS2 into case A.
 3. **States.** `FS1 | ∅ | FS2` (relation T01).
-4. **Proposed windows.** Two windows with 24 h warm-up. The optimization
-   check refuses to execute them: shorter QDS periods are not verified, and
-   time-coupled models (`ElmQdsl`) would also make them inadmissible.
+4. **Time base.** No shortened window: every run covers the complete
+   ComStatsim period with its time step (no time optimisation since part 2).
 5. **Reference.** One REF run over the whole period (`iopt_maint=0`), kept as
    `GridLens_<stamp>_REF`.
 6. **Case run.** One QDS over the whole period with FS1 and FS2 active
@@ -436,9 +513,8 @@ gantt
    columns of the case definition, coverage of both weeks, the verdict, the
    evidence table with both runs and their result objects.
 
-Cost in conservative mode: 2 full-year QDS runs for any number of cases
-sharing the reference, plus 1 per distinct case. The proposed windows would
-reduce the case run to ~16 days; this is shown, not executed.
+Cost: 2 full-year QDS runs for any number of cases sharing the reference, plus
+1 per distinct case. No run is shortened.
 
 ---
 
@@ -481,7 +557,7 @@ All restore steps run in `finally`, so they also run after an error or a
 | avoided runs | identical cases (same outages, windows, fixed outages) reuse the result: case manager preview "n identical case(s) reused", evidence table "CASE (reused)" |
 | time steps per run | evidence table `time_steps` |
 | measured run time | evidence table `elapsed_text`, log (QDS and comparison separately) |
-| proposed windows | only with `QDS_WINDOW_MODE = 'optimized'` in the script: log and report (`windows_text`, `qds_mode_text`), never executed; the case manager shows none |
+| time base | always the complete ComStatsim period; `qds_mode_text` says so in the report; no proposed windows exist |
 
 The GUI updates changed native table rows instead of deleting and reinserting
 all rows. Filtering detaches rows and clearing the filter reattaches them;
@@ -509,6 +585,51 @@ Before production use, run in PowerFactory 2026 and record the result:
 5. The report renders: new chapters 5, 8, 15 and the TOC with 19 entries.
 6. Memory and run time of a full-year run with 10 cases.
 
-Shorter QDS windows and own dates per case need their own probe first
-(`tools/probe_planned_outages.py` is the place), then a decision to enable
-them.
+Own dates per case need their own probe first (`tools/probe_planned_outages.py`
+is the place), then a decision to enable them. Shorter QDS windows are removed
+and not planned.
+
+---
+
+## 12. Part 1 and part 2, and what part 3 needs
+
+Part 1 (released 23 October 2026): `tools/probe_contingency.py`, strictly read
+only (no `Execute`, `CreateObject`, `SetAttribute`, no `GetFromStudyCase`, which
+creates a missing command; `tests/test_probe_contingency.py` checks the source).
+It reports ComSimoutage, ComStatsim, contingency definitions, contingency
+`ElmRes`, the `ElmRes` interface and storage candidates as VERIFIED, PRESENT BUT
+UNTESTED, ABSENT, MISSING OR INACCESSIBLE or OPEN QUESTION.
+`tools/test_contingency.py` prepares a very small test calculation on an
+explicitly named project copy; it is disabled (`ENABLED = False`), asks before
+every write, restores and verifies – and its release is separate.
+
+Part 2: the two-tab case manager, settings with validation and provisional
+storage, tooltips, `classify_comparison` with tests. n-1 and (n-1)' stay
+disabled.
+
+| Status | Function |
+|---|---|
+| implemented and tested locally (unit tests) | settings model, validation, snapshot, `classify_comparison`, removal of the time optimisation, n-0 with settings (default regression) |
+| tested with mock objects or local Tk only | case manager with two tabs, Settings tab, tooltips (Tk 8.6 on macOS); the probe against mock PowerFactory objects |
+| needs a real PowerFactory 2026 test | the probe run itself; Tk inside PowerFactory; the n-0 run with settings overrides; the report row *Settings* in the rendered PDF |
+| deliberately disabled until part 3 | n-1, (n-1)', category-B parameters, post-fault voltage limits, native storage of settings and of `GL_<scenario>_CLASSIFICATION` |
+
+Prerequisites of part 3 (each answered by the probe output or by an approved
+run of `tools/test_contingency.py`):
+
+1. ComSimoutage time sweep: attributes, and proof that it computes exactly the
+   ComStatsim time steps (start, end, step, last step).
+2. Whether the time sweep applies `IntPlannedout` in their windows with the same
+   `iopt_maint` / `outserv` semantics as the QDS.
+3. The contingency set object, shared unchanged by n-1 and (n-1)'.
+4. Result structure: how a row names contingency, time step and post-fault
+   phase; dense or sparse; how to prove the complete set of contingency × time
+   combinations.
+5. PowerFactory's result for a contingency whose element is already switched off
+   (→ NOT_APPLICABLE).
+6. Which rating `c:loading` refers to after a contingency (post-fault rating).
+7. An `ElmRes` write method that stores classification codes and reads them back
+   unchanged (`GL_<scenario>_CLASSIFICATION`), and a native project object for
+   settings, snapshots and case configurations.
+8. State consistency of time-coupled models (`ElmQdsl`) between QDS and time
+   sweep.

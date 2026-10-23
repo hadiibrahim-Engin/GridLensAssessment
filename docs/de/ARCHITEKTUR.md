@@ -1,6 +1,6 @@
 # GridLens 8.0 – Planungsfall-Manager: Architektur und Methodik
 
-Stand: 22. Oktober 2026 · Publisher 8.0.0 · MRT 6.0.0 · Datenvertrag 6.0
+Stand: 23. Oktober 2026 · Publisher 8.0.0 · MRT 6.0.0 · Datenvertrag 6.0 (durch Teil 2 unverändert) · Settings 1.0 · Klassifizierungsregeln 1.0
 
 GridLens 8 erweitert die Einzel-Vorprüfung von 7.x zu einer Bewertung **vom
 Ingenieur definierter Planungsfälle**. Ein Planungsfall ist eine beliebige
@@ -17,6 +17,7 @@ Weitere Dokumente (deutsch):
 - [FALLMANAGER.md](FALLMANAGER.md) – Bedienung des Dialogs, Konfigurationsdatei, Rückfallwege
 - [BERICHTSMIGRATION.md](BERICHTSMIGRATION.md) – Datenvertrag 5.0 → 6.0 und Vorlagenänderungen
 - [TESTMATRIX.md](TESTMATRIX.md) – V01–V40 und Tests A–E mit Prüfstatus
+- [../superpowers/specs/2026-10-23-n1-settings-design.de.md](../superpowers/specs/2026-10-23-n1-settings-design.de.md) – Entwurf von Teil 1 und 2 (n-1-Vorbereitung, Settings)
 
 Englische Fassung: [../ARCHITECTURE.md](../ARCHITECTURE.md). Code, Logs und
 Berichtstexte bleiben englisch; die Begriffe in Klammern sind die Namen im Code
@@ -35,7 +36,7 @@ bzw. im Bericht.
 | Referenz | immer „ohne Freischaltung“ | R0 (keine) oder Rfix (feste Hintergrund-Freischaltungen) |
 | Leitungsranking | LODF aus `ComVstab` | entfernt; nur echte QDS-Lastflüsse |
 | Ergebnisobjekte | temporäres `ElmRes`, nach dem Auslesen gelöscht | ein `ElmRes` je Fall, bleibt im Study Case |
-| QDS-Zeitraum | gesamter `ComStatsim`-Zeitraum | gesamter Zeitraum; der Fall-Manager bietet keine Zeitoptimierung (kürzere Fenster erscheinen nur mit `QDS_WINDOW_MODE = 'optimized'` im Skript, als Vorschlag in Log und Bericht) |
+| QDS-Zeitraum | gesamter `ComStatsim`-Zeitraum | gesamter Zeitraum mit dem ComStatsim-Zeitschritt; keinerlei Zeitoptimierung (mit Teil 2 entfernt: keine vorgeschlagenen Fenster, kein `QDS_WINDOW_MODE`) |
 
 ---
 
@@ -91,9 +92,9 @@ den Stand 7.0 und sind historisch.
 | P5 | `ElmRes`-Zeitstempel und Fenstergrenzen (02:00-Effekt im Test vom 29.09.) | halboffene Fenster | offen; die Spill-over-Prüfung erkennt und bewertet solche Effekte |
 | P6 | `AddCopy` des konfigurierten `ElmRes`, Umbenennen, Bindung `ComStatsim.results` | Ergebnisobjekt je Fall | seit 6.x genutzt, nicht Ende-zu-Ende geprüft |
 | P7 | Schreiben von `IntPlannedout.starttime/endtime` | eigene Termine je Fall | nicht genutzt (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
-| P8 | Schreiben von `ComStatsim.startTime/endTime` und Anfangszustand zeitgekoppelter Modelle | kürzere QDS-Fenster | nicht genutzt (nur Vorschau) |
+| P8 | Schreiben von `ComStatsim.startTime/endTime` und Anfangszustand zeitgekoppelter Modelle | – | nicht genutzt; kürzere QDS-Fenster sind entfernt |
 | P9 | `tkinter` / Tcl/Tk in PowerFactorys Python | Fall-Manager | Probe-Werkzeug vorhanden, Ergebnis in PowerFactory nicht dokumentiert |
-| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` listet zeitgekoppelte Modelle | Optimierungsprüfung | nicht geprüft; `TIME_COUPLED_CLASSES` ist ein Startpunkt |
+| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` listet zeitgekoppelte Modelle | Zustandskonsistenz für Teil 3 | nicht geprüft; gezählt von `tools/probe_contingency.py` |
 
 ---
 
@@ -108,7 +109,7 @@ den Stand 7.0 und sind historisch.
 | Fall-Manager in PowerFactory | Tk startet nicht oder blockiert | Dialog vor jeder Zustandsänderung; Fehler → gespeicherte Konfiguration → je FS ein Fall; Abbrechen ändert nichts | Tk-Verhalten in PF ungeprüft (P9) |
 | Konfiguration außerhalb des Projekts | Datei verloren oder von Hand verändert | Schema, Version und alle Feldtypen werden geprüft; beschädigte Datei stoppt den Lauf mit Pfad | nicht mit dem Projekt versioniert |
 | Eigene Termine je Fall | Überschreiben des Originals | in 8.0 nicht angewendet; Fall NOT EVALUATED | keines |
-| Kürzere QDS-Fenster | Überspringen eines zeitgekoppelten Zustands | in 8.0 nie gerechnet, nur mit Grund vorgeschlagen | keines (konservativ) |
+| Settings (Teil 2) | ein Override ändert die n-0-Bewertung unbemerkt | Overrides werden geprüft und in Log und Bericht genannt (Zeile *Settings*, WARNING); Standards reproduzieren den bisherigen Bericht exakt | vorläufig außerhalb des Projekts gespeichert |
 | LODF entfernt | Ranking fehlt | Ranking nach zeitgleichem Delta in Metric View, Zeitplot und Übersicht | keines |
 
 ---
@@ -276,7 +277,7 @@ Alternativgruppen zwischen Fällen gibt es nicht mehr.
 **Gespeicherte Konfiguration.** Schemaversion 2 speichert direkte Zuordnungen.
 `upgrade_case_config` überführt Version 1 beim Laden: übernommene FS und ihre
 zuerst wirksamen eigenen Termine werden direkte Zuordnungen; Voraussetzungen
-und Ausschlüsse entfallen. Review & start und Log zeigen einen Umstellungshinweis.
+und Ausschlüsse entfallen. Problems and warnings und Log zeigen einen Umstellungshinweis.
 Laden schreibt die Datei nicht neu. Ungültige alte Verweise/Kreise stoppen die Umstellung.
 
 **Regeln zwischen FS-Vorkommen.**
@@ -380,8 +381,9 @@ Ein Element erhält den schwersten Zustand seiner Zeitschritte (NEW >
 WORSENED > EXCEEDED > DE-ENERGISED > PRE-EXISTING > IMPROVED > RESOLVED > OK).
 Betriebsmittel, die der Fall selbst ausschaltet, sind OUT OF SERVICE, nie
 RESOLVED. Werte genau auf der Grenze sind keine Verletzung. Auslastungsgrenze
-100 % (dokumentierter Rückfall; die Bemessung der Elemente steckt bereits in
-`c:loading`), Spannungsbänder je Nennspannung wie in 7.x.
+standardmäßig 100 % (die Bemessung der Elemente steckt bereits in
+`c:loading`), Spannungsbänder je Nennspannung wie in 7.x; beides sind seit
+Teil 2 Einstellungen (7.5).
 
 Urteil je Fall, die erste zutreffende Zeile gilt:
 
@@ -397,7 +399,90 @@ Urteil je Fall, die erste zutreffende Zeile gilt:
 
 Fehlende oder fehlerhafte Ergebnisse ergeben nie NO LIMIT EXCEEDED.
 
-### 7.5 Aussage A und Aussage B
+### 7.5 Settings (Teil 2)
+
+Jeder Grenzwert und jede Toleranz der Bewertung ist eine **Einstellung**
+(`SETTINGS` in `gridlens_report.py`, Version `SETTINGS_VERSION = '1.0'`).
+Standards sind die Werte des Codes: Warnschwelle 80 %, n-0-Auslastungsgrenze
+100 % (Leitungen und Transformatoren getrennt), die kV-Bänder aus
+`VOLTAGE_LIMITS_KV`, 0,95–1,05 p.u. für jede andere Nennspannung (als
+GridLens-Vorschlag gekennzeichnet), Änderungstoleranzen 0,1 %-Punkte / 0,001 p.u.
+
+| Kategorie | Bedeutung | Beispiele | Änderbar |
+|---|---|---|---|
+| A – Bewertung | deutet berechnete Ergebnisse; ändert nie Lastfluss, Bemessung oder Modell | Warnschwellen, Bewertungsgrenzen, Spannungsbänder, Toleranzen | ja, geprüft |
+| B – Berechnung | würde ändern, was PowerFactory rechnet | Contingency-Set, Post-Fault-Phasen, Remedial Actions, AC/DC, Inselbildung, nicht versorgte Last, Lastabwurf | **nein**: schreibgeschützt bis zur Verifikation |
+
+Zu Beginn eines Laufs (nach dem Schließen des Fallmanagers) hält
+`activate_settings` einen Snapshot fest: Werte, Herkunft je Wert (`GridLens`,
+`PowerFactory`, `user`), Overrides, Settings- und Klassifizierungsversion. Die
+Bewertung liest Grenzen nur über `loading_limit()`, `loading_warning()`,
+`voltage_bands()`, `default_voltage_limits()` und `change_tolerance()`;
+`reset_settings()` stellt am Ende die Standards wieder her. Mit den Standards
+sind die publizierten Berichtstabellen identisch mit der Vorversion (Test
+`test_default_settings_reproduce_the_n0_report_exactly`, exakte Gleichheit jeder
+Zeile außer der Erzeugungszeit). Der Bericht nennt die Settings in *Model
+Quality Assurance* (Zeile *Settings*, WARNING bei aktivem Override).
+
+Ablage: nur Overrides, unter `settings` in der Konfigurationsdatei der Fälle
+(JSON). **Vorläufig** – eine native Ablage im PowerFactory-Projekt und ein
+unveränderliches Snapshot-Objekt je Lauf sind offen, bis die Probe (Teil 1) ein
+geeignetes Objekt zeigt. Settings und Ergebnisse werden nie vermischt: Die Datei
+enthält kein Ergebnis.
+
+### 7.6 Klassifizierung n-1 gegen (n-1)' (Teil 2, Regelversion 1.0)
+
+`classify_comparison(reference, scenario, parameters)` ist eine reine Funktion
+für jedes Szenario (`CLASSIFICATION_VERSION = '1.0'`). Sie ist implementiert und
+getestet, **wird aber noch von keiner Berechnung genutzt**: n-1 und (n-1)' folgen
+in Teil 3. Die n-0-QDS behält ihre eigenen Status (`step_status`:
+`PRE-EXISTING`, `DE-ENERGISED`, …) unverändert.
+
+Vergleichbar nur bei gleichem Zeitschritt, Fehlerfall, überwachtem
+Betriebsmittel, Ergebnisgröße, Post-Fault-Phase und Grenzwertdefinition. Mit
+Szenario `c`, Fehlerfall `k`, Element `e` und Zeit `t`:
+
+- zeitgleiche Differenz `ΔL = L(n-1)',c,k(e,t) − L(n-1),k(e,t)` in %-Punkten; nie
+  eine Differenz unabhängiger Maxima,
+- Auslastungsverletzung `V_L = max(0, L − L_lim)`,
+- Spannungsverletzung `V_U = max(0, U_min − U, U − U_max)`.
+
+| Code | Status | Bedingung |
+|---|---|---|
+| 0 | OK | keine Seite verletzt |
+| 1 | NEW | nur das Szenario verletzt |
+| 2 | WORSENED | beide verletzt, `V_s − V_r > WORSENED-Toleranz + numerische Toleranz` |
+| 3 | PRE_EXISTING | beide verletzt, Änderung innerhalb der Toleranzen |
+| 4 | IMPROVED | beide verletzt, `V_r − V_s > IMPROVED-Toleranz + numerische Toleranz` |
+| 5 | RESOLVED | nur die Referenz verletzt |
+| 90 | FAILED | Berechnung fehlgeschlagen oder nicht konvergiert; nie eine nachgewiesene Verletzung |
+| 91 | NOT_EVALUATED | Wert oder Grenze fehlt oder ist ungültig (NaN, ±∞, None, Boolean, Text) |
+| 92 | NOT_APPLICABLE | Fehlerfall nicht anwendbar, z. B. sein Betriebsmittel ist bereits durch eine FS ausgeschaltet |
+| 93 | NOT_COMPARABLE | Zeit, Fehlerfall, Element, Größe, Phase oder Grenzwertdefinition unterscheiden sich |
+
+Eine Seite ist verletzt, wenn `V > Grenzwerttoleranz + numerische Toleranz`
+(Standard 0 und 1e-9: genau auf der Grenze ist keine Verletzung,
+Rundungsrauschen auch nicht).
+
+Entscheidungsreihenfolge: 1 FAILED, 2 NOT_APPLICABLE, 3 NOT_COMPARABLE,
+4 NOT_EVALUATED, 5 numerische Entscheidung. Die Anwendbarkeit wird vor fehlenden
+Werten geprüft, weil ein nicht anwendbarer Fehlerfall zu Recht keinen Wert hat
+und diesen Grund behalten muss. Jeder nicht numerische Befund bleibt in
+`reasons`, die Rangfolge verdeckt also keine zweite Ursache. Fehlende Werte
+werden nie durch null ersetzt. `MARGIN_REDUCED` ist ein Zusatzindikator, nie ein
+Status: ein OK-Ergebnis, dessen Reserve zur Grenze um mehr als die
+WORSENED-Toleranz geschrumpft ist (bei Auslastung erst ab der Warnschwelle für
+reduzierte Reserve, Standard 80 %).
+
+Standards und Begründung: Grenzwerttoleranz 0 (bestehende Regel „auf der Grenze
+ist keine Verletzung“); numerische Toleranz 1e-9 (weit unter jedem fachlich
+relevanten %-Punkt- oder p.u.-Unterschied); WORSENED- und IMPROVED-Toleranz
+0,1 %-Punkte / 0,001 p.u. (die bestehenden n-0-Änderungstoleranzen, damit beide
+Bewertungen dieselbe Auflösung haben); n-1-Grenzen „use PowerFactory limits“ =
+100 % der Bemessung, auf die PowerFactory die Auslastung bezieht (ob das die
+Post-Fault-Bemessung ist, ist offen, siehe 12).
+
+### 7.7 Aussage A und Aussage B
 
 Der Bericht trennt auf der Fallseite: Aussage A (was die Freischaltungen
 hinzufügen) bewerten die Fälle. Aussage B (das Netz ist über den ganzen
@@ -418,18 +503,13 @@ gantt
     section Fall A
     FS1                        :crit, 2026-03-02, 7d
     FS2                        :crit, 2026-09-28, 7d
-    section Vorgeschlagene Fenster (nicht gerechnet)
-    Vorlauf + FS1              :2026-03-01, 8d
-    Vorlauf + FS2              :2026-09-27, 8d
 ```
 
 1. **Einlesen.** Beide `IntPlannedout` werden gelesen (Schlüssel, Fenster, Komponenten).
 2. **Zuordnen.** Der Ingenieur legt FS1 und FS2 in Fall A.
 3. **Zustände.** `FS1 | ∅ | FS2` (Beziehung T01).
-4. **Vorgeschlagene Fenster.** Zwei Fenster mit 24 h Vorlauf. Die
-   Optimierungsprüfung lehnt die Ausführung ab: kürzere QDS-Zeiträume sind
-   nicht verifiziert, und zeitgekoppelte Modelle (`ElmQdsl`) würden sie
-   zusätzlich unzulässig machen.
+4. **Zeitbasis.** Kein verkürztes Fenster: Jeder Lauf deckt den ganzen
+   ComStatsim-Zeitraum mit seinem Zeitschritt ab (seit Teil 2 keine Zeitoptimierung).
 5. **Referenz.** Ein REF-Lauf über den ganzen Zeitraum (`iopt_maint=0`),
    erhalten als `GridLens_<stamp>_REF`.
 6. **Fall-Lauf.** Eine QDS über den ganzen Zeitraum mit FS1 und FS2 aktiv
@@ -442,10 +522,8 @@ gantt
    Fall-Definition, Abdeckung beider Wochen, das Urteil und die
    Nachweistabelle mit beiden Läufen und ihren Ergebnisobjekten.
 
-Aufwand im konservativen Modus: ein Ganzjahres-Lauf für die Referenz (für
-beliebig viele Fälle gemeinsam) plus einer je unterschiedlichem Fall. Die
-vorgeschlagenen Fenster würden den Fall-Lauf auf etwa 16 Tage verkürzen; das
-wird angezeigt, nicht gerechnet.
+Aufwand: ein Ganzjahres-Lauf für die Referenz (für beliebig viele Fälle
+gemeinsam) plus einer je unterschiedlichem Fall. Kein Lauf wird verkürzt.
 
 ---
 
@@ -488,7 +566,7 @@ einem Fehler oder einem `KeyboardInterrupt`.
 | vermiedene Läufe | identische Fälle (gleiche FS, Fenster, feste FS) übernehmen das Ergebnis: Vorschau im Fall-Manager „n identical case(s) reused“, Nachweistabelle „CASE (reused)“ |
 | Zeitschritte je Lauf | Nachweistabelle `time_steps` |
 | gemessene Laufzeit | Nachweistabelle `elapsed_text`, Log (QDS und Vergleich getrennt) |
-| vorgeschlagene Fenster | nur mit `QDS_WINDOW_MODE = 'optimized'` im Skript: Log und Bericht (`windows_text`, `qds_mode_text`), nie gerechnet; der Fall-Manager zeigt keine |
+| Zeitbasis | immer der ganze ComStatsim-Zeitraum; `qds_mode_text` sagt das im Bericht; vorgeschlagene Fenster gibt es nicht |
 
 Die GUI aktualisiert geänderte Tabellenzeilen, statt alle zu löschen und neu
 anzulegen. Filter blenden Zeilen aus und wieder ein; aus den Daten entfernte
@@ -522,6 +600,53 @@ festhalten:
    19 Einträgen.
 6. Speicher und Laufzeit eines Ganzjahreslaufs mit 10 Fällen.
 
-Kürzere QDS-Fenster und eigene Termine je Fall brauchen zuerst eine eigene
-Probe (`tools/probe_planned_outages.py` ist der Ort), dann eine Entscheidung,
-sie freizuschalten.
+Eigene Termine je Fall brauchen zuerst eine eigene Probe
+(`tools/probe_planned_outages.py` ist der Ort), dann eine Entscheidung, sie
+freizuschalten. Kürzere QDS-Fenster sind entfernt und nicht vorgesehen.
+
+---
+
+## 12. Teil 1 und Teil 2, und was Teil 3 braucht
+
+Teil 1 (freigegeben am 23. Oktober 2026): `tools/probe_contingency.py`, streng
+lesend (kein `Execute`, `CreateObject`, `SetAttribute`, kein `GetFromStudyCase`,
+das einen fehlenden Befehl anlegt; `tests/test_probe_contingency.py` prüft den
+Quelltext). Es meldet ComSimoutage, ComStatsim, Contingency-Definitionen,
+Contingency-`ElmRes`, die `ElmRes`-Schnittstelle und Ablage-Kandidaten als
+VERIFIED, PRESENT BUT UNTESTED, ABSENT, MISSING OR INACCESSIBLE oder OPEN
+QUESTION. `tools/test_contingency.py` bereitet eine sehr kleine Testrechnung auf
+einer ausdrücklich benannten Projektkopie vor; es ist abgeschaltet
+(`ENABLED = False`), fragt vor jedem Schreiben, stellt wieder her und prüft – und
+wird gesondert freigegeben.
+
+Teil 2: Fallmanager mit zwei Reitern, Settings mit Prüfung und vorläufiger
+Ablage, Tooltips, `classify_comparison` mit Tests. n-1 und (n-1)' bleiben
+deaktiviert.
+
+| Status | Funktion |
+|---|---|
+| implementiert und lokal getestet (Unit-Tests) | Settings-Modell, Prüfung, Snapshot, `classify_comparison`, Entfernen der Zeitoptimierung, n-0 mit Settings (Regression mit Standards) |
+| nur mit Mock-Objekten oder lokalem Tk getestet | Fallmanager mit zwei Reitern, Settings-Reiter, Tooltips (Tk 8.6 unter macOS); die Probe gegen nachgebildete PowerFactory-Objekte |
+| braucht einen echten PowerFactory-2026-Test | der Probe-Lauf selbst; Tk in PowerFactory; der n-0-Lauf mit Settings-Overrides; die Berichtszeile *Settings* im gerenderten PDF |
+| bis Teil 3 bewusst deaktiviert | n-1, (n-1)', Parameter der Kategorie B, Post-Fault-Spannungsgrenzen, native Ablage der Settings und von `GL_<Szenario>_CLASSIFICATION` |
+
+Voraussetzungen für Teil 3 (jede beantwortet durch die Ausgabe der Probe oder
+einen freigegebenen Lauf von `tools/test_contingency.py`):
+
+1. Time Sweep des ComSimoutage: Attribute und Nachweis, dass er genau die
+   ComStatsim-Zeitschritte rechnet (Beginn, Ende, Schritt, letzter Schritt).
+2. Ob der Time Sweep `IntPlannedout` in ihren Fenstern mit derselben
+   `iopt_maint`-/`outserv`-Semantik wie die QDS anwendet.
+3. Das Objekt des Contingency-Sets, unverändert gemeinsam für n-1 und (n-1)'.
+4. Ergebnisstruktur: wie eine Zeile Fehlerfall, Zeitschritt und Post-Fault-Phase
+   benennt; dicht oder dünn besetzt; wie die vollständige Menge der Kombinationen
+   Fehlerfall × Zeitpunkt nachgewiesen wird.
+5. Das Ergebnis von PowerFactory für einen Fehlerfall, dessen Betriebsmittel
+   bereits ausgeschaltet ist (→ NOT_APPLICABLE).
+6. Auf welche Bemessung sich `c:loading` nach einem Fehlerfall bezieht
+   (Post-Fault-Bemessung).
+7. Eine `ElmRes`-Schreibmethode, die Klassifizierungscodes speichert und
+   unverändert zurückliest (`GL_<Szenario>_CLASSIFICATION`), und ein natives
+   Projektobjekt für Settings, Snapshots und Fallkonfigurationen.
+8. Zustandskonsistenz zeitgekoppelter Modelle (`ElmQdsl`) zwischen QDS und
+   Time Sweep.

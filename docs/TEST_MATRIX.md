@@ -9,8 +9,8 @@ Status categories:
 - **PowerFactory** – run in PowerFactory 2026 (none yet)
 - **Not verified** – open; needs PowerFactory or is not implemented
 
-Every row is **not verified in PowerFactory**. The automated suite: 379 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
-28 of them open the real Tk window and are skipped only where `tkinter` is missing.
+Every row is **not verified in PowerFactory**. The automated suite: 454 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
+the 33 of `test_case_manager_dialog.py` open the real Tk window and are skipped only where `tkinter` is missing.
 
 ## Specification tests A–E
 
@@ -18,7 +18,7 @@ Every row is **not verified in PowerFactory**. The automated suite: 379 tests, a
 |---|---|---|---|---|---|
 | A | REF 80 %, 60 %; case 70 %, 85 % | difference of maxima +5 pp, coincident delta +25 pp | +5 / +25 at 11:00 | Test data | `test_planner.py::test_a_coincident_delta_is_not_the_difference_of_the_maxima` |
 | B | FS1 08–13, FS2 10–15, FS3 11–14 | 5 states as in section 7 | identical | Test data | `test_b_three_overlapping_outages_pass_through_five_states` |
-| C | FS1 KW10, FS2 KW40 in one case | not 52 weeks *if* separation proven; no unproven gap | 2 windows proposed, not executed (separation not provable) → conservative full period | Test data; execution of windows **not implemented** | `test_c_kw10_and_kw40_give_two_proposed_windows_but_run_conservatively` |
+| C | FS1 KW10, FS2 KW40 in one case | the complete ComStatsim period, no unproven gap | full period; no window is proposed or shortened (time optimisation removed in part 2) | Test data | `test_c_kw10_and_kw40_run_over_the_complete_period_without_proposed_windows` |
 | D | A: FS1 KW10, B: FS1 KW40 | no automatic A+B | independent cases; any explicitly assigned joint case is allowed | Test data | `test_d_alternative_dates_stay_separate_cases`, `test_any_explicit_combination_is_allowed` |
 | E | A: FS1 KW10, B: FS2 KW10, joint AB | FS1+FS2 together | AB has both, one state | Test data | `test_e_a_joint_plan_calculates_both_outages_together` |
 
@@ -110,16 +110,16 @@ Not verified in PowerFactory; the editing rules are tested without a window (`te
 | 11 | search by equipment | matching outages only | editor + real window | `test_gui_11_and_12_*`, `test_gui_11_*` |
 | 12 | very many outages | 5,005 outages searched in under 0.5 s; lists scroll | editor | `test_gui_11_and_12_*` |
 | 13 | overlapping outages on the timeline | overlap band; KW10 and KW40 both readable | editor + real window | `test_gui_13_*` (2), `test_timeline_scale_is_monotonic_and_needs_a_window` |
-| 14 | choose n-0 and n-1 | n-0 handed over; n-1 shown disabled (not available) and refused in a file | editor + real window | `test_gui_14_and_16_*`, `test_gui_14_to_16_*`, `test_assessments_and_enabled_flags_are_validated` |
+| 14 | choose n-0, n-1, (n-1)' | n-0 handed over; n-1 and (n-1)' shown disabled (not available until part 3) and refused in a file | editor + real window | `test_gui_14_and_16_*`, `test_gui_14_to_16_*`, `test_assessments_and_enabled_flags_are_validated` |
 | 15 | QDS period | the active ComStatsim period | editor + real window | `test_gui_15_*`, `test_gui_14_to_16_*` |
-| 16 | no time optimisation | no option, no proposed windows; mode forced to conservative | editor + real window | `test_gui_14_and_16_*`, `test_gui_14_to_16_*` |
+| 16 | no time optimisation | no option, no proposed windows; the field `mode` is dropped | editor + real window | `test_gui_14_and_16_*`, `test_gui_14_to_16_*` |
 | 17 | Cancel | no calculation, no change | real window + run | `test_gui_17_*`, `test_v30_*` |
 | 18 | Start calculation | configuration handed to the existing GridLens run | real window + run | `test_gui_18_and_19_*`, `test_a_case_with_two_outages_runs_them_together` |
 | 19 | no result view | window closes; the PDF is the only result | real window | `test_gui_18_and_19_*` |
 | 20 | reopen | saved assignments come back unchanged | editor + real window | `test_gui_20_*` (2) |
 | GUI test tool: separate script with its own copy of the case manager (never loads `gridlens_report.py`), copy identical to the production window; project outages read only; temporary configuration copy; demo data; missing Tk | `test_case_manager_gui.py` (9) |
 | table filters and sorting: contains / exact value, header sort ▲▼, column widths, filters aligned on every tab | `test_filter_rows_*`, `test_sort_rows_*`, `test_column_widths_*`, `test_gui_11_every_table_filters_per_column_and_clears`, `test_filters_stand_exactly_under_their_columns`, `test_header_click_sorts_and_shows_the_direction` |
-| tabs, status line, problem list; fixed outages and rules on their own tab | `test_tabs_status_line_and_problem_list`, `test_fixed_outages_and_rules_live_on_their_own_tab` |
+| two tabs (Case Manager, Settings), status line, problem list; fixed outages and rules on their own Settings page | `test_tabs_status_line_and_problem_list`, `test_fixed_outages_and_rules_live_on_their_own_tab` |
 | at most 5 cases (window, saved file, one case per outage); IDs generated, never typed | `test_gui_at_most_five_cases`, `test_gui_one_case_per_outage_stops_at_five`, `test_more_than_five_cases_are_refused_where_engineers_define_them`, `test_gui_ids_are_generated_and_the_engineer_only_names_cases`, `test_new_case_gets_a_generated_id_and_is_named_in_its_window`, `test_new_and_copy_stop_at_five_cases` |
 | workspace order: available outages, case outages, cases; case relations removed; hover texts on buttons, column headings and filters | `test_workspace_runs_available_outages_then_case_outages_then_cases`, `test_hover_explains_the_controls_without_case_relations` |
 | review fixes: one case per outage only in the period; Copy and Delete leave other cases unchanged; legacy relations become direct assignments; rule drop-downs keep same-named outages apart; one resolution per refresh; typing closes a hint | `test_one_case_per_outage_takes_only_outages_in_the_simulated_period`, `test_copy_keeps_own_dates_independent`, `test_legacy_cases_are_flattened_once_and_then_stay_independent`, `test_rule_choices_keep_outages_with_the_same_name_apart`, `test_statuses_problems_and_preview_share_one_resolution`, `test_hover_explains_the_controls_without_case_relations` |
@@ -133,3 +133,32 @@ Not verified in PowerFactory; the editing rules are tested without a window (`te
 | saved upgrade drops its one-time note; schema-2 file `.v2.json` never replaces the schema-1 file of the delivered script; outage choices built once | `test_the_upgrade_note_is_shown_until_the_cases_are_saved`, `test_this_version_never_overwrites_the_file_of_the_delivered_script`, `test_outage_choices_are_built_once` |
 | only tests, `gridlens_report.py` and `MASTER_GRIDLENS.mrt` are needed: `tests/_paths.py` finds both in `powerfactory/` or next to `tests/`; tool tests skip without `tools/` | checked by running the suite in a copy with only those files (nested and flat) |
 | keyboard: Delete/BackSpace remove in every list, Ctrl+N/S/O/F/Enter, Ctrl+A | `test_keyboard_deletes_and_shortcuts` |
+
+## Parts 1 and 2 (23 October 2026): n-1 preparation, settings, classification
+
+Three levels of evidence, kept apart:
+
+- **Static** – read from the code, checked by a test of the source, no run.
+- **Mock / local Tk** – automated test with PowerFactory stand-ins or plain data,
+  and the real Tk window on macOS (Tk 8.6).
+- **PowerFactory 2026** – run and confirmed in PowerFactory: **none of part 1 or 2 yet.**
+
+| Area | What | Level | Tests |
+|---|---|---|---|
+| Probe | never calls `Execute`, `CreateObject`, `SetAttribute`, `GetFromStudyCase` or a writing `ElmRes` method; assigns no attribute; no `RUN_EXPERIMENT` | Static | `test_probe_never_calls_a_writing_method_or_assigns_an_attribute` |
+| Probe | all six sections reported; findings classified VERIFIED / PRESENT BUT UNTESTED / ABSENT / MISSING / OPEN; missing ComSimoutage reported, not created | Mock | `test_probe_reports_every_section_and_classifies_its_findings`, `test_probe_without_contingency_command_says_so_and_creates_nothing` |
+| Probe | real output from the target project | **PowerFactory – open** | Hadi runs `tools/probe_contingency.py` |
+| Test run tool | disabled, refuses a project whose name is not the configured copy, asks before writing, restores | Static + mock | `test_prepared_test_run_is_disabled_and_guarded`; **not run, needs a separate release** |
+| GUI | exactly two tabs, no results tab; problems on Case Manager; fixed background & rules under Settings | Local Tk | `test_tabs_status_line_and_problem_list`, `test_filters_stand_exactly_under_their_columns`, `test_fixed_tab_explains_*` |
+| GUI | n-0, n-1, (n-1)' shown; n-1 and (n-1)' disabled with the explanation; refused in a file | Local Tk + editor | `test_gui_14_to_16_*`, `test_gui_14_and_16_*` |
+| GUI | Settings: every setting shown with source and category; category B read only; QDS time base read only | Local Tk | `test_settings_tab_shows_every_setting_with_source_and_hover_text` |
+| GUI | invalid entry red, tab *Settings (!)*, start blocked; apply, override, restore defaults; start applies edits | Local Tk | `test_invalid_setting_is_marked_and_blocks_the_start`, `test_apply_override_and_restore_defaults` |
+| GUI | tooltips: about 450 ms delay, gone on leave, on every setting and button; start tooltip promises no automatic PDF | Local Tk | `test_tooltip_appears_after_the_delay_and_goes_on_leave`, `test_hover_explains_*`, `test_every_setting_has_a_hover_text` |
+| GUI | case manager inside PowerFactory | **PowerFactory – open** | `tools/FS_CaseManager_GUI_Test_PowerFactory2026.py` |
+| Settings | defaults equal the code; voltage proposal labelled; parsing, finite numbers, positive limits, non-negative tolerances, min < max, warning ≤ limit | Test data | `test_settings.py` (31) |
+| Settings | stored with the cases (provisional JSON), cases unchanged, invalid file refused, `mode` of old files ignored | Test data | `test_settings_are_stored_with_the_cases_and_do_not_touch_them`, `test_invalid_saved_settings_are_refused_with_the_reason`, `test_a_file_of_an_earlier_version_with_mode_still_loads` |
+| n-0 regression | defaults reproduce every report row exactly; changed limits change only the assessment; restored defaults reproduce the original | Test data | `test_default_settings_reproduce_the_n0_report_exactly`, `test_changed_assessment_limits_change_only_the_assessment_and_restore_cleanly`, `test_report_names_the_settings_and_the_rules_version` |
+| n-0 with overrides | a real QDS run with changed limits | **PowerFactory – open** | – |
+| Classification | all ten statuses, the master-prompt examples, limit and equality boundaries, user tolerances, invalid and missing values, NOT_APPLICABLE, NOT_COMPARABLE per identity field and limit definition, same post-fault phase, precedence keeps reasons, MARGIN_REDUCED, coincident delta, pure function, n-0 statuses untouched | Test data | `test_classification.py` (34) |
+| Time base | no time optimisation left in the runtime; files with `mode` load | Test data | `test_no_time_optimisation_remains_in_the_runtime`, `test_c_kw10_and_kw40_run_over_the_complete_period_without_proposed_windows` |
+| Deliberately disabled | n-1, (n-1)', category B, post-fault voltage limits, native storage, `GL_<scenario>_CLASSIFICATION` | – | part 3 |

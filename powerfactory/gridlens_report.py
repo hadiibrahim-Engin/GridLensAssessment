@@ -17,6 +17,9 @@ HOST_TABLE_PREFIX = 'Scripted'
 TOP_N = 10
 MAX_PLOT_POINTS = 200
 MAX_VOLTAGE_ROWS = 30
+# Defaults of the Settings tab (SETTINGS); a run uses the active settings
+# through loading_limit(), voltage_bands() and the other helpers, never these
+# names directly.
 LOADING_MAX = 100.0
 # Loading classes and the appendix start here.
 LOADING_WARNING = 80.0
@@ -58,16 +61,9 @@ CASE_CONFIG_SCHEMA_VERSION = 2
 # case manager can show it as unavailable instead of hiding the question.
 ASSESSMENTS = ('n-0', 'n-1')
 AVAILABLE_ASSESSMENTS = ('n-0',)
-# 'conservative' calculates the complete ComStatsim period for every run.
-# 'optimized' only proposes shorter calculation windows in the preview and
-# the report; they are not executed, because writing ComStatsim.startTime /
-# endTime and the initial state of time-coupled models are not verified yet.
-QDS_WINDOW_MODE = 'conservative'
-WINDOW_WARMUP_HOURS = 24.0
-WINDOW_MERGE_GAP_HOURS = 48.0
-# Models with a state carried from step to step. One of them in the active
-# grid makes shorter calculation windows inadmissible.
-TIME_COUPLED_CLASSES = ('ElmQdsl',)
+# The time base is the active ComStatsim: every run covers its complete period
+# with its own time step. GridLens shortens no window, adds no time step and
+# never changes the time step (there is no time optimisation).
 # A case may give a planned outage a date of its own. Applying it means
 # writing IntPlannedout.starttime / endtime for the run; this is off until it
 # is verified in PowerFactory, and such a case is reported NOT EVALUATED.
@@ -749,23 +745,460 @@ def empty_payload():
 def voltage_band(nominal_kv):
     """Permitted voltage in p.u. of the nominal voltage (lower, upper)."""
     if nominal_kv:
-        for lowest, highest, minimum, maximum in VOLTAGE_LIMITS_KV:
+        for lowest, highest, minimum, maximum in voltage_bands():
             if lowest <= nominal_kv < highest:
                 return minimum / nominal_kv, maximum / nominal_kv
-    return VOLTAGE_MIN, VOLTAGE_MAX
+    return default_voltage_limits()
 
 def voltage_limits(item):
-    return item.get('limits') or (VOLTAGE_MIN, VOLTAGE_MAX)
+    return item.get('limits') or default_voltage_limits()
 
 def is_critical(item, stats):
     if stats is None:
         return False
     if item['category'] in ('line', 'transformer'):
-        return stats['max'] > LOADING_MAX
+        return stats['max'] > loading_limit(item['category'])
     if item['category'] == 'voltage':
         lower, upper = voltage_limits(item)
         return stats['min'] < lower or stats['max'] > upper
     return False
+
+
+# ---------------------------------------------------------------------------
+# Settings: limits, restrictions and classification parameters
+#
+# Category A (evaluation) only interprets calculated results and never
+# changes a load flow. Category B (calculation) would change what PowerFactory
+# calculates; it stays read only until its PowerFactory interface is verified
+# (tools/probe_contingency.py). Only overrides are stored, in the case
+# configuration under 'settings'. That JSON file is a provisional store until
+# a native storage inside the PowerFactory project is verified.
+# ---------------------------------------------------------------------------
+SETTINGS_VERSION = '1.0'
+SOURCE_GRIDLENS, SOURCE_POWERFACTORY, SOURCE_USER = 'GridLens', 'PowerFactory', 'user'
+CATEGORY_EVALUATION, CATEGORY_CALCULATION = 'A', 'B'
+N1_LIMITS_POWERFACTORY, N1_LIMITS_GLOBAL = 'powerfactory', 'global'
+N1_LIMIT_CHOICES = ((N1_LIMITS_POWERFACTORY, 'use PowerFactory limits'), (N1_LIMITS_GLOBAL, 'global assessment limit'))
+NOT_VERIFIED = 'not verified yet'
+PART3_NOTE = ('Read only until the PowerFactory contingency interface is verified '
+              '(tools/probe_contingency.py, then part 3).')
+# A floating-point result that lies this close to a limit is treated as on the limit: PowerFactory writes
+# results in single or double precision, and 1e-9 is far below any meaningful %-point or p.u. difference.
+NUMERIC_TOLERANCE = 1e-9
+
+
+def _setting(key, section, label, unit, default, kind, category=CATEGORY_EVALUATION, editable=True, applies='n-0',
+             source=SOURCE_GRIDLENS, note=''):
+    return {'key': key, 'section': section, 'label': label, 'unit': unit, 'default': default, 'kind': kind,
+            'category': category, 'editable': editable, 'applies': applies, 'source': source, 'note': note}
+
+
+def _band_settings():
+    found = []
+    for number, (lowest, highest, minimum, maximum) in enumerate(VOLTAGE_LIMITS_KV, 1):
+        band = '{} to below {} kV nominal'.format(format_limit(lowest), format_limit(highest))
+        found.append(_setting('band{}_min'.format(number), 'Voltage limits', 'Minimum voltage, ' + band, 'kV', minimum, 'kv',
+                              note='GridLens proposal, to be confirmed by the engineer'))
+        found.append(_setting('band{}_max'.format(number), 'Voltage limits', 'Maximum voltage, ' + band, 'kV', maximum, 'kv',
+                              note='GridLens proposal, to be confirmed by the engineer'))
+    return tuple(found)
+
+
+def _contingency_setting(key, label):
+    return _setting(key, 'Contingency analysis', label, '', None, 'text', CATEGORY_CALCULATION, False, "n-1, (n-1)'",
+                    SOURCE_POWERFACTORY, PART3_NOTE)
+
+
+SETTINGS = (
+    _setting('line_warning', 'Thermal limits', 'Warning threshold, lines', '%', LOADING_WARNING, 'limit'),
+    _setting('transformer_warning', 'Thermal limits', 'Warning threshold, transformers', '%', LOADING_WARNING, 'limit'),
+    _setting('line_limit', 'Thermal limits', 'Maximum loading for n-0, lines', '%', LOADING_MAX, 'limit'),
+    _setting('transformer_limit', 'Thermal limits', 'Maximum loading for n-0, transformers', '%', LOADING_MAX, 'limit'),
+    _setting('n1_limit_mode', 'Thermal limits', "Limits for n-1 and (n-1)'", '', N1_LIMITS_POWERFACTORY, 'choice',
+             applies="n-1, (n-1)'"),
+    _setting('n1_limit_global', 'Thermal limits', "Global assessment limit for n-1 and (n-1)'", '%', LOADING_MAX, 'limit',
+             applies="n-1, (n-1)'", note='only used with a global assessment limit'),
+) + _band_settings() + (
+    _setting('voltage_min_pu', 'Voltage limits', 'Minimum voltage, any other nominal voltage', 'p.u.', VOLTAGE_MIN, 'pu',
+             note='GridLens proposal, to be confirmed by the engineer'),
+    _setting('voltage_max_pu', 'Voltage limits', 'Maximum voltage, any other nominal voltage', 'p.u.', VOLTAGE_MAX, 'pu',
+             note='GridLens proposal, to be confirmed by the engineer'),
+    _setting('post_fault_voltage', 'Voltage limits', 'Post-fault voltage limits', '', None, 'text', editable=False,
+             applies="n-1, (n-1)'", source=SOURCE_POWERFACTORY, note=PART3_NOTE),
+    _setting('loading_change_tolerance', 'Classification', 'n-0 change tolerance, loading', '%-points',
+             LOADING_DELTA_TOLERANCE, 'tolerance'),
+    _setting('voltage_change_tolerance', 'Classification', 'n-0 change tolerance, voltage', 'p.u.',
+             VOLTAGE_DELTA_TOLERANCE, 'tolerance'),
+    _setting('limit_tolerance_loading', 'Classification', 'Limit tolerance, loading', '%-points', 0.0, 'tolerance',
+             applies="n-1, (n-1)'"),
+    _setting('limit_tolerance_voltage', 'Classification', 'Limit tolerance, voltage', 'p.u.', 0.0, 'tolerance',
+             applies="n-1, (n-1)'"),
+    _setting('numeric_tolerance', 'Classification', 'Numerical comparison tolerance', 'unit of the value',
+             NUMERIC_TOLERANCE, 'tolerance', applies="n-1, (n-1)'"),
+    _setting('worsened_tolerance_loading', 'Classification', 'WORSENED versus PRE_EXISTING, loading', '%-points',
+             LOADING_DELTA_TOLERANCE, 'tolerance', applies="n-1, (n-1)'"),
+    _setting('worsened_tolerance_voltage', 'Classification', 'WORSENED versus PRE_EXISTING, voltage', 'p.u.',
+             VOLTAGE_DELTA_TOLERANCE, 'tolerance', applies="n-1, (n-1)'"),
+    _setting('improved_tolerance_loading', 'Classification', 'IMPROVED versus PRE_EXISTING, loading', '%-points',
+             LOADING_DELTA_TOLERANCE, 'tolerance', applies="n-1, (n-1)'"),
+    _setting('improved_tolerance_voltage', 'Classification', 'IMPROVED versus PRE_EXISTING, voltage', 'p.u.',
+             VOLTAGE_DELTA_TOLERANCE, 'tolerance', applies="n-1, (n-1)'"),
+    _setting('margin_warning_loading', 'Classification', 'Reduced margin warning from, loading', '%', LOADING_WARNING,
+             'limit', applies="n-1, (n-1)'"),
+    _contingency_setting('contingency_set', 'Contingency set'),
+    _contingency_setting('contingency_categories', 'Equipment categories with contingencies'),
+    _contingency_setting('monitored_scope', 'Monitored equipment and network areas'),
+    _contingency_setting('calculation_method', 'Load flow method (AC / DC)'),
+    _contingency_setting('islanding', 'Islanding'),
+    _contingency_setting('unsupplied_load', 'Unsupplied load'),
+    _contingency_setting('load_shedding', 'Load shedding'),
+    _contingency_setting('post_fault_phases', 'Post-fault time phases'),
+    _contingency_setting('remedial_actions', 'Remedial actions'),
+)
+SETTINGS_BY_KEY = {setting['key']: setting for setting in SETTINGS}
+SETTING_SECTIONS = ('Thermal limits', 'Voltage limits', 'Classification', 'Contingency analysis')
+# (lower, upper) pairs that must keep lower < upper; (warning, limit) pairs that must keep warning <= limit.
+_ORDERED_PAIRS = tuple(('band{}_min'.format(number), 'band{}_max'.format(number)) for number in range(1, len(VOLTAGE_LIMITS_KV) + 1)) + (
+    ('voltage_min_pu', 'voltage_max_pu'),)
+_WARNING_PAIRS = (('line_warning', 'line_limit'), ('transformer_warning', 'transformer_limit'))
+
+
+def default_settings():
+    """The editable values as GridLens ships them."""
+    return {setting['key']: setting['default'] for setting in SETTINGS if setting['editable']}
+
+
+def parse_setting(key, text):
+    """(value, None) for a valid entry of one field, or (None, message)."""
+    setting = SETTINGS_BY_KEY.get(key)
+    if setting is None:
+        return None, 'unknown setting {!r}'.format(key)
+    if not setting['editable']:
+        return None, '{} is read only: {}'.format(setting['label'], setting['note'] or NOT_VERIFIED)
+    if setting['kind'] == 'choice':
+        return (text, None) if text in dict(N1_LIMIT_CHOICES) else (None, '{}: choose one of {}'.format(
+            setting['label'], ', '.join(label for _, label in N1_LIMIT_CHOICES)))
+    value = text if isinstance(text, (int, float)) and not isinstance(text, bool) else None
+    if isinstance(text, str) and re.match(r'^\s*[+-]?(\d+([.,]\d*)?|[.,]\d+)([eE][+-]?\d+)?\s*$', text):
+        value = float(text.strip().replace(',', '.'))
+    if value is None or not math.isfinite(float(value)):
+        return None, '{}: enter a finite number in {}'.format(setting['label'], setting['unit'] or 'its unit')
+    value = float(value)
+    if setting['kind'] in ('limit', 'kv', 'pu') and value <= 0:
+        return None, '{} must be greater than 0 {}'.format(setting['label'], setting['unit']).rstrip()
+    if setting['kind'] == 'tolerance' and value < 0:
+        return None, '{} must not be negative'.format(setting['label'])
+    return value, None
+
+
+def validate_settings(overrides):
+    """(key, message) for every problem of a set of overrides; [] when they can be used."""
+    if not isinstance(overrides, dict):
+        return [('settings', 'settings must be an object of overrides')]
+    problems = []
+    values = default_settings()
+    for key, value in overrides.items():
+        parsed, problem = parse_setting(key, value)
+        if problem:
+            problems.append((key, problem))
+        else:
+            values[key] = parsed
+    if problems:
+        return problems
+    for lower, upper in _ORDERED_PAIRS:
+        if values[lower] >= values[upper]:
+            problems.append((lower, '{} ({} {}) must be below {} ({} {})'.format(
+                SETTINGS_BY_KEY[lower]['label'], format_limit(values[lower]), SETTINGS_BY_KEY[lower]['unit'],
+                SETTINGS_BY_KEY[upper]['label'], format_limit(values[upper]), SETTINGS_BY_KEY[upper]['unit'])))
+    for warning, limit in _WARNING_PAIRS:
+        if values[warning] > values[limit]:
+            problems.append((warning, '{} ({} %) must not exceed {} ({} %)'.format(
+                SETTINGS_BY_KEY[warning]['label'], format_limit(values[warning]), SETTINGS_BY_KEY[limit]['label'],
+                format_limit(values[limit]))))
+    return problems
+
+
+def effective_settings(overrides=None):
+    """Every editable value with the overrides applied; raises GridLensError for invalid overrides."""
+    overrides = overrides or {}
+    problems = validate_settings(overrides)
+    if problems:
+        raise GridLensError('The settings cannot be used: {}.'.format('; '.join(message for _, message in problems)))
+    values = default_settings()
+    for key, value in overrides.items():
+        values[key] = parse_setting(key, value)[0]
+    return values
+
+
+def clean_overrides(values):
+    """Only the values that differ from the GridLens default; equal values are no override."""
+    defaults = default_settings()
+    return {key: value for key, value in values.items() if key in defaults and value != defaults[key]}
+
+
+def setting_source(key, overrides=None):
+    return SOURCE_USER if key in (overrides or {}) else SETTINGS_BY_KEY[key]['source']
+
+
+def setting_text(key, value):
+    setting = SETTINGS_BY_KEY[key]
+    if value is None:
+        return NOT_VERIFIED
+    if setting['kind'] == 'choice':
+        return dict(N1_LIMIT_CHOICES).get(value, str(value))
+    return '{} {}'.format(format_limit(value) if setting['kind'] != 'tolerance' else '{:g}'.format(value),
+                          setting['unit']).strip()
+
+
+def overrides_text(overrides):
+    """'line limit 110 % (GridLens 100 %); ...' or 'GridLens defaults'."""
+    if not overrides:
+        return 'GridLens defaults, no user override'
+    return '; '.join('{} = {} (GridLens default {})'.format(
+        SETTINGS_BY_KEY[key]['label'], setting_text(key, value), setting_text(key, SETTINGS_BY_KEY[key]['default']))
+        for key, value in sorted(overrides.items()))
+
+
+def settings_snapshot(overrides=None):
+    """The immutable record of the settings one run uses: values, sources, overrides and versions.
+
+    It is built once at the start of a run, after the case manager has closed;
+    later changes in the window cannot change what a published result meant.
+    """
+    overrides = dict(overrides or {})
+    values = effective_settings(overrides)
+    return {'settings_version': SETTINGS_VERSION, 'classification_version': CLASSIFICATION_VERSION,
+            'values': values, 'sources': {key: setting_source(key, overrides) for key in values},
+            'overrides': clean_overrides(dict((key, values[key]) for key in overrides)),
+            'calculation_parameters': {setting['key']: NOT_VERIFIED for setting in SETTINGS
+                                       if setting['category'] == CATEGORY_CALCULATION},
+            'storage': 'provisional: case configuration file (JSON); native PowerFactory storage not verified yet'}
+
+
+# The settings of the running assessment; None means the GridLens defaults.
+_ACTIVE_SETTINGS = None
+
+
+def activate_settings(overrides=None):
+    """Use these settings for the assessment that follows; returns the snapshot."""
+    global _ACTIVE_SETTINGS
+    snapshot = settings_snapshot(overrides)
+    _ACTIVE_SETTINGS = dict(snapshot['values'])
+    return snapshot
+
+
+def reset_settings():
+    global _ACTIVE_SETTINGS
+    _ACTIVE_SETTINGS = None
+
+
+def active_overrides():
+    """The overrides of the active settings; {} with the GridLens defaults."""
+    return clean_overrides(_ACTIVE_SETTINGS or {})
+
+
+def current_setting(key):
+    if _ACTIVE_SETTINGS is not None and key in _ACTIVE_SETTINGS:
+        return _ACTIVE_SETTINGS[key]
+    return SETTINGS_BY_KEY[key]['default']
+
+
+def loading_limit(category):
+    return current_setting('transformer_limit' if category == 'transformer' else 'line_limit')
+
+
+def loading_warning(category):
+    return current_setting('transformer_warning' if category == 'transformer' else 'line_warning')
+
+
+def voltage_bands():
+    """VOLTAGE_LIMITS_KV with the active minimum and maximum of each band."""
+    return tuple((lowest, highest, current_setting('band{}_min'.format(number)), current_setting('band{}_max'.format(number)))
+                 for number, (lowest, highest, _, _) in enumerate(VOLTAGE_LIMITS_KV, 1))
+
+
+def default_voltage_limits():
+    return current_setting('voltage_min_pu'), current_setting('voltage_max_pu')
+
+
+def change_tolerance(category):
+    """The n-0 change tolerance: %-points for loading, p.u. for voltage."""
+    return current_setting('voltage_change_tolerance' if category == 'voltage' else 'loading_change_tolerance')
+
+
+def loading_limits_text():
+    line, transformer = loading_limit('line'), loading_limit('transformer')
+    if line == transformer:
+        return 'Violation when loading > {} %.'.format(format_limit(line))
+    return 'Violation when loading > {} % (lines) or > {} % (transformers).'.format(format_limit(line), format_limit(transformer))
+
+
+# ---------------------------------------------------------------------------
+# Classification of n-1 against (n-1)', version CLASSIFICATION_VERSION
+#
+# One pure function for every scenario. It compares the n-1 reference with
+# the planned-outage scenario (n-1)' for the same time step, contingency,
+# monitored element, quantity, post-fault phase and limit definition. The
+# n-0 QDS keeps its own statuses (step_status: PRE-EXISTING, DE-ENERGISED);
+# nothing here changes them. Codes are GridLens codes, not PowerFactory values.
+# ---------------------------------------------------------------------------
+CLASSIFICATION_VERSION = '1.0'
+CLASSIFICATION_STATUSES = ((0, 'OK'), (1, 'NEW'), (2, 'WORSENED'), (3, 'PRE_EXISTING'), (4, 'IMPROVED'),
+                           (5, 'RESOLVED'), (90, 'FAILED'), (91, 'NOT_EVALUATED'), (92, 'NOT_APPLICABLE'),
+                           (93, 'NOT_COMPARABLE'))
+CLASSIFICATION_CODES = {status: code for code, status in CLASSIFICATION_STATUSES}
+INDICATOR_MARGIN_REDUCED = 'MARGIN_REDUCED'
+# What must be identical for a comparison; 'limit' is compared separately.
+COMPARISON_IDENTITY = ('time', 'contingency', 'element', 'quantity', 'phase')
+STATE_OK, STATE_FAILED, STATE_NOT_APPLICABLE = 'ok', 'failed', 'not_applicable'
+QUANTITIES = ('loading', 'voltage')
+
+
+def classification_parameters(values=None):
+    """The tolerances of the classification, from the given or the active settings."""
+    read = (lambda key: values[key]) if values is not None else current_setting
+    parameters = {quantity: {'limit': read('limit_tolerance_' + quantity), 'worsened': read('worsened_tolerance_' + quantity),
+                             'improved': read('improved_tolerance_' + quantity)} for quantity in QUANTITIES}
+    parameters.update(numeric=read('numeric_tolerance'), margin_warning_loading=read('margin_warning_loading'))
+    return parameters
+
+
+def comparison_limit(quantity, category='line', minimum=None, maximum=None, values=None):
+    """The limit definition both sides of a comparison must share.
+
+    Loading uses the n-1 limit setting: 'use PowerFactory limits' means 100 %
+    of the rating PowerFactory relates the loading to (whether that is the
+    post-fault rating is still to be verified); a global assessment limit is
+    a value of its own. Voltage takes the band of the element.
+    """
+    read = (lambda key: values[key]) if values is not None else current_setting
+    if quantity == 'loading':
+        if read('n1_limit_mode') == N1_LIMITS_GLOBAL:
+            return {'quantity': 'loading', 'max': float(read('n1_limit_global')), 'source': 'GridLens global assessment limit'}
+        return {'quantity': 'loading', 'max': 100.0, 'source': 'PowerFactory rating (100 % loading)'}
+    return {'quantity': 'voltage', 'min': minimum, 'max': maximum, 'source': 'voltage band of the element'}
+
+
+def _measured(value):
+    """A finite number, or None: NaN, infinity, None, booleans and texts are no measured value."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def violation_size(quantity, value, limit):
+    """V_L = max(0, L - L_lim) for loading, V_U = max(0, U_min - U, U - U_max) for voltage; None if not computable."""
+    value = _measured(value)
+    if value is None or not isinstance(limit, dict):
+        return None
+    upper = _measured(limit.get('max'))
+    if quantity == 'loading':
+        return None if upper is None else max(0.0, value - upper)
+    lower = _measured(limit.get('min'))
+    if lower is None or upper is None or lower >= upper:
+        return None
+    return max(0.0, lower - value, value - upper)
+
+
+def _reserve(quantity, value, limit):
+    if quantity == 'loading':
+        return limit['max'] - value
+    return min(value - limit['min'], limit['max'] - value)
+
+
+def classify_comparison(reference, scenario, parameters=None):
+    """Classify one n-1 result against the (n-1)' result of a planned-outage scenario.
+
+    `reference` and `scenario` are dicts with 'state' ('ok', 'failed' or
+    'not_applicable'; default 'ok'), 'value', 'limit' (comparison_limit()),
+    the identity fields COMPARISON_IDENTITY and an optional 'reason'.
+    Returns one main status with its code, the indicators, every reason
+    found, the coincident delta (scenario - reference, same time step) and
+    both violation sizes.
+
+    Decision order (CLASSIFICATION_VERSION 1.0):
+    1. a failed calculation on either side       -> FAILED
+    2. the contingency is not applicable          -> NOT_APPLICABLE
+    3. identity or limit definition differs       -> NOT_COMPARABLE
+    4. a value or the limit is missing or invalid -> NOT_EVALUATED
+    5. the violation sizes V of both sides decide:
+       violated when V > limit tolerance + numeric tolerance;
+       NEW, RESOLVED or OK when only one or neither side is violated;
+       both violated: WORSENED when V_s - V_r > worsened tolerance + numeric,
+       IMPROVED when V_r - V_s > improved tolerance + numeric, else PRE_EXISTING.
+    Every non-numeric finding is kept in 'reasons', so the precedence never
+    hides a second cause. MARGIN_REDUCED marks an OK result whose reserve
+    to the limit shrank by more than the worsened tolerance; for loading only
+    from the reduced-margin warning on. It is an indicator, never a status.
+    Missing values are never replaced by zero.
+    """
+    parameters = parameters or classification_parameters()
+    reference, scenario = dict(reference or {}), dict(scenario or {})
+    reasons = []
+    found = set()
+    for side, label in ((reference, 'n-1 reference'), (scenario, "(n-1)' scenario")):
+        state = side.get('state', STATE_OK)
+        if state == STATE_FAILED:
+            found.add('FAILED')
+            reasons.append('{}: calculation failed{}'.format(label, ': ' + side['reason'] if side.get('reason') else ''))
+        elif state == STATE_NOT_APPLICABLE:
+            found.add('NOT_APPLICABLE')
+            reasons.append('{}: contingency not applicable{}'.format(label, ': ' + side['reason'] if side.get('reason') else ''))
+        elif state != STATE_OK:
+            found.add('NOT_EVALUATED')
+            reasons.append('{}: unknown calculation state {!r}'.format(label, state))
+    different = [field for field in COMPARISON_IDENTITY if reference.get(field) != scenario.get(field)]
+    if different:
+        found.add('NOT_COMPARABLE')
+        reasons.append('different {}'.format(', '.join(different)))
+    quantity = scenario.get('quantity')
+    if quantity not in QUANTITIES:
+        found.add('NOT_COMPARABLE')
+        reasons.append('unknown quantity {!r}'.format(quantity))
+    elif reference.get('limit') != scenario.get('limit'):
+        found.add('NOT_COMPARABLE')
+        reasons.append('different limit definitions')
+    sizes = {}
+    for side, label, name in ((reference, 'n-1 reference', 'reference'), (scenario, "(n-1)' scenario", 'scenario')):
+        if side.get('state', STATE_OK) != STATE_OK:
+            continue
+        if _measured(side.get('value')) is None:
+            found.add('NOT_EVALUATED')
+            reasons.append('{}: no valid value ({!r})'.format(label, side.get('value')))
+        elif quantity in QUANTITIES:
+            sizes[name] = violation_size(quantity, side['value'], side.get('limit'))
+            if sizes[name] is None:
+                found.add('NOT_EVALUATED')
+                reasons.append('{}: limit definition missing or invalid'.format(label))
+    result = {'classification_version': CLASSIFICATION_VERSION, 'indicators': [], 'reasons': reasons,
+              'delta': None, 'reference_violation': sizes.get('reference'), 'scenario_violation': sizes.get('scenario'),
+              'identity': {field: scenario.get(field) for field in COMPARISON_IDENTITY}, 'limit': scenario.get('limit')}
+    for status in ('FAILED', 'NOT_APPLICABLE', 'NOT_COMPARABLE', 'NOT_EVALUATED'):
+        if status in found:
+            return dict(result, status=status, code=CLASSIFICATION_CODES[status])
+    tolerance = parameters[quantity]
+    numeric = parameters['numeric']
+    in_reference = sizes['reference'] > tolerance['limit'] + numeric
+    in_scenario = sizes['scenario'] > tolerance['limit'] + numeric
+    result['delta'] = float(scenario['value']) - float(reference['value'])
+    change = sizes['scenario'] - sizes['reference']
+    if in_scenario and not in_reference:
+        status = 'NEW'
+    elif in_scenario:
+        status = ('WORSENED' if change > tolerance['worsened'] + numeric else
+                  'IMPROVED' if -change > tolerance['improved'] + numeric else 'PRE_EXISTING')
+    elif in_reference:
+        status = 'RESOLVED'
+    else:
+        status = 'OK'
+        limit = scenario['limit']
+        shrink = _reserve(quantity, float(reference['value']), limit) - _reserve(quantity, float(scenario['value']), limit)
+        high = quantity != 'loading' or float(scenario['value']) >= parameters['margin_warning_loading']
+        if shrink > tolerance['worsened'] + numeric and high:
+            result['indicators'].append(INDICATOR_MARGIN_REDUCED)
+    return dict(result, status=status, code=CLASSIFICATION_CODES[status])
+
+
 REFERENCE_ID = 'REF'
 CONVERGED = 'CONVERGED'
 AXIS_MISMATCH = 'NOT EVALUATED'
@@ -912,7 +1345,7 @@ def primary(record):
 def excess_function(item):
     """excess() of one element with its limits looked up once."""
     if item['category'] in LOADING_CATEGORIES:
-        limit = LOADING_MAX
+        limit = loading_limit(item['category'])
         return lambda value: value - limit if value > limit else 0.0
     lower, upper = voltage_limits(item)
     return lambda value: lower - value if value < lower else value - upper if value > upper else 0.0
@@ -922,7 +1355,7 @@ def excess(item, value):
     return excess_function(item)(value)
 
 def _tolerance(item):
-    return LOADING_DELTA_TOLERANCE if item['category'] in LOADING_CATEGORIES else VOLTAGE_DELTA_TOLERANCE
+    return change_tolerance(item['category'])
 
 def step_status(item, ref_value, case_value):
     """Classify one time step; both values belong to the same element at the same instant."""
@@ -1095,17 +1528,19 @@ def release_values(result):
         item.pop('values', None)
 
 def _worse(item, ref, outage):
+    tolerance = change_tolerance(item['category'])
     if item['category'] in LOADING_CATEGORIES:
-        return outage['max'] - ref['max'] > LOADING_DELTA_TOLERANCE
+        return outage['max'] - ref['max'] > tolerance
     lower, upper = voltage_limits(item)
-    return ((outage['min'] < lower and outage['min'] < ref['min'] - VOLTAGE_DELTA_TOLERANCE)
-            or (outage['max'] > upper and outage['max'] > ref['max'] + VOLTAGE_DELTA_TOLERANCE))
+    return ((outage['min'] < lower and outage['min'] < ref['min'] - tolerance)
+            or (outage['max'] > upper and outage['max'] > ref['max'] + tolerance))
 
 def _better(item, ref, outage):
+    tolerance = change_tolerance(item['category'])
     if item['category'] in LOADING_CATEGORIES:
-        return ref['max'] - outage['max'] > LOADING_DELTA_TOLERANCE
+        return ref['max'] - outage['max'] > tolerance
     lower, upper = voltage_limits(item)
-    return max(lower - outage['min'], outage['max'] - upper) < max(lower - ref['min'], ref['max'] - upper) - VOLTAGE_DELTA_TOLERANCE
+    return max(lower - outage['min'], outage['max'] - upper) < max(lower - ref['min'], ref['max'] - upper) - tolerance
 
 def limit_status(record):
     """What the planning case did to this element's limit.
@@ -1196,14 +1631,20 @@ def _primary_counters(results):
     reference = find_reference(results)
     return reference.get('counters', {}) if reference else {}
 
-LOADING_CLASSES = (('up to 80 %', lambda value: value <= LOADING_WARNING), ('80 to 100 %', lambda value: value <= LOADING_MAX), ('above 100 %', lambda value: True))
+def loading_classes(category):
+    """The loading classes of the pie charts: up to the warning, up to the limit, above the limit."""
+    warning, limit = loading_warning(category), loading_limit(category)
+    return (('up to {} %'.format(format_limit(warning)), lambda value: value <= warning),
+            ('{} to {} %'.format(format_limit(warning), format_limit(limit)), lambda value: value <= limit),
+            ('above {} %'.format(format_limit(limit)), lambda value: True))
 CATEGORY_LABELS = (('line', 'Line loading', 'line', 'lines'), ('transformer', 'Transformer loading', 'transformer', 'transformers'), ('voltage', 'Voltage magnitude', 'node', 'nodes'))
 REFERENCE_NAME = 'Reference'
 MAX_REFERENCE_ROWS = 30
 
 def voltage_limits_text():
-    bands = ['{} to {} kV for a nominal voltage from {} kV up to {} kV'.format(format_limit(minimum), format_limit(maximum), format_limit(lowest), format_limit(highest)) for lowest, highest, minimum, maximum in VOLTAGE_LIMITS_KV]
-    return 'Permitted voltage band: {}; {} to {} p.u. for any other nominal voltage. Values on the band limit are no violation.'.format('; '.join(bands), format_limit(VOLTAGE_MIN), format_limit(VOLTAGE_MAX))
+    bands = ['{} to {} kV for a nominal voltage from {} kV up to {} kV'.format(format_limit(minimum), format_limit(maximum), format_limit(lowest), format_limit(highest)) for lowest, highest, minimum, maximum in voltage_bands()]
+    lower, upper = default_voltage_limits()
+    return 'Permitted voltage band: {}; {} to {} p.u. for any other nominal voltage. Values on the band limit are no violation.'.format('; '.join(bands), format_limit(lower), format_limit(upper))
 
 def _result_name(result):
     return REFERENCE_NAME if result['id'] == REFERENCE_ID else result['name']
@@ -1243,7 +1684,7 @@ def _loading_appendix(payload, results, category, table):
         ref_stats = reference.get(key, (None, None))[1]
         peaks = [stats['max'] for _, (_, stats) in found]
         deltas = [stats['max'] - ref_stats['max'] for case_id, (_, stats) in found if ref_stats is not None and case_id != REFERENCE_ID]
-        if max(peaks) < LOADING_WARNING and not any(abs(delta) >= LOADING_APPENDIX_DELTA for delta in deltas):
+        if max(peaks) < loading_warning(category) and not any(abs(delta) >= LOADING_APPENDIX_DELTA for delta in deltas):
             continue
         case_stats = [by_result[case['id']][key][1] for case in cases if key in by_result[case['id']]]
         texts = {case['id']: loading_text(by_result[case['id']][key][1]['max']) if key in by_result[case['id']] else 'n/a' for case in cases}
@@ -1322,11 +1763,12 @@ def _radar(payload, results):
 def _pies(payload, results):
     reference = find_reference(results)
     for category, table in (('line', 'ScriptedPieLines'), ('transformer', 'ScriptedPieTransformers')):
-        counts = [0] * len(LOADING_CLASSES)
+        classes = loading_classes(category)
+        counts = [0] * len(classes)
         if reference is not None:
             for _, stats in reference['by_category'][category]:
-                counts[next(index for index, (_, fits) in enumerate(LOADING_CLASSES) if fits(stats['max']))] += 1
-        for order, ((label, _), count) in enumerate(zip(LOADING_CLASSES, counts), 1):
+                counts[next(index for index, (_, fits) in enumerate(classes) if fits(stats['max']))] += 1
+        for order, ((label, _), count) in enumerate(zip(classes, counts), 1):
             payload[table].append({'sort_order': order, 'class_label': label, 'element_count': count})
 
 def _reference_exceeded(payload, results):
@@ -1380,7 +1822,7 @@ def _trends(payload, results):
             delta = _loading_delta(record)
             if delta is not None and (largest is None or delta > largest[0]):
                 largest = (delta, record['item']['key'], record['item']['element_name'], case['name'])
-    if largest is not None and largest[0] > LOADING_DELTA_TOLERANCE:
+    if largest is not None and largest[0] > change_tolerance('line'):
         _trend_rows(payload, 'ScriptedTrendLargestDelta', results, largest[1],
                     'Largest coincident delta: {} ({:+.1f} pp, {})'.format(largest[2], largest[0], largest[3]))
 
@@ -1419,10 +1861,10 @@ def _case_metrics(payload, results):
     named = [row for row in rows if row['max'] is not None]
     if named:
         top = max(named, key=lambda row: row['max'])
-        pair = max((row for row in rows if row['delta'] is not None and row['delta'] > LOADING_DELTA_TOLERANCE), key=lambda row: row['delta'], default=None)
+        pair = max((row for row in rows if row['delta'] is not None and row['delta'] > change_tolerance('line')), key=lambda row: row['delta'], default=None)
         payload['ScriptedKpis'].append({
             'highest_text': '{} · {}'.format(loading_text(top['max']), top['element']), 'highest_caption': 'Highest observed line loading across all cases',
-            'highest_violation': 1 if top['max'] > LOADING_MAX else 0,
+            'highest_violation': 1 if top['max'] > loading_limit('line') else 0,
             'delta_text': '{} · {}'.format(delta_text(pair['delta']), pair['name']) if pair else 'no increase',
             'delta_caption': 'Largest coincident loading increase compared with Reference at the same time step' if pair
             else 'No line loads more than in Reference at the same time step'})
@@ -1499,17 +1941,20 @@ def _model_quality(payload, results, request=None):
     _quality(payload, 'qds_mode', 'Calculation period', 'INFO', qds_mode_text(request))
     _quality(payload, 'security_scope', 'Assessment scope', 'WARNING',
              'N-0 assessment of the planned network states. N-1 security, security of supply, protection coordination and safe isolation are not assessed.')
-    _quality(payload, 'limit_loading', 'Loading limit', 'INFO', 'Violation when loading > {} %.'.format(format_limit(LOADING_MAX)))
+    _quality(payload, 'limit_loading', 'Loading limit', 'INFO', loading_limits_text())
     _quality(payload, 'limit_voltage', 'Voltage limits', 'INFO', voltage_limits_text())
+    # The settings the assessment actually used, i.e. the active ones.
+    snapshot = settings_snapshot(active_overrides())
+    _quality(payload, 'settings', 'Settings', 'INFO' if not snapshot['overrides'] else 'WARNING',
+             'Settings {}, classification rules {}: {}. Stored provisionally in the case configuration file.'.format(
+                 snapshot['settings_version'], snapshot['classification_version'], overrides_text(snapshot['overrides'])))
 
-def qds_mode_text(request):
-    mode = (request or {}).get('mode', QDS_WINDOW_MODE)
-    text = 'Conservative: every run covers the complete ComStatsim period; no time window is skipped.'
-    if mode == 'optimized':
-        proposed = (request or {}).get('optimization') or {}
-        text += ' Optimized windows were proposed ({}) but not executed: {}'.format(
-            proposed.get('summary', 'none'), proposed.get('reason', 'shorter QDS periods are not verified in PowerFactory yet.'))
-    return text
+QDS_TIME_BASE_TEXT = ('Complete ComStatsim period: every run covers the whole simulated period with the ComStatsim time step; '
+                      'GridLens shortens no window, adds no time step and changes no time step.')
+
+
+def qds_mode_text(request=None):
+    return QDS_TIME_BASE_TEXT
 
 def _key_discriminator(key):
     digest = hashlib.sha256(str(key).encode('utf-8')).hexdigest()
@@ -1607,7 +2052,7 @@ def assessment_detail(values):
             values['max_loading_time'])
         if values.get('reference_max_loading') is not None:
             text += " (REF {:.1f} %)".format(values['reference_max_loading'])
-        if values.get('delta') is not None and values['delta'] > LOADING_DELTA_TOLERANCE:
+        if values.get('delta') is not None and values['delta'] > change_tolerance('line'):
             text += ", largest coincident increase {:+.1f} pp on {}".format(values['delta'], values['delta_element'])
             if values.get('delta_time'):
                 text += " at {}".format(values['delta_time'])
@@ -1674,11 +2119,7 @@ def states_text(plan):
     return ' | '.join(parts)
 
 def _windows_text(plan, request):
-    text = 'QDS: complete ComStatsim period'
-    proposed = plan.get('calc_windows') or []
-    if (request or {}).get('mode') == 'optimized' and proposed:
-        text += '; proposed (not executed): ' + '; '.join(period_text(_format_pf_time(start), _format_pf_time(end)) for start, end in proposed)
-    return text
+    return 'QDS: complete ComStatsim period'
 
 def _reference_text(request):
     background = (request or {}).get('background') or []
@@ -2618,24 +3059,6 @@ def network_states(windows):
     return states
 
 
-def calculation_windows(windows, warmup_hours=WINDOW_WARMUP_HOURS, merge_gap_hours=WINDOW_MERGE_GAP_HOURS):
-    """Shortest QDS periods that contain every window plus its warm-up.
-
-    Windows closer than the merge gap share one period, because a second
-    initialisation costs more than the steps in between. Only a proposal: it
-    may be executed only when the time-coupled state is shown to be equal.
-    """
-    spans = merge_intervals([(start - warmup_hours * 3600.0, end) for start, end in windows
-                             if start is not None and end is not None and end > start])
-    merged = []
-    for start, end in spans:
-        if merged and start - merged[-1][1] < merge_gap_hours * 3600.0:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
-
-
 def assign_definitions(records):
     """Group occurrences that switch the same components into one technical outage."""
     groups = {}
@@ -2652,8 +3075,8 @@ def assign_definitions(records):
 
 def empty_case_config(project_key=''):
     return {'schema': CASE_CONFIG_SCHEMA, 'schema_version': CASE_CONFIG_SCHEMA_VERSION, 'revision': 0,
-            'project': project_key, 'saved_at': '', 'saved_by': '', 'mode': QDS_WINDOW_MODE,
-            'assessments': ['n-0'], 'background': [], 'cases': [], 'rules': []}
+            'project': project_key, 'saved_at': '', 'saved_by': '', 'assessments': ['n-0'], 'background': [],
+            'cases': [], 'rules': [], 'settings': {}}
 
 
 def _occurrence_window(record, plan_case):
@@ -2744,7 +3167,8 @@ def validate_case_config(config, max_cases=MAX_CASES):
         problems.append('unknown schema {!r}'.format(config.get('schema')))
     if config.get('schema_version') != CASE_CONFIG_SCHEMA_VERSION:
         problems.append('schema version {!r} is not {}'.format(config.get('schema_version'), CASE_CONFIG_SCHEMA_VERSION))
-    if config.get('mode', QDS_WINDOW_MODE) not in ('conservative', 'optimized'):
+    # 'mode' is a field of earlier versions (time optimisation); it is ignored and no longer saved.
+    if config.get('mode', 'conservative') not in ('conservative', 'optimized'):
         problems.append('unknown calculation mode {!r}'.format(config.get('mode')))
     assessments = config.get('assessments', ['n-0'])
     if not _is_text_list(assessments) or not assessments or set(assessments) - set(ASSESSMENTS):
@@ -2754,6 +3178,7 @@ def validate_case_config(config, max_cases=MAX_CASES):
                         'assessment can be calculated')
     if not _is_text_list(config.get('background', [])):
         problems.append('background must be a list of planned outage paths')
+    problems += ['settings: ' + problem for _, problem in validate_settings(config.get('settings', {}))]
     if not isinstance(config.get('migration_note', ''), str):
         problems.append('migration_note must be text')
     if 'exclusive_groups' in config:
@@ -2833,7 +3258,7 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
             continue
         plan = {'id': case['id'], 'name': str(case.get('name') or case['id']), 'description': str(case.get('description') or ''),
                 'members': [], 'windows': {}, 'status': PLAN_READY, 'reason': '', 'warnings': [], 'states': [],
-                'calc_windows': [], 'relations': [], 'overridden': []}
+                'relations': [], 'overridden': []}
         errors = []
         for key in case.get('outages') or ():
             record = lookup(key)
@@ -2902,14 +3327,12 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
             plan['status'] = PLAN_NOT_EVALUATED
             plan['reason'] = 'Not calculated: ' + '; '.join(errors) + '.'
         plan['states'] = network_states(windows)
-        plan['calc_windows'] = calculation_windows(known)
         plan['fingerprint'] = plan_fingerprint(plan, background)
         plans.append(plan)
-    mode = config.get('mode', QDS_WINDOW_MODE)
-    return {'source': source, 'source_text': source_text or source, 'revision': config.get('revision'), 'mode': mode,
+    return {'source': source, 'source_text': source_text or source, 'revision': config.get('revision'),
             'background': background, 'cases': plans, 'skipped': [], 'records': list(records), 'config': config,
-            'optimization': None, 'warnings': request_warnings, 'disabled': disabled,
-            'assessments': list(config.get('assessments') or ['n-0'])}
+            'warnings': request_warnings, 'disabled': disabled, 'assessments': list(config.get('assessments') or ['n-0']),
+            'settings': dict(config.get('settings') or {})}
 
 
 def per_outage_config(candidates, project_key=''):
@@ -2929,28 +3352,6 @@ def per_outage_request(records, candidates, period=(None, None), project_key='')
     for plan, record in zip(request['cases'], candidates):
         record['case_id'] = plan['id']
     return request
-
-
-def optimization_summary(request, period, app=None):
-    """What shorter calculation windows would save; never executed in this version."""
-    begin, finish = period
-    full = (finish - begin) / 3600.0 if begin is not None and finish is not None else None
-    proposed = [window for plan in request['cases'] if plan['status'] == PLAN_READY for window in plan['calc_windows']]
-    hours = sum((min(end, finish) - max(start, begin)) / 3600.0 for start, end in proposed) if full is not None else None
-    coupled = []
-    if app is not None:
-        for class_pattern in TIME_COUPLED_CLASSES:
-            try:
-                found = app.GetCalcRelevantObjects('*.' + class_pattern) or []
-            except Exception:
-                found = []
-            if found:
-                coupled.append('{} {}'.format(len(found), class_pattern))
-    reason = ('the active grid contains time-coupled models ({}), whose state at a window start differs from a continuous run'.format(', '.join(coupled))
-              if coupled else 'writing the QDS period and the initial state of time-coupled models are not verified in PowerFactory yet')
-    summary = '{} window(s), {} h instead of {} h per case'.format(
-        len(proposed), '{:.0f}'.format(hours) if hours is not None else '?', '{:.0f}'.format(full) if full is not None else '?')
-    return {'summary': summary, 'reason': reason, 'admissible': False, 'time_coupled': coupled, 'executed': False}
 
 
 def legacy_case_config_path(project_key):
@@ -3012,6 +3413,7 @@ def save_case_config(path, config, user=''):
                   saved_at=datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %z'), saved_by=user)
     # The upgrade note is a one-time hint; once saved, the cases are the reviewed ones.
     stored.pop('migration_note', None)
+    stored.pop('mode', None)
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
@@ -3027,7 +3429,6 @@ def save_case_config(path, config, user=''):
 def preview_text(request, period=(None, None)):
     """What OK would calculate, as plain text for the case manager and the log."""
     lines = ['Reference: {}'.format(_reference_text(request)),
-             'Calculation mode: {}'.format(request['mode']),
              'Simulated period: {} to {}'.format(_format_pf_time(period[0]) or '?', _format_pf_time(period[1]) or '?'), '']
     ready = [plan for plan in request['cases'] if plan['status'] == PLAN_READY]
     groups = {}
@@ -3048,9 +3449,6 @@ def preview_text(request, period=(None, None)):
             lines.append('   {} / {}: {} ({})'.format(left, right, code, INTERVAL_RELATIONS[code]))
         if plan['states']:
             lines.append('   network states: ' + states_text(plan))
-        if plan['calc_windows']:
-            lines.append('   proposed QDS windows: ' + '; '.join(
-                period_text(_format_pf_time(start), _format_pf_time(end)) for start, end in plan['calc_windows']))
         for warning in plan['warnings']:
             lines.append('   warning: ' + warning)
         if plan['reason']:
@@ -3094,6 +3492,12 @@ KEYBOARD_SHORTCUTS = (
     ('Escape', 'window', 'end an in-place edit, otherwise cancel'),
 )
 
+SETTINGS_INTRO = ('Limits and classification parameters (category A) only interpret calculated results; they never '
+                  'change a load flow, a rating or the network model. Calculation parameters (category B) stay read '
+                  'only until the PowerFactory contingency interface is verified. Settings are stored provisionally '
+                  'in the case configuration file of this project, not yet inside the PowerFactory project.')
+N1_UNAVAILABLE = ("Not available yet: the native PowerFactory contingency analysis will be enabled once the interface "
+                  "verification is complete. Nothing of n-1 is calculated or reported.")
 # Hover texts of the case manager. They explain what a control does to the
 # calculation; the operating guide (docs/CASE_MANAGER.md) says the same.
 HELP_TEXTS = {
@@ -3130,24 +3534,123 @@ HELP_TEXTS = {
                  "second only after the first: the second may only start after the first has ended.\n"
                  "only together: a case with one of them must contain the other, at the same time.\n"
                  "Rules apply to every case; a case that breaks one is not calculated and is reported.",
-    'n1': "Not available: this GridLens version has no contingency analysis. Only n-0 (QDS) is calculated.",
-    'qds': "Period and time step of the active ComStatsim. Every run covers the complete period; GridLens does "
-           "not change it.",
-    'status_line': "Click to open Review & start: what will be calculated and every problem or warning.",
-    'save': "Writes the configuration file of this project (with revision, user and time). The project is not touched. "
-            "Key: Ctrl+S.",
+    'n0': "n-0 - reference QDS\nCalculates the time-dependent base state of the network without planned outages and "
+          "without additional contingencies. Loads and infeeds change as in the quasi-dynamic simulation.",
+    'n1': "n-1 - reference contingency analysis\nAssesses the security of the base network without planned outages. "
+          "Every defined unplanned single contingency is assessed at the chosen points in time.\n" + N1_UNAVAILABLE,
+    'n1_prime': "(n-1)' - contingency analysis with planned-outage scenarios\nAssesses a planned-outage scenario with "
+                "the planned outages valid at each point in time and one additional unplanned contingency. The results "
+                "are compared with n-1.\n" + N1_UNAVAILABLE,
+    'planned_outages': "Planned outages from the PowerFactory Outage Management library. Their validity in time and "
+                       "their switching effect are taken into account in the assigned scenarios.",
+    'qds': "The time step is taken from PowerFactory. With a QDS time step of two hours, n-1 and (n-1)' are assessed "
+           "at the same points in time. Every run covers the complete ComStatsim period; GridLens changes neither "
+           "the period nor the time step.",
+    'status_line': "Click to open the Case Manager tab: what will be calculated and every problem or warning.",
+    'preview': "Shows or hides the calculation preview: which cases are calculated, with which reference, settings and "
+               "planned outages. It never calculates anything.",
+    'save': "Writes the configuration file of this project (cases, fixed outages, rules and settings, with revision, "
+            "user and time). The project is not touched. Key: Ctrl+S.",
     'load': "Reads the saved configuration file again; unsaved changes in the window are replaced. Key: Ctrl+O.",
-    'start': "Checks the configuration, closes the window and starts the reference and one QDS run per case. "
-             "Key: Ctrl+Enter.",
+    'start': "Checks the configuration and the settings, closes the window and runs the selected PowerFactory "
+             "calculations: the reference and one QDS run per case. The results stay in PowerFactory as result objects "
+             "and are published to the GridLens report tables; the PDF report is created in PowerFactory as a separate "
+             "step. Key: Ctrl+Enter.",
     'cancel': "Closes the window: nothing is calculated, saved or changed in the project. Key: Escape.",
 }
+# Hover texts of the Settings tab, per setting; a read-only setting adds why it is read only.
+SETTING_HELP = {
+    'line_warning': "From this loading GridLens marks a line as conspicuous (pie chart class, appendix). The warning "
+                    "threshold does not change the physical capability of the equipment.",
+    'transformer_warning': "From this loading GridLens marks a transformer as conspicuous (pie chart class, appendix). "
+                           "The warning threshold does not change the physical capability of the equipment.",
+    'line_limit': "Maximum n-0 loading of lines: limit for assessing the undisturbed base network. The default comes "
+                  "from the existing GridLens configuration (100 %). Loading above it is a violation; exactly on it is none.",
+    'transformer_limit': "Maximum n-0 loading of transformers: limit for assessing the undisturbed base network. The "
+                         "default comes from the existing GridLens configuration (100 %).",
+    'n1_limit_mode': "Maximum n-1 loading: limit for assessing equipment after an additional unplanned outage. n-1 and "
+                     "(n-1)' must use a comparable limit definition. 'use PowerFactory limits' keeps the equipment "
+                     "ratings modelled in PowerFactory; a global assessment limit only changes the assessment, never a "
+                     "rating, a model parameter or the load flow.",
+    'n1_limit_global': "Assessment limit for n-1 and (n-1)' when 'global assessment limit' is chosen. It is an "
+                       "assessment limit only: ratings and thermal data in PowerFactory stay unchanged.",
+    'voltage_min_pu': "Lower permitted voltage limit for every nominal voltage outside the kV bands. Voltages below "
+                      "this limit are assessed as a limit violation. GridLens proposal, to be confirmed.",
+    'voltage_max_pu': "Upper permitted voltage limit for every nominal voltage outside the kV bands. Voltages above "
+                      "this limit are assessed as a limit violation. GridLens proposal, to be confirmed.",
+    'band_min': "Lower permitted voltage limit of this nominal voltage band. Voltages below this limit are assessed "
+                "as a limit violation. GridLens proposal, to be confirmed by the engineer.",
+    'band_max': "Upper permitted voltage limit of this nominal voltage band. Voltages above this limit are assessed "
+                "as a limit violation. GridLens proposal, to be confirmed by the engineer.",
+    'post_fault_voltage': "Post-fault voltage limits per post-fault time phase. PowerFactory's post-fault phases are "
+                          "not verified yet, so no separate limit can be set.",
+    'loading_change_tolerance': "n-0 QDS: a loading change smaller than this (in %-points) counts as unchanged when a "
+                                "case is compared with the reference at the same time step.",
+    'voltage_change_tolerance': "n-0 QDS: a voltage change smaller than this (in p.u.) counts as unchanged when a case "
+                                "is compared with the reference at the same time step.",
+    'limit_tolerance': "n-1 / (n-1)' classification: a value counts as a violation only when it lies more than this "
+                       "beyond the limit. 0 keeps the rule 'exactly on the limit is no violation'.",
+    'numeric_tolerance': "Numerical comparison tolerance for rounding noise of the results; far below any meaningful "
+                         "difference. It is added to every other tolerance of the classification.",
+    'worsened_tolerance': "Classification tolerance: from which numerical increase an existing limit violation counts "
+                          "as WORSENED instead of PRE_EXISTING.",
+    'improved_tolerance': "Classification tolerance: from which numerical decrease an existing limit violation counts "
+                          "as IMPROVED instead of PRE_EXISTING.",
+    'margin_warning_loading': "Marks an OK result with MARGIN_REDUCED when its loading reaches at least this value and "
+                              "its reserve to the limit shrank by more than the WORSENED tolerance.",
+    'contingency_set': "Defines which additional unplanned equipment outages are analysed in PowerFactory.",
+    'contingency_categories': "Equipment categories for which PowerFactory creates contingencies.",
+    'monitored_scope': "Equipment and network areas whose results the contingency analysis monitors.",
+    'calculation_method': "AC or DC load flow of the contingency analysis. GridLens prefers an AC load flow for the "
+                          "final security assessment.",
+    'islanding': "Takes into account whether an additional outage splits the network into electrically separate parts.",
+    'unsupplied_load': "Takes into account supply interruptions, i.e. the load that can no longer be supplied after a "
+                       "fault, as far as PowerFactory can determine it.",
+    'load_shedding': "How load shedding after a contingency is treated.",
+    'post_fault_phases': "The post-fault time phases defined in PowerFactory.",
+    'remedial_actions': "The remedial actions defined in PowerFactory. They can change the calculated result.",
+    'limits': "Defines from when GridLens assesses a calculated state as critical. Changing assessment limits does not "
+              "change the physical network model.",
+    'classification': "Compares n-1 and (n-1)' at the same point in time, for the same contingency and the same "
+                      "monitored equipment. Rules version " + CLASSIFICATION_VERSION + ".",
+    'calculation_parameters': "Category B: these parameters can change what PowerFactory calculates. " + PART3_NOTE,
+    'restore_defaults': "Removes the user overrides and loads the valid default values of GridLens (and of PowerFactory, "
+                        "once those are read).",
+    'apply_settings': "Checks the entries and uses the settings for the next selected calculations.",
+    'save_settings': "Checks the entries and saves the settings for later use. Provisional: they are written into the "
+                     "case configuration file of this project (JSON), not yet into the PowerFactory project; the "
+                     "project itself is not touched.",
+    'source': "Origin of the value: GridLens (GridLens default), PowerFactory (read from the model or the calculation "
+              "configuration) or user (changed by you). 'edited, not applied' means the entry differs from the applied "
+              "value until you apply or save the settings.",
+}
+
+
+def setting_help(key):
+    """The hover text of one setting, with the reason when it is read only."""
+    setting = SETTINGS_BY_KEY[key]
+    family = key
+    if key.startswith('band'):
+        family = 'band_min' if key.endswith('_min') else 'band_max'
+    for prefix in ('limit_tolerance', 'worsened_tolerance', 'improved_tolerance'):
+        if key.startswith(prefix):
+            family = prefix
+    text = SETTING_HELP.get(family, setting['label'])
+    details = ['Applies to: {}.'.format(setting['applies'])]
+    if setting['note'] and setting['note'] not in text:
+        details.append(setting['note'])
+    if setting['category'] == CATEGORY_CALCULATION:
+        details.insert(0, 'Category B (calculation parameter).')
+    return text + '\n' + ' '.join(details)
+
+
 COLUMN_HELP = {
     'case_name': "Double-click a case (or press F2) to rename it in place: Enter or a click elsewhere applies, "
                  "Escape cancels. The generated case ID stays.",
     'case_status': "ready: will be calculated.\n"
                    "not calculated: reported as NOT EVALUATED or NOT SIMULATED, e.g. no planned outage assigned, "
                    "an outage missing in the project, own dates, a broken outage rule, or outside the "
-                   "simulated period. The reason is on Review & start.\n"
+                   "simulated period. The reason is under Problems and warnings.\n"
                    "excluded: the Run flag is unticked.",
     'case_count': "Number of planned outages assigned to this case.",
     'mark': "Check box: tick to add the planned outage to the selected case, untick to remove it (also Space).\n"
@@ -3241,11 +3744,13 @@ class CaseEditor:
     reaches the caller only through "Start calculation".
     """
 
-    def __init__(self, records, config, period, qds_text=''):
+    def __init__(self, records, config, period, qds_text='', qds_info=None):
         self.records = list(records)
         self.by_key = {record['key']: record for record in self.records}
         self.period = period
         self.qds_text = qds_text or qds_period_text(period)
+        # (label, value) lines of the ComStatsim time base, shown read only.
+        self.qds_info = list(qds_info or qds_time_info(None, period))
         self._checked_state = None
         self._outage_choices = None
         self.load(config)
@@ -3256,9 +3761,10 @@ class CaseEditor:
         for name in ('cases', 'background', 'rules'):
             self.config.setdefault(name, [])
         self.config.setdefault('assessments', ['n-0'])
-        # The case manager offers no time optimisation: every run covers the
-        # complete ComStatsim period.
-        self.config['mode'] = 'conservative'
+        # No time optimisation: every run covers the complete ComStatsim period,
+        # so the field of earlier versions is dropped.
+        self.config.pop('mode', None)
+        self.config.setdefault('settings', {})
 
     # --- cases ---------------------------------------------------------------
     def case(self, case_id):
@@ -3546,13 +4052,49 @@ class CaseEditor:
         if 0 <= index < len(self.config['rules']):
             del self.config['rules'][index]
 
+    # --- settings ----------------------------------------------------------------
+    def settings_overrides(self):
+        return dict(self.config.get('settings') or {})
+
+    def settings_rows(self):
+        """(key, label, unit, value text, source, category, editable) of every setting, in SETTINGS order."""
+        overrides = self.settings_overrides()
+        values = default_settings()
+        values.update({key: value for key, value in overrides.items() if key in values})
+        return [(setting['key'], setting['label'], setting['unit'],
+                 setting_text(setting['key'], values.get(setting['key'], setting['default'])),
+                 setting_source(setting['key'], overrides), setting['category'], setting['editable'])
+                for setting in SETTINGS]
+
+    def set_settings(self, values):
+        """Take the edited values of the Settings tab; [(key, problem)] and nothing changes when one is invalid."""
+        parsed, problems = {}, []
+        for key, value in values.items():
+            number, problem = parse_setting(key, value)
+            if problem:
+                problems.append((key, problem))
+            else:
+                parsed[key] = number
+        if problems:
+            return problems
+        overrides = clean_overrides(dict(default_settings(), **parsed))
+        problems = validate_settings(overrides)
+        if not problems:
+            self.config['settings'] = overrides
+        return problems
+
+    def restore_default_settings(self):
+        """Remove every user override; the GridLens defaults apply again."""
+        self.config['settings'] = {}
+
     # --- assessment and preview ------------------------------------------------
-    def set_assessments(self, n0, n1):
+    def set_assessments(self, n0, n1=False, n1_prime=False):
         """The requested assessments; a problem as text, else None."""
-        if not n0 and not n1:
+        if not n0 and not n1 and not n1_prime:
             return 'Select at least one assessment.'
-        if n1:
-            return 'The n-1 contingency analysis is not available in this GridLens version.'
+        if n1 or n1_prime:
+            return ("n-1 and (n-1)' are not available yet: the native PowerFactory contingency analysis is enabled once "
+                    "its interface is verified.")
         self.config['assessments'] = ['n-0']
         return None
 
@@ -3622,9 +4164,11 @@ class CaseEditor:
             return ' to '.join(_format_pf_time(value) if value is not None else '?' for value in window)
         background = request['background']
         fixed = ', '.join(record['name'] for record in background) or 'none'
-        lines = ['Assessment: n-0 (QDS)', 'QDS period: ' + self.qds_text,
+        lines = ['Assessment: n-0 (QDS)', "n-1 and (n-1)': not available until the contingency interface is verified",
+                 'QDS period: ' + self.qds_text,
                  'Reference: ' + (('Rfix' if background else 'R0') if RUN_REFERENCE_CASE else 'off'),
-                 'Shared background: ' + fixed]
+                 'Shared background: ' + fixed,
+                 'Settings: ' + overrides_text(self.settings_overrides())]
         for record in background:
             lines.append('  {}: {}'.format(record['name'], window_text(record['window'])))
         for _, (first, rule, second) in self.rule_rows():
@@ -3671,6 +4215,7 @@ class CaseEditor:
             ('Reference', 'Rfix - with the fixed background outages' if background else 'R0 - no planned outage'),
             ('QDS period', self.qds_text + ' (from the active ComStatsim)'),
             ('Assessment', 'n-0 quasi-dynamic simulation'),
+            ('Settings', overrides_text(self.settings_overrides())),
             ('Calculation runs', '{} reference + {} case run(s){}'.format(
                 1 if RUN_REFERENCE_CASE else 0, len(ready) - reused,
                 ', {} identical case(s) reused'.format(reused) if reused else '')),
@@ -3961,11 +4506,15 @@ class FilterTable:
 class CaseManagerDialog:
     """The tkinter window of the case manager; all state lives in a CaseEditor.
 
-    Three tabs: "Workspace" (left to right: every available planned outage,
-    the planned outages of the selected case, the planning cases), "Fixed background & rules"
-    and "Review & start". A status line and the action bar stay visible on
-    every tab. Every table filters per column. The window only configures the
-    calculation; results are the PDF report.
+    Exactly two tabs. "Case Manager": left to right every available planned
+    outage, the planned outages of the selected case and the planning cases;
+    below them the calculation choice (n-0, n-1, (n-1)'), the problems and a
+    collapsible calculation preview. "Settings": limits, classification,
+    contingency analysis (read only), the QDS time base (read only) and the
+    fixed background outages and rules. A status line and the action bar stay
+    visible on both tabs. Every table filters per column. The window only
+    configures the calculation; there is no results tab, results are the
+    PowerFactory result objects and the report.
     """
 
     BACKGROUND, CARD, TEXT, MUTED = '#eef3f7', '#ffffff', '#1c3244', '#5c7082'
@@ -3973,7 +4522,10 @@ class CaseManagerDialog:
     HEADER, FILTER, BORDER = '#e7eef4', '#f5f8fa', '#d0dce5'
     MASTHEAD, MASTHEAD_MUTED, INSET = '#18384c', '#c7d8e4', '#f0f6fa'
     FIXED, OVERLAP, GAP = '#8a94a3', '#dbe6f5', '#eceff3'
-    TAB_FIXED, TAB_REVIEW = 'Fixed background & rules', 'Review & start'
+    TAB_CASES, TAB_SETTINGS = 'Case Manager', 'Settings'
+    SETTINGS_PAGES = (('Limits', ('Thermal limits', 'Voltage limits')), ('Classification', ('Classification',)),
+                      ('Contingency analysis', ('Contingency analysis',)))
+    PAGE_TIME, PAGE_FIXED = 'QDS time base', 'Fixed background & rules'
 
     def __init__(self, root, editor, config_path, user, tk_modules):
         self.root = root
@@ -3987,6 +4539,9 @@ class CaseManagerDialog:
         self.inline_edit = None
         self.tooltips = []
         self.bold_font = 'TkDefaultFont'
+        # Settings tab: entry variable, entry, source label and message label per setting.
+        self.setting_vars, self.setting_inputs, self.setting_sources, self.setting_messages = {}, {}, {}, {}
+        self.preview_visible = False
 
     def tip(self, widget, text):
         """Explain `widget` on hover; returns the Tooltip."""
@@ -4012,28 +4567,24 @@ class CaseManagerDialog:
         masthead.columnconfigure(1, weight=1)
         ttk.Label(masthead, text='GridLens', style='Brand.TLabel').grid(row=0, column=0, rowspan=2, sticky='w', padx=(0, 22))
         ttk.Label(masthead, text='Planning case manager', style='MastheadTitle.TLabel').grid(row=0, column=1, sticky='w')
-        ttk.Label(masthead, text='Build independent cases. Review the plan. Start the calculation.',
+        ttk.Label(masthead, text='Build independent cases. Check the settings. Start the calculation.',
                   style='MastheadHint.TLabel').grid(row=1, column=1, sticky='w', pady=(2, 0))
         self.notebook = ttk.Notebook(root)
         self.notebook.enable_traversal()
         self.notebook.grid(row=1, column=0, sticky='nsew', padx=14, pady=(12, 0))
-        workspace = ttk.Frame(self.notebook, padding=(0, 8, 0, 0))
-        overview = ttk.Frame(self.notebook, padding=(0, 8, 0, 0))
-        review = ttk.Frame(self.notebook, padding=(0, 8, 0, 0))
-        self.notebook.add(workspace, text='Workspace')
-        self.notebook.add(overview, text=self.TAB_FIXED)
-        self.notebook.add(review, text=self.TAB_REVIEW)
-        self.review_tab = review
-        self._build_workspace(workspace)
-        self._build_fixed_and_rules(overview)
-        self._build_review(review)
+        self.cases_tab = ttk.Frame(self.notebook, padding=(0, 8, 0, 0))
+        self.settings_tab = ttk.Frame(self.notebook, padding=(0, 8, 0, 0))
+        self.notebook.add(self.cases_tab, text=self.TAB_CASES)
+        self.notebook.add(self.settings_tab, text=self.TAB_SETTINGS)
+        self._build_case_manager(self.cases_tab)
+        self._build_settings(self.settings_tab)
         bottom = ttk.Frame(root, padding=(14, 6, 14, 12))
         bottom.grid(row=2, column=0, sticky='ew')
         bottom.columnconfigure(2, weight=1)
         self.status_line = self._wrapped_label(bottom, '', style='Status.TLabel', row=0, column=0,
                                                columnspan=5, pady=(0, 6))
         self.status_line.configure(cursor='hand2')
-        self.status_line.bind('<Button-1>', lambda _event: self.notebook.select(self.review_tab))
+        self.status_line.bind('<Button-1>', lambda _event: self.notebook.select(self.cases_tab))
         self.tip(self.status_line, HELP_TEXTS['status_line'])
         for column, (text, command, key, style) in enumerate((
                 ('Save configuration', self.save, 'save', 'TButton'), ('Load saved configuration', self.load_saved, 'load', 'TButton'),
@@ -4108,6 +4659,9 @@ class CaseManagerDialog:
         style.map('TNotebook.Tab', background=[('selected', self.CARD)], foreground=[('selected', self.TEXT)],
                   font=[('selected', (family, 10, 'bold'))])
         style.configure('Filter.TEntry', fieldbackground=self.CARD, padding=(4, 1))
+        style.configure('Invalid.TEntry', fieldbackground='#fbe4e4', foreground=self.PROBLEM)
+        style.configure('Source.TLabel', background=self.CARD, foreground=self.MUTED, font=(family, 9))
+        style.configure('User.TLabel', background=self.CARD, foreground=self.ACCENT, font=(family, 9, 'bold'))
         style.configure('Filter.TCombobox', fieldbackground=self.CARD, padding=(4, 1))
         style.configure('Treeview', rowheight=26, background=self.CARD, fieldbackground=self.CARD, borderwidth=0,
                         lightcolor=self.CARD, darkcolor=self.CARD)
@@ -4133,7 +4687,18 @@ class CaseManagerDialog:
         parent.bind('<Configure>', resize, add='+')
         return label
 
-    # --- tab "Workspace" --------------------------------------------------------
+    # --- tab "Case Manager" ------------------------------------------------------
+    def _build_case_manager(self, tab):
+        """The three panes on top; the calculation choice, problems and preview below them."""
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(0, weight=1)
+        workspace = self.ttk.Frame(tab)
+        workspace.grid(row=0, column=0, sticky='nsew')
+        self._build_workspace(workspace)
+        strip = self.ttk.Frame(tab)
+        strip.grid(row=1, column=0, sticky='nsew', pady=(8, 0))
+        self._build_calculation(strip)
+
     def _build_workspace(self, tab):
         ttk = self.ttk
         tab.columnconfigure(0, weight=1)
@@ -4194,7 +4759,7 @@ class CaseManagerDialog:
         tk, ttk = self.tk, self.ttk
         pane.columnconfigure(0, weight=1)
         pane.rowconfigure(2, weight=3, minsize=170)
-        pane.rowconfigure(4, weight=2, minsize=150)
+        pane.rowconfigure(4, weight=2, minsize=90)
         heading = ttk.Frame(pane, style='Card.TFrame')
         heading.grid(row=0, column=0, sticky='ew')
         heading.columnconfigure(1, weight=1)
@@ -4230,10 +4795,11 @@ class CaseManagerDialog:
         timeline.grid(row=4, column=0, sticky='nsew')
         timeline.columnconfigure(0, weight=1)
         timeline.rowconfigure(1, weight=1)
+        self.tip(timeline, HELP_TEXTS['timeline'])
         legend = self._wrapped_label(timeline, 'Blue: case outage · Grey: shared outage · Shaded: overlapping windows · Light band: shortened gap',
                                      row=0, column=0, columnspan=2, pady=(0, 4))
         self.tip(legend, HELP_TEXTS['timeline'])
-        self.canvas = tk.Canvas(timeline, height=110, background=self.CARD, highlightthickness=0)
+        self.canvas = tk.Canvas(timeline, height=70, background=self.CARD, highlightthickness=0)
         scroll = ttk.Scrollbar(timeline, orient='vertical', command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=scroll.set)
         self.canvas.grid(row=1, column=0, sticky='nsew')
@@ -4244,7 +4810,9 @@ class CaseManagerDialog:
         ttk = self.ttk
         pane.columnconfigure(0, weight=1)
         pane.rowconfigure(1, weight=1)
-        ttk.Label(pane, text='Available planned outages', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 6))
+        title = ttk.Label(pane, text='Available planned outages', style='Title.TLabel')
+        title.grid(row=0, column=0, sticky='w', pady=(0, 6))
+        self.tip(title, HELP_TEXTS['planned_outages'])
         self.available_table = FilterTable(self, pane, (
             ('mark', 'In case', 78, False, (('in case', MARK_IN_CASE), ('free', MARK_FREE), ('fixed', MARK_FIXED))),
             ('fs', 'Planned outage', 140, True, None), ('equipment', 'Equipment', 110, True, None),
@@ -4305,7 +4873,7 @@ class CaseManagerDialog:
         self.fixed_tree = self.fixed_table.tree
         self.fixed_tree.bind('<Double-1>', lambda _event: self.show_details(self.fixed_tree))
         self._bind_delete(self.fixed_tree, self.unfix_selected)
-        self._wrapped_label(fixed, 'Add a shared outage in Workspace with "Set as fixed background".',
+        self._wrapped_label(fixed, 'Add a shared outage on the Case Manager tab with "Set as fixed background".',
                             row=4, column=0, pady=(8, 4))
         unfix = ttk.Button(fixed, text='Remove from fixed background', command=self.unfix_selected)
         unfix.grid(row=5, column=0, sticky='w')
@@ -4355,54 +4923,287 @@ class CaseManagerDialog:
         ttk.Button(actions, text='Add rule', command=self.add_rule).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(actions, text='Remove rule', command=self.remove_rule).grid(row=0, column=1)
 
-    # --- tab "Review & start" ------------------------------------------------------
-    def _build_review(self, tab):
+    def _build_calculation(self, strip):
+        """Calculation choice, problems and the collapsible preview, below the three panes."""
         tk, ttk = self.tk, self.ttk
-        tab.columnconfigure(1, weight=1)
-        tab.rowconfigure(1, weight=2)
-        tab.rowconfigure(2, weight=1)
-        options = self._card(tab, row=0, column=0, sticky='nsew', padx=(0, 4), pady=(0, 8))
-        ttk.Label(options, text='Calculation', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 6))
-        self.n0_var, self.n1_var = tk.BooleanVar(value='n-0' in self.editor.config['assessments']), tk.BooleanVar(value=False)
-        ttk.Checkbutton(options, text='n-0 - quasi-dynamic simulation (QDS)', variable=self.n0_var,
-                        command=self.apply_assessments).grid(row=1, column=0, sticky='w')
-        n1 = ttk.Checkbutton(options, text='n-1 - contingency analysis', variable=self.n1_var, state='disabled')
+        strip.columnconfigure(1, weight=1)
+        options = self._card(strip, row=0, column=0, sticky='nsew', padx=(0, 4))
+        ttk.Label(options, text='Calculation', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 4))
+        self.n0_var = tk.BooleanVar(value='n-0' in self.editor.config['assessments'])
+        self.n1_var, self.n1_prime_var = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
+        n0 = ttk.Checkbutton(options, text='n-0 - reference QDS', variable=self.n0_var, command=self.apply_assessments)
+        n0.grid(row=1, column=0, sticky='w')
+        self.tip(n0, HELP_TEXTS['n0'])
+        n1 = ttk.Checkbutton(options, text='n-1 - reference contingency analysis', variable=self.n1_var, state='disabled')
         n1.grid(row=2, column=0, sticky='w')
         self.tip(n1, HELP_TEXTS['n1'])
-        ttk.Label(options, text='not available in this GridLens version (no contingency analysis)',
-                  style='Muted.TLabel').grid(row=3, column=0, sticky='w', padx=(22, 0))
-        qds = ttk.Label(options, text='QDS: ' + self.editor.qds_text, style='Section.TLabel')
-        qds.grid(row=4, column=0, sticky='w', pady=(10, 0))
+        prime = ttk.Checkbutton(options, text="(n-1)' - contingency analysis with planned-outage scenarios",
+                                variable=self.n1_prime_var, state='disabled')
+        prime.grid(row=3, column=0, sticky='w')
+        self.tip(prime, HELP_TEXTS['n1_prime'])
+        note = ttk.Label(options, text="n-1 and (n-1)': enabled once the PowerFactory contingency interface is verified",
+                         style='Muted.TLabel')
+        note.grid(row=4, column=0, sticky='w', padx=(22, 0))
+        self.tip(note, N1_UNAVAILABLE)
+        footer = ttk.Frame(options, style='Card.TFrame')
+        footer.grid(row=5, column=0, sticky='ew', pady=(6, 0))
+        footer.columnconfigure(0, weight=1)
+        qds = ttk.Label(footer, text='QDS: ' + self.editor.qds_text, style='Section.TLabel')
+        qds.grid(row=0, column=0, sticky='w')
         self.tip(qds, HELP_TEXTS['qds'])
-        ttk.Label(options, text='period and time step as set in the active ComStatsim', style='Muted.TLabel').grid(
-            row=5, column=0, sticky='w')
-        preview = self._card(tab, row=0, column=1, sticky='nsew', padx=(4, 0), pady=(0, 8))
-        preview.columnconfigure(1, weight=1)
-        ttk.Label(preview, text='What will be calculated (no results)', style='Title.TLabel').grid(
-            row=0, column=0, columnspan=2, sticky='w', pady=(0, 6))
-        self.preview_frame = ttk.Frame(preview, style='Card.TFrame')
-        self.preview_frame.grid(row=1, column=0, columnspan=2, sticky='nsew')
-        self.preview_frame.columnconfigure(1, weight=1)
-        cases = self._card(tab, row=1, column=0, columnspan=2, sticky='nsew', pady=(0, 8))
-        cases.columnconfigure(0, weight=1)
-        cases.rowconfigure(1, weight=1)
-        ttk.Label(cases, text='Cases to calculate · settings preview', style='Title.TLabel').grid(
-            row=0, column=0, columnspan=2, sticky='w', pady=(0, 6))
-        self.case_preview = tk.Text(cases, height=7, width=1, wrap='word', relief='flat', borderwidth=0,
-                                    background=self.CARD, foreground=self.TEXT, font=self.body_font,
-                                    padx=4, pady=4, state='disabled', takefocus=True)
-        self.case_preview.grid(row=1, column=0, sticky='nsew')
-        scroll = ttk.Scrollbar(cases, orient='vertical', command=self.case_preview.yview)
-        scroll.grid(row=1, column=1, sticky='ns')
-        self.case_preview.configure(yscrollcommand=scroll.set)
-        self._case_preview_text = None
-        problems = self._card(tab, row=2, column=0, columnspan=2, sticky='nsew')
+        self.preview_button = ttk.Button(footer, text='Show calculation preview', command=self.toggle_preview)
+        self.preview_button.grid(row=0, column=1, sticky='e', padx=(10, 0))
+        self.tip(self.preview_button, HELP_TEXTS['preview'])
+        problems = self._card(strip, row=0, column=1, sticky='nsew', padx=(4, 0))
         problems.columnconfigure(0, weight=1)
         problems.rowconfigure(1, weight=1)
-        ttk.Label(problems, text='Problems and warnings', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 6))
+        ttk.Label(problems, text='Problems and warnings', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 4))
         self.problem_table = FilterTable(self, problems, (('where', 'Where', 130, False, None), ('problem', 'Problem', 600, True, None)),
                                          height=3)
         self.problem_table.grid(row=1, column=0, sticky='nsew')
+        self.preview_card = self._card(strip, row=1, column=0, columnspan=2, sticky='nsew', pady=(8, 0))
+        self.preview_card.columnconfigure(0, weight=1)
+        self.preview_card.rowconfigure(2, weight=1)
+        ttk.Label(self.preview_card, text='What will be calculated (no results)', style='Title.TLabel').grid(
+            row=0, column=0, columnspan=2, sticky='w', pady=(0, 4))
+        self.preview_frame = ttk.Frame(self.preview_card, style='Card.TFrame')
+        self.preview_frame.grid(row=1, column=0, columnspan=2, sticky='ew')
+        self.preview_frame.columnconfigure(1, weight=1)
+        self.case_preview = tk.Text(self.preview_card, height=6, width=1, wrap='word', relief='flat', borderwidth=0,
+                                    background=self.CARD, foreground=self.TEXT, font=self.body_font,
+                                    padx=4, pady=4, state='disabled', takefocus=True)
+        self.case_preview.grid(row=2, column=0, sticky='nsew', pady=(4, 0))
+        scroll = ttk.Scrollbar(self.preview_card, orient='vertical', command=self.case_preview.yview)
+        scroll.grid(row=2, column=1, sticky='ns', pady=(4, 0))
+        self.case_preview.configure(yscrollcommand=scroll.set)
+        self._case_preview_text = None
+        self.preview_card.grid_remove()
+
+    def toggle_preview(self, show=None):
+        """Show or hide the calculation preview below the problems; it is refreshed either way."""
+        self.preview_visible = (not self.preview_visible) if show is None else bool(show)
+        if self.preview_visible:
+            self.preview_card.grid()
+        else:
+            self.preview_card.grid_remove()
+        self.preview_button.configure(text='Hide calculation preview' if self.preview_visible else 'Show calculation preview')
+
+    # --- tab "Settings" -------------------------------------------------------------
+    def _build_settings(self, tab):
+        ttk = self.ttk
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+        self.settings_book = ttk.Notebook(tab)
+        self.settings_book.grid(row=1, column=0, sticky='nsew')
+        for title, sections in self.SETTINGS_PAGES:
+            page = ttk.Frame(self.settings_book, padding=(0, 6, 0, 0))
+            self.settings_book.add(page, text=title)
+            self._build_setting_page(page, sections)
+        time_page = ttk.Frame(self.settings_book, padding=(0, 6, 0, 0))
+        self.settings_book.add(time_page, text=self.PAGE_TIME)
+        self._build_time_page(time_page)
+        fixed_page = ttk.Frame(self.settings_book, padding=(0, 6, 0, 0))
+        self.settings_book.add(fixed_page, text=self.PAGE_FIXED)
+        self.fixed_page = fixed_page
+        self._build_fixed_and_rules(fixed_page)
+        bar = ttk.Frame(tab, padding=(0, 0, 0, 6))
+        bar.grid(row=0, column=0, sticky='ew')
+        bar.columnconfigure(3, weight=1)
+        for column, (text, command, key) in enumerate((
+                ('Restore defaults', self.restore_default_settings, 'restore_defaults'),
+                ('Apply settings', self.apply_settings, 'apply_settings'),
+                ('Save settings', self.save_settings, 'save_settings'))):
+            button = ttk.Button(bar, text=text, command=command)
+            button.grid(row=0, column=column, padx=(0, 6))
+            self.tip(button, SETTING_HELP[key])
+        self.settings_state = ttk.Label(bar, text='', style='Status.TLabel')
+        self.settings_state.grid(row=0, column=3, sticky='w', padx=(8, 0))
+
+    def _scrolled(self, parent):
+        """A vertically scrolling frame that fills `parent`; returns the inner frame."""
+        canvas = self.tk.Canvas(parent, background=self.BACKGROUND, highlightthickness=0, borderwidth=0)
+        scroll = self.ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
+        inner = self.ttk.Frame(canvas)
+        window = canvas.create_window(0, 0, anchor='nw', window=inner)
+        canvas.configure(yscrollcommand=scroll.set)
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        canvas.grid(row=0, column=0, sticky='nsew')
+        scroll.grid(row=0, column=1, sticky='ns')
+        inner.bind('<Configure>', lambda _event: canvas.configure(scrollregion=canvas.bbox('all')), add='+')
+        canvas.bind('<Configure>', lambda event: canvas.itemconfigure(window, width=event.width), add='+')
+        return inner
+
+    def _build_setting_page(self, page, sections):
+        ttk = self.ttk
+        inner = self._scrolled(page)
+        inner.columnconfigure(0, weight=1)
+        self._wrapped_label(inner, SETTINGS_INTRO, style='Status.TLabel', row=0, column=0, pady=(0, 6))
+        for row, section in enumerate(sections, 1):
+            frame = ttk.Labelframe(inner, text=section, padding=10)
+            frame.grid(row=row, column=0, sticky='ew', pady=(0, 8), padx=(0, 4))
+            frame.columnconfigure(5, weight=1)
+            for column, text in enumerate(('Setting', 'Value', 'Unit', 'Source', 'Category')):
+                header = ttk.Label(frame, text=text, style='Muted.TLabel')
+                header.grid(row=0, column=column, sticky='w', padx=(0, 10), pady=(0, 4))
+                if text == 'Source':
+                    self.tip(header, SETTING_HELP['source'])
+            if section == 'Classification':
+                self.tip(frame, SETTING_HELP['classification'])
+            elif section == 'Contingency analysis':
+                self.tip(frame, SETTING_HELP['calculation_parameters'])
+            else:
+                self.tip(frame, SETTING_HELP['limits'])
+            keys = [setting['key'] for setting in SETTINGS if setting['section'] == section]
+            for line, key in enumerate(keys, 1):
+                self._build_setting_row(frame, line, key)
+
+    def _build_setting_row(self, frame, row, key):
+        ttk, tk = self.ttk, self.tk
+        setting = SETTINGS_BY_KEY[key]
+        help_text = setting_help(key)
+        label = ttk.Label(frame, text=setting['label'])
+        label.grid(row=row, column=0, sticky='w', padx=(0, 10), pady=1)
+        self.tip(label, help_text)
+        variable = tk.StringVar(value='')
+        if setting['kind'] == 'choice':
+            widget = ttk.Combobox(frame, textvariable=variable, values=[text for _, text in N1_LIMIT_CHOICES],
+                                  state='readonly', width=24)
+        else:
+            widget = ttk.Entry(frame, textvariable=variable, width=14 if setting['editable'] else 24)
+        widget.grid(row=row, column=1, sticky='w', padx=(0, 10), pady=1)
+        self.tip(widget, help_text)
+        ttk.Label(frame, text=setting['unit'], style='Muted.TLabel').grid(row=row, column=2, sticky='w', padx=(0, 10))
+        source = ttk.Label(frame, text='', style='Source.TLabel')
+        source.grid(row=row, column=3, sticky='w', padx=(0, 10))
+        self.tip(source, SETTING_HELP['source'])
+        category = ttk.Label(frame, text='A · evaluation' if setting['category'] == CATEGORY_EVALUATION else 'B · calculation',
+                             style='Source.TLabel')
+        category.grid(row=row, column=4, sticky='w', padx=(0, 10))
+        self.tip(category, SETTING_HELP['limits'] if setting['category'] == CATEGORY_EVALUATION
+                 else SETTING_HELP['calculation_parameters'])
+        message = ttk.Label(frame, text='', style='Problem.TLabel', wraplength=320)
+        message.grid(row=row, column=5, sticky='w')
+        self.setting_vars[key], self.setting_inputs[key] = variable, widget
+        self.setting_sources[key], self.setting_messages[key] = source, message
+        self.fill_setting(key)
+        if setting['editable']:
+            variable.trace_add('write', lambda *_args, name=key: self.on_setting_edit(name))
+        else:
+            widget.state(['disabled'])
+
+    def _build_time_page(self, page):
+        ttk = self.ttk
+        page.columnconfigure(0, weight=1)
+        card = self._card(page, row=0, column=0, sticky='new')
+        card.columnconfigure(1, weight=1)
+        title = ttk.Label(card, text='QDS time base (read only)', style='Title.TLabel')
+        title.grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 6))
+        self.tip(title, HELP_TEXTS['qds'])
+        for row, (label, value) in enumerate(self.editor.qds_info, 1):
+            caption = ttk.Label(card, text=label, style='Muted.TLabel')
+            caption.grid(row=row, column=0, sticky='nw', padx=(0, 14), pady=1)
+            shown = ttk.Label(card, text=value, wraplength=620)
+            shown.grid(row=row, column=1, sticky='w', pady=1)
+            self.tip(shown, HELP_TEXTS['qds'])
+        self._wrapped_label(card, 'Change the period and the time step in PowerFactory (ComStatsim). n-1 and (n-1)\' will '
+                            'use the same points in time once they are available.', row=len(self.editor.qds_info) + 1,
+                            column=0, columnspan=2, pady=(8, 0))
+
+    # --- settings -------------------------------------------------------------------
+    def setting_entry_text(self, key):
+        """The applied value of a setting as the entry shows it."""
+        setting = SETTINGS_BY_KEY[key]
+        if not setting['editable']:
+            return NOT_VERIFIED
+        value = self.editor.settings_overrides().get(key, setting['default'])
+        if setting['kind'] == 'choice':
+            return dict(N1_LIMIT_CHOICES).get(value, str(value))
+        return format_limit(value)
+
+    def fill_setting(self, key):
+        self.setting_vars[key].set(self.setting_entry_text(key))
+        self.on_setting_edit(key)
+
+    def setting_value(self, key):
+        """What the entry holds, as parse_setting expects it."""
+        text = self.setting_vars[key].get()
+        if SETTINGS_BY_KEY[key]['kind'] == 'choice':
+            return {label: value for value, label in N1_LIMIT_CHOICES}.get(text, text)
+        return text
+
+    def on_setting_edit(self, key):
+        """Check one field while it is typed: red when invalid, 'edited, not applied' when it differs."""
+        setting = SETTINGS_BY_KEY[key]
+        widget, message, source = self.setting_inputs[key], self.setting_messages[key], self.setting_sources[key]
+        problem = None
+        if setting['editable']:
+            _, problem = parse_setting(key, self.setting_value(key))
+            if setting['kind'] != 'choice':
+                widget.configure(style='Invalid.TEntry' if problem else 'TEntry')
+        message.configure(text=problem or '')
+        if not setting['editable']:
+            source.configure(text=setting['source'] + ' · ' + NOT_VERIFIED, style='Source.TLabel')
+        elif self.setting_vars[key].get() != self.setting_entry_text(key):
+            source.configure(text='edited, not applied', style='User.TLabel')
+        else:
+            origin = setting_source(key, self.editor.settings_overrides())
+            source.configure(text=origin, style='User.TLabel' if origin == SOURCE_USER else 'Source.TLabel')
+        self.refresh_settings_state()
+
+    def pending_settings(self):
+        """Keys whose entry differs from the applied value."""
+        return [key for key in self.setting_vars if SETTINGS_BY_KEY[key]['editable']
+                and self.setting_vars[key].get() != self.setting_entry_text(key)]
+
+    def refresh_settings_state(self):
+        if not hasattr(self, 'settings_state'):
+            return
+        invalid = [key for key in self.setting_vars if self.setting_messages[key].cget('text')]
+        pending = self.pending_settings()
+        overrides = self.editor.settings_overrides()
+        parts = ['{} user override(s)'.format(len(overrides)) if overrides else 'GridLens defaults']
+        if pending:
+            parts.append('{} edited, not applied'.format(len(pending)))
+        if invalid:
+            parts.append('{} invalid'.format(len(invalid)))
+        self.settings_state.configure(text='Settings: ' + ', '.join(parts),
+                                      foreground=self.PROBLEM if invalid else self.MUTED)
+        self.notebook.tab(self.settings_tab, text=self.TAB_SETTINGS + (' (!)' if invalid else ' *' if pending else ''))
+
+    def apply_settings(self, quiet=False):
+        """Validate every entry and take them for the next calculation; False when one is invalid."""
+        values = {key: self.setting_value(key) for key in self.setting_vars if SETTINGS_BY_KEY[key]['editable']}
+        problems = self.editor.set_settings(values)
+        for key in self.setting_vars:
+            self.setting_messages[key].configure(text='')
+        for key, problem in problems:
+            if key in self.setting_messages:
+                self.setting_messages[key].configure(text=problem)
+                if SETTINGS_BY_KEY[key]['kind'] != 'choice':
+                    self.setting_inputs[key].configure(style='Invalid.TEntry')
+        if problems:
+            self.refresh_settings_state()
+            if not quiet:
+                self.messagebox.showerror('Settings', 'The settings were not applied:\n' + '\n'.join(
+                    problem for _, problem in problems), parent=self.root)
+            return False
+        for key in self.setting_vars:
+            self.fill_setting(key)
+        self.refresh_cases(self.selected)
+        self.refresh_overview()
+        return True
+
+    def restore_default_settings(self):
+        self.editor.restore_default_settings()
+        for key in self.setting_vars:
+            self.fill_setting(key)
+        self.refresh_cases(self.selected)
+        self.refresh_overview()
+
+    def save_settings(self):
+        if self.apply_settings():
+            self.save()
 
     # --- showing the editor state ---------------------------------------------------
     def refresh_all(self, select=None):
@@ -4445,7 +5246,7 @@ class CaseManagerDialog:
         self.available_table.set_rows(self.editor.available_rows(self.selected))
 
     def refresh_overview(self):
-        """The tabs "Fixed background & rules" and "Review & start", the status line and the tab label."""
+        """Fixed background and rules, the calculation preview, the problems, the status line and the tab labels."""
         self.fixed_table.set_rows(self.editor.fixed_rows())
         self.rule_table.set_rows([(str(index), cells) for index, cells in self.editor.rule_rows()])
         lines, _ = self.editor.summary()
@@ -4479,14 +5280,17 @@ class CaseManagerDialog:
             self._case_preview_text = text
         problems = self.editor.problem_rows()
         self.problem_table.set_rows([(str(index), cells) for index, cells in enumerate(problems)])
-        self.notebook.tab(self.review_tab, text=self.TAB_REVIEW + (' ({})'.format(len(problems)) if problems else ''))
+        self.notebook.tab(self.cases_tab, text=self.TAB_CASES + (' ({})'.format(len(problems)) if problems else ''))
         statuses = self.editor.case_statuses()
         ready = sum(1 for status in statuses.values() if status == 'ready')
+        overrides = self.editor.settings_overrides()
         self.status_line.configure(
-            text='QDS {}  ·  n-0  ·  {} of {} cases ready  ·  {}'.format(
+            text='QDS {}  ·  n-0  ·  {} of {} cases ready  ·  {}  ·  {}'.format(
                 self.editor.qds_text, ready, len(self.editor.config['cases']),
-                _counted(len(problems), 'problem or warning', 'problems or warnings') if problems else 'no problems'),
+                _counted(len(problems), 'problem or warning', 'problems or warnings') if problems else 'no problems',
+                _counted(len(overrides), 'settings override', 'settings overrides') if overrides else 'default settings'),
             foreground=self.PROBLEM if problems else self.MUTED)
+        self.refresh_settings_state()
 
     def refresh_preview(self):
         self.refresh_overview()
@@ -4658,8 +5462,8 @@ class CaseManagerDialog:
                     tree.selection_set(tree.get_children()), 'break')[1])
 
     def focus_search(self):
-        """Ctrl+F: the name filter of the available planned outages, on the Workspace tab."""
-        self.notebook.select(0)
+        """Ctrl+F: the name filter of the available planned outages, on the Case Manager tab."""
+        self.notebook.select(self.cases_tab)
         search = self.available_table.inputs[1]
         search.focus_set()
         search.select_range(0, 'end')
@@ -4821,15 +5625,29 @@ class CaseManagerDialog:
     # --- calculation -----------------------------------------------------------
     def apply_assessments(self):
         if not self.n0_var.get():
-            # n-1 is not available, so n-0 is the only assessment that can be chosen.
+            # n-1 and (n-1)' are not available, so n-0 is the only assessment that can be chosen.
             self.n0_var.set(True)
-            self.messagebox.showinfo('Assessment', 'At least one assessment is needed, and n-0 is the only one available.',
-                                     parent=self.root)
-        self.editor.set_assessments(self.n0_var.get(), self.n1_var.get())
+            self.messagebox.showinfo('Assessment', "At least one assessment is needed, and n-0 is the only one available "
+                                     "until n-1 and (n-1)' are enabled.", parent=self.root)
+        self.editor.set_assessments(self.n0_var.get(), self.n1_var.get(), self.n1_prime_var.get())
         self.refresh_overview()
+
+    def _settings_ready(self, title):
+        """Apply edited settings first; False (with the reason shown) when one is invalid."""
+        if not self.pending_settings() and not any(self.setting_messages[key].cget('text') for key in self.setting_messages):
+            return True
+        if self.apply_settings(quiet=True):
+            return True
+        self.notebook.select(self.settings_tab)
+        self.messagebox.showerror(title, 'Invalid settings:\n' + '\n'.join(
+            '{}: {}'.format(SETTINGS_BY_KEY[key]['label'], self.setting_messages[key].cget('text'))
+            for key in self.setting_messages if self.setting_messages[key].cget('text')), parent=self.root)
+        return False
 
     def save(self):
         self.finish_editing()
+        if not self._settings_ready('Save configuration'):
+            return
         problems = validate_case_config(self.editor.config)
         if problems:
             self.messagebox.showerror('Save configuration', '\n'.join(problems), parent=self.root)
@@ -4855,6 +5673,8 @@ class CaseManagerDialog:
             return
         self.editor.load(saved)
         self.n0_var.set('n-0' in self.editor.config['assessments'])
+        for key in self.setting_vars:
+            self.fill_setting(key)
         for table in (self.case_table, self.member_table, self.available_table, self.fixed_table, self.rule_table, self.problem_table):
             table.clear_filters()
         ids = self.editor.case_ids()
@@ -4863,7 +5683,9 @@ class CaseManagerDialog:
     def start(self):
         """Check the configuration and hand it to GridLens; the calculation starts after the window closes."""
         self.finish_editing()
-        problem = self.editor.set_assessments(self.n0_var.get(), self.n1_var.get())
+        if not self._settings_ready('Start calculation'):
+            return
+        problem = self.editor.set_assessments(self.n0_var.get(), self.n1_var.get(), self.n1_prime_var.get())
         problems = ([problem] if problem else []) + validate_case_config(self.editor.config)
         if problems:
             self.messagebox.showerror('Start calculation', '\n'.join(problems), parent=self.root)
@@ -4888,7 +5710,7 @@ class CaseManagerDialog:
         self.root.destroy()
 
 
-def run_case_manager(records, config, period, config_path, user='', qds_text=''):
+def run_case_manager(records, config, period, config_path, user='', qds_text='', qds_info=None):
     """Show the case manager; the edited configuration on "Start calculation", None on Cancel."""
     try:
         import tkinter as tk
@@ -4897,7 +5719,7 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='')
         root = tk.Tk()
     except Exception as exc:
         raise CaseManagerUnavailable('The case manager cannot open a window: {}'.format(_friendly_exception(exc))) from None
-    dialog = CaseManagerDialog(root, CaseEditor(records, config, period, qds_text), config_path, user,
+    dialog = CaseManagerDialog(root, CaseEditor(records, config, period, qds_text, qds_info), config_path, user,
                                (tk, ttk, messagebox, simpledialog))
     root.report_callback_exception = dialog.report_error
     try:
@@ -5495,6 +6317,24 @@ def _reused_result(source, plan, request):
     return result
 
 
+def qds_time_info(qds, period):
+    """(label, value) lines of the ComStatsim time base for the Settings tab; read only, nothing is written."""
+    start, end = period
+    lines = [('QDS start', _format_pf_time(start) if start is not None else 'not readable'),
+             ('QDS end', _format_pf_time(end) if end is not None else 'not readable')]
+    if qds is not None:
+        parts = []
+        for label, attribute in QDS_CORE_SETTINGS:
+            found, value = _read_setting(qds, attribute)
+            parts.append('{} [{}] = {}'.format(label, attribute, _format_setting_value(value) if found else 'not exposed'))
+        lines.append(('QDS time step', '; '.join(parts)))
+    else:
+        lines.append(('QDS time step', 'as set in the active ComStatsim (not passed to this window)'))
+    lines += [('Time definition', 'ComStatsim startTime / endTime in epoch seconds, shown in the local time of this computer'),
+              ('Calculated period', 'the complete ComStatsim period with its time step, in every run; nothing is shortened')]
+    return lines
+
+
 def qds_period_text(period):
     """'2016-07-01 00:00 - 2016-08-01 00:00' for the ComStatsim period, as the case manager shows it."""
     start, end = period
@@ -5503,7 +6343,7 @@ def qds_period_text(period):
     return '{} - {}'.format(_format_pf_time(start), _format_pf_time(end))
 
 
-def obtain_case_request(app, records, candidates, period, logger):
+def obtain_case_request(app, records, candidates, period, logger, qds_info=None):
     """The planning cases of this run: from the case manager, the saved configuration or one per outage."""
     try:
         project_key = object_key(app.GetActiveProject())
@@ -5525,7 +6365,7 @@ def obtain_case_request(app, records, candidates, period, logger):
                  "changed or calculated yet.", 3)
     try:
         config = run_case_manager(records, saved or empty_case_config(project_key), period, path, _generated_by(),
-                                  qds_text=qds_period_text(period))
+                                  qds_text=qds_period_text(period), qds_info=qds_info)
     except CaseManagerUnavailable as exc:
         if saved is not None:
             logger.write("CASES", "{} Using the saved configuration revision {} instead.".format(exc, saved.get("revision")), 3, "WARNING")
@@ -5543,7 +6383,7 @@ def obtain_case_request(app, records, candidates, period, logger):
     except GridLensError:
         latest = None
     unsaved = latest is None or any(latest.get(name) != config.get(name)
-                                    for name in ("cases", "background", "rules"))
+                                    for name in ("cases", "background", "rules", "settings"))
     return resolve_request(config, records, period, "gui", "case manager, configuration revision {}{}".format(
         config.get("revision") or 0, " with unsaved changes" if unsaved else ""))
 
@@ -5578,8 +6418,8 @@ def _log_context(app, study_case, qds, original_result, logger):
     logger.detail("Grid scope: {}".format(
         "grids whose name contains {!r}".format(GRID_NAME_FILTER)
         if GRID_NAME_FILTER else "every element"))
-    logger.detail("Reference case: {} | case source: {} | QDS period: {}".format(
-        "on" if RUN_REFERENCE_CASE else "off", CASE_SOURCE, QDS_WINDOW_MODE))
+    logger.detail("Reference case: {} | case source: {} | time base: complete ComStatsim period".format(
+        "on" if RUN_REFERENCE_CASE else "off", CASE_SOURCE))
 
 
 def _series_overview(series):
@@ -5731,9 +6571,11 @@ def execute_gridlens(app):
     logger.step(3, "Planned outages and planning cases")
     records, candidates = classify_planned_outages(app, logger, period)
     assign_definitions(records)
-    request = obtain_case_request(app, records, candidates, period, logger)
-    if request["mode"] == "optimized":
-        request["optimization"] = optimization_summary(request, period, app)
+    request = obtain_case_request(app, records, candidates, period, logger, qds_time_info(qds, period))
+    # The settings are fixed here, after the case manager has closed, and apply to the whole run.
+    request["settings_snapshot"] = activate_settings(request.get("settings"))
+    logger.write("SETTINGS", "Settings {} with classification rules {}: {}.".format(
+        SETTINGS_VERSION, CLASSIFICATION_VERSION, overrides_text(request["settings_snapshot"]["overrides"])), 3)
     _log_plan(logger, request)
     ready = [plan for plan in request["cases"] if plan["status"] == PLAN_READY]
     logger.step(4, "Calculation and extraction (log steps 4 and 5)")
@@ -5880,6 +6722,9 @@ def main():
             "{} Recommended action: correct the reported condition, verify the "
             "active study case, and run GridLens again. {}".format(
                 _friendly_exception(exc), NO_REPORT_DATA.format(NO_REPORT_EXIT_CODE)), level="ERROR")
+    finally:
+        # The interpreter can outlive the run; the next run starts from the defaults.
+        reset_settings()
     return False
 
 

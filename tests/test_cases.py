@@ -309,7 +309,7 @@ def test_report_states_what_the_assessment_does_and_does_not_prove():
 
     meta = payload["ScriptedReportMeta"][0]
     assert "Statement A" in meta["coverage_statement"] and "Statement B" in meta["coverage_statement"]
-    assert meta["qds_mode_text"].startswith("Conservative")
+    assert meta["qds_mode_text"].startswith("Complete ComStatsim period")
     assert meta["case_source_text"] == "test cases"
 
 
@@ -324,3 +324,57 @@ def test_period_text_shortens_a_same_day_window():
     assert gl.period_text("2026-10-15 00:00", "2026-10-15 05:00") == "2026-10-15 00:00 - 05:00"
     assert gl.period_text("2026-10-15 22:00", "2026-10-16 05:00") == "2026-10-15 22:00 - 2026-10-16 05:00"
     assert gl.period_text("", "") == ""
+
+
+# ---------------------------------------------------------------------------
+# Settings: the n-0 QDS assessment with default, changed and restored limits
+# ---------------------------------------------------------------------------
+def _comparable(payload):
+    """The published rows without the generation time, which differs between two builds."""
+    return {table: [{field: value for field, value in row.items() if field != "generation_date"} for row in rows]
+            for table, rows in payload.items()}
+
+
+@pytest.fixture
+def default_settings_afterwards():
+    gl.reset_settings()
+    yield
+    gl.reset_settings()
+
+
+def test_default_settings_reproduce_the_n0_report_exactly(default_settings_afterwards):
+    before, *_ = _payload()
+    snapshot = gl.activate_settings({})
+    after, *_ = _payload()
+
+    assert snapshot["overrides"] == {} and snapshot["values"] == gl.default_settings()
+    assert _comparable(after) == _comparable(before)
+
+
+def test_changed_assessment_limits_change_only_the_assessment_and_restore_cleanly(default_settings_afterwards):
+    original, *_ = _payload()
+    gl.activate_settings({"line_limit": 150.0, "line_warning": 120.0, "loading_change_tolerance": 50.0})
+    changed, results, _ = _payload()
+    gl.reset_settings()
+    restored, *_ = _payload()
+
+    cases = {row["case_name"]: row["assessment"] for row in changed["ScriptedCases"]}
+    assert cases["Outage 2"] != gl.ASSESSMENT_LOADING, "no line exceeds 150 %"
+    assert {row["class_label"] for row in changed["ScriptedPieLines"]} == {"up to 120 %", "120 to 150 %", "above 150 %"}
+    quality = {row["check_id"]: row for row in changed["ScriptedModelQuality"]}
+    assert "lines" in quality["limit_loading"]["message"] and "150" in quality["limit_loading"]["message"]
+    assert quality["settings"]["status"] == "WARNING" and "GridLens default 100 %" in quality["settings"]["message"]
+    # The calculated values themselves are untouched: settings only interpret them.
+    second = next(result for result in results if result["name"] == "Outage 2")
+    assert max(stats["max"] for _, stats in second["by_category"]["line"]) > 100.0
+    assert _comparable(restored) == _comparable(original)
+
+
+def test_report_names_the_settings_and_the_rules_version(default_settings_afterwards):
+    payload, *_ = _payload()
+
+    quality = {row["check_id"]: row for row in payload["ScriptedModelQuality"]}
+    assert quality["settings"]["status"] == "INFO"
+    assert "classification rules 1.0" in quality["settings"]["message"]
+    assert "GridLens defaults" in quality["settings"]["message"]
+    assert "provisionally" in quality["settings"]["message"]
