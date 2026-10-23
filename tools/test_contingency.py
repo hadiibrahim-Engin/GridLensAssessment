@@ -67,12 +67,16 @@ LABELS = frozenset(
     | {"Restored " + name for name in WRITTEN_ATTRIBUTES}
     | {"T1 " + label for label in (
         "Confirmed", "Execute", "Study time unchanged", "Sub-results created",
-        "Study times match the time-sweep definition", "End time included", "Time sweep equals the QDS time steps",
-        "Rows are contingencies", "Columns are equipment", "Sparse values present",
-        "c:maxCntcy holds contingency numbers", "One row per analysed contingency", "Error", "Result")}
+        "Study times match the time-sweep definition", "Study times match the studyTime vector",
+        "Study times match startTime/endTime/step", "End time included", "Time sweep equals the QDS time steps",
+        "Study times lie on the QDS time grid", "Rows are contingencies", "Columns are equipment",
+        "Sparse values present", "c:maxCntcy holds contingency numbers", "c:maxCntcy holds row numbers",
+        "One row per analysed contingency", "Error", "Result")}
     | {"T2 " + label for label in (
         "Confirmed", "Planned outage inside the sweep period", "Execute without planned outages",
-        "Execute with planned outages", "Results differ with planned outages", "Error", "Result")}
+        "Execute with planned outages", "Results differ with planned outages",
+        "Contingencies missing with planned outages", "Missing contingency switches a planned-outage element",
+        "Error", "Result")}
     | {"T3 " + label for label in ("Confirmed", "Execute", "Not analysed excludes the contingency", "Error", "Result")}
     | {"T4 " + label for label in ("Confirmed", "IntDplmap created", "Key/value read back unchanged",
                                    "Test object deleted", "Error", "Result")}
@@ -124,6 +128,15 @@ def confirm(question):
             root.destroy()
     except Exception:
         return False
+
+
+def identity(obj):
+    """A stable local key of a PowerFactory object: its full name (several Python wrappers can stand for
+    one object, so 'is' and id() are not reliable). Read locally, never printed."""
+    try:
+        return "name:" + str(obj.GetFullName())
+    except Exception:
+        return "id:{}".format(id(obj))
 
 
 def class_of(obj):
@@ -214,6 +227,76 @@ def time_steps(command):
     return inclusive, exclusive
 
 
+def vector_times(command):
+    """The study times of the studyTime vector, without those marked in bIgnoreTime."""
+    try:
+        times = [float(value) for value in command.studyTime]
+    except (AttributeError, TypeError, ValueError):
+        return None
+    try:
+        ignore = list(command.bIgnoreTime)
+    except (AttributeError, TypeError):
+        ignore = []
+    if len(ignore) == len(times):
+        times = [moment for moment, skip in zip(times, ignore) if not skip]
+    return sorted(times) or None
+
+
+def same_times(first, second, tolerance=1.0):
+    return first is not None and second is not None and len(first) == len(second) and all(
+        abs(a - b) <= tolerance for a, b in zip(sorted(first), sorted(second)))
+
+
+def on_grid(times, command):
+    """Whether every time lies on the time grid of a command (start + k * step, inside its period)."""
+    try:
+        start, end = float(command.startTime), float(command.endTime)
+        step = float(command.stepSize) * STEP_SECONDS[int(command.stepUnit)]
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if step <= 0:
+        return None
+    return all(start - 1.0 <= moment <= end + 1.0 and abs(((moment - start) / step) - round((moment - start) / step)) < 1e-6
+               for moment in times)
+
+
+def rows_by_time(command):
+    """Study time -> keys of the contingency objects in the rows of its sub-result; local only."""
+    found = {}
+    _, subs = sub_results(command)
+    for sub in subs:
+        try:
+            moment = float(sub.GetAttribute("cnttime"))
+            sub.Load()
+            ids = set()
+            for row in range(min(int(sub.GetNumberOfRows()), SAMPLE_ROWS)):
+                code, obj = status(sub.GetObjectValue(row))
+                if code == CODE_OK and obj is not None:
+                    ids.add(identity(obj))
+            found[moment] = ids
+        except Exception:
+            continue
+        finally:
+            try:
+                sub.Release()
+            except Exception:
+                pass
+    return found
+
+
+def outage_elements(outage):
+    found = []
+    for line in range(200):
+        try:
+            element = outage.GetObject(line)
+        except Exception:
+            break
+        if element is None:
+            break
+        found.append(element)
+    return found
+
+
 def sub_results(command):
     result = getattr(command, "p_rescnt", None)
     if result is None:
@@ -239,7 +322,8 @@ def status(returned):
 
 def inspect(sub, numbers):
     """Structure of one sub-result; every value stays inside this function."""
-    found = {"rows": 0, "row_objects": [], "columns_equipment": False, "sparse": False, "max_cntcy": None}
+    found = {"rows": 0, "row_objects": [], "columns_equipment": False, "sparse": False, "max_cntcy": None,
+             "max_cntcy_rows": None}
     try:
         sub.Load()
     except Exception:
@@ -252,7 +336,7 @@ def inspect(sub, numbers):
             found["columns_equipment"] |= class_of(sub.GetObject(column)) in EQUIPMENT_CLASSES
             if str(sub.GetVariable(column)) == "c:maxCntcy":
                 maxcntcy_columns.append(column)
-        refers, checked = True, False
+        refers, checked, values = True, False, []
         for row in range(min(rows, SAMPLE_ROWS)):
             try:
                 code, obj = status(sub.GetObjectValue(row))
@@ -265,7 +349,9 @@ def inspect(sub, numbers):
                 if column in maxcntcy_columns and code == CODE_OK and value is not None:
                     checked = True
                     refers &= int(round(value)) in numbers
+                    values.append(int(round(value)))
         found["max_cntcy"] = (refers if checked else None)
+        found["max_cntcy_rows"] = all(0 <= value <= rows for value in values) if values else None
     finally:
         try:
             sub.Release()
@@ -325,19 +411,28 @@ def test_run(ctx, out):
         if not subs:
             return False
         times = sub_result_times(subs)
+        ctx["times"] = times
         inclusive, exclusive = time_steps(command)
-        if times is None or inclusive is None:
+        vector = vector_times(command)
+        by_vector = same_times(times, vector)
+        by_grid = same_times(times, inclusive) or same_times(times, exclusive)
+        if times is None:
             out.add("T1 Study times match the time-sweep definition", "NOT_VERIFIED")
         else:
-            match = times == inclusive or times == exclusive
-            out.add("T1 Study times match the time-sweep definition", flag(match))
-            out.add("T1 End time included", flag(times == inclusive))
+            out.add("T1 Study times match the time-sweep definition", flag(by_vector or by_grid))
+            out.add("T1 Study times match the studyTime vector", "NOT_VERIFIED" if vector is None else flag(by_vector))
+            out.add("T1 Study times match startTime/endTime/step", "NOT_VERIFIED" if inclusive is None else flag(by_grid))
+            if by_grid:
+                out.add("T1 End time included", flag(same_times(times, inclusive)))
         if ctx["statsim"] is None:
             out.add("T1 Time sweep equals the QDS time steps", "NOT_APPLICABLE")
         else:
             qds_inclusive, qds_exclusive = time_steps(ctx["statsim"])
             out.add("T1 Time sweep equals the QDS time steps",
-                    "NOT_VERIFIED" if times is None or qds_inclusive is None else flag(times in (qds_inclusive, qds_exclusive)))
+                    "NOT_VERIFIED" if times is None or qds_inclusive is None
+                    else flag(same_times(times, qds_inclusive) or same_times(times, qds_exclusive)))
+            grid = on_grid(times or [], ctx["statsim"]) if times else None
+            out.add("T1 Study times lie on the QDS time grid", "NOT_VERIFIED" if grid is None else flag(grid))
         numbers = {int(getattr(outage, "number", -1)) for outage in ctx["outages"]}
         found = inspect(subs[0], numbers)
         row_classes = [class_of(obj) for obj in found["row_objects"] if obj is not None]
@@ -347,6 +442,8 @@ def test_run(ctx, out):
         out.add("T1 Sparse values present", flag(found["sparse"]))
         out.add("T1 c:maxCntcy holds contingency numbers",
                 "NOT_VERIFIED" if found["max_cntcy"] is None else flag(found["max_cntcy"]))
+        out.add("T1 c:maxCntcy holds row numbers",
+                "NOT_VERIFIED" if found["max_cntcy_rows"] is None else flag(found["max_cntcy_rows"]))
         analysed = [outage for outage in ctx["outages"] if getattr(outage, "outserv", 0) in (0, False)]
         out.add("T1 One row per analysed contingency", flag(found["rows"] == len(analysed)))
         ctx["rows"], ctx["rows_are_contingencies"] = found["rows"], rows_are_contingencies
@@ -356,19 +453,30 @@ def test_run(ctx, out):
             restorer.restore()
 
 
-def planned_outage_in_period(ctx):
-    command = ctx["command"]
-    try:
-        start, end = float(command.startTime), float(command.endTime)
-    except (AttributeError, TypeError, ValueError):
+def active_planned_outages(ctx):
+    """(study time, planned outage) for every planned outage that is active at a study time; None if unknown.
+
+    The study times are those of the calculated sub-results (T1), else the studyTime vector; the
+    window is half open, [starttime, endtime).
+    """
+    times = ctx.get("times") or vector_times(ctx["command"])
+    if not times:
         return None
+    active = []
     for outage in of_class(ctx["project"], "IntPlannedout", 1):
         try:
-            if getattr(outage, "outserv", 0) in (0, False) and float(outage.starttime) <= end and float(outage.endtime) > start:
-                return True
+            if getattr(outage, "outserv", 0) not in (0, False):
+                continue
+            start, end = float(outage.starttime), float(outage.endtime)
         except (AttributeError, TypeError, ValueError):
             continue
-    return False
+        active += [(moment, outage) for moment in times if start <= moment < end]
+    return active
+
+
+def planned_outage_in_period(ctx):
+    active = active_planned_outages(ctx)
+    return None if active is None else bool(active)
 
 
 def test_planned_outages(ctx, out):
@@ -385,10 +493,25 @@ def test_planned_outages(ctx, out):
         restorer.write(command, "isPlannedOutages", 0)
         out.add("T2 Execute without planned outages", "SUCCESS" if execute(command) else "ERROR")
         without = fingerprint(command)
+        rows_without = rows_by_time(command)
         restorer.write(command, "isPlannedOutages", 1)
         out.add("T2 Execute with planned outages", "SUCCESS" if execute(command) else "ERROR")
         differ = fingerprint(command) != without
         out.add("T2 Results differ with planned outages", flag(differ))
+        rows_with = rows_by_time(command)
+        # Which contingencies disappear at a study time with an active planned outage, and whether they
+        # switch equipment that this planned outage already takes out of service (-> NOT_APPLICABLE later).
+        by_id = {identity(outage): outage for outage in ctx["outages"]}
+        missing, explained = False, True
+        for moment, planned in active_planned_outages(ctx) or ():
+            gone = rows_without.get(moment, set()) - rows_with.get(moment, set())
+            components = {identity(item) for item in (getattr(planned, "components", None) or [])}
+            for key in gone:
+                missing = True
+                elements = {identity(element) for element in outage_elements(by_id[key])} if key in by_id else set()
+                explained &= bool(elements & components)
+        out.add("T2 Contingencies missing with planned outages", flag(missing))
+        out.add("T2 Missing contingency switches a planned-outage element", flag(explained) if missing else "NOT_APPLICABLE")
         # Applied when the results change while a planned outage lies in the period.
         return differ if inside else None
     finally:
@@ -416,7 +539,7 @@ def test_not_analysed(ctx, out):
             return None
         found = inspect(subs[0], set())
         if ctx.get("rows_are_contingencies"):
-            excluded = all(obj is not target for obj in found["row_objects"])
+            excluded = all(identity(obj) != identity(target) for obj in found["row_objects"] if obj is not None)
         elif "rows" in ctx:
             excluded = found["rows"] == ctx["rows"] - 1
         else:
