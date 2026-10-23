@@ -3,6 +3,11 @@
 This is a diagnostic tool, not part of the GridLens delivery. Install it as a
 separate ComPython script anywhere in the active study case and run it once.
 
+PRIVACY: LOCAL USE ONLY. Its purpose needs project data, so its output contains
+project, grid and equipment names, paths and values. Do not pass that output
+on to external developers or AI systems; tools/probe_contingency.py is the
+strict-privacy probe whose output may be shared.
+
 By default the probe only reads. It writes nothing, starts no calculation and
 leaves the project untouched. Setting RUN_EXPERIMENT to True additionally runs
 the single controlled experiment described under "Experiment" below; that pass
@@ -22,6 +27,7 @@ What the probe answers:
 import time
 
 OUTAGE_CLASSES = ("IntPlannedout", "IntOutage")
+PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use tools/probe_contingency.py (strict privacy)."
 
 # Attributes worth resolving into referenced objects rather than printing raw.
 REFERENCE_ATTRIBUTES = ("components", "contents", "charact", "recsettings")
@@ -409,6 +415,7 @@ def main():
         return
 
     emit(app, "=== GridLens planned-outage probe (read-only) ===")
+    emit(app, PRIVACY_NOTE)
     try:
         project = app.GetActiveProject()
         emit(app, "Project    : {}".format(name_of(project) if project else "<none>"))

@@ -1,656 +1,484 @@
-"""GridLens probe: what PowerFactory 2026 offers for the n-1 contingency analysis.
+"""GridLens diagnostic probe for the PowerFactory 2026 contingency interface - PRIVACY MODE STRICT.
 
 Diagnostic tool, not part of the GridLens delivery. Install it as a separate
-ComPython anywhere in the active study case and run it once. Copy the complete
-output window into a text file and hand it back; GridLens part 3 (n-1 and
-(n-1)') is planned from that output only.
+ComPython in the study case that holds the contingency analysis and run it
+once. The output is meant to be passed on to external developers or AI
+systems: it contains only fixed technical labels and fixed status tokens.
 
-READ ONLY. The probe never calls Execute(), CreateObject(), SetAttribute(),
-Delete(), AddCopy(), Activate() or any writing ElmRes method, never assigns an
-attribute and never activates a study case or operation scenario. It does not
-use app.GetFromStudyCase() either, because that call creates the command when
-the study case has none. Every object is found with GetContents() or
-GetCalcRelevantObjects(). tests/test_probe_contingency.py checks this.
+Privacy by design (strict allowlist):
 
-What it reports:
+* Every PowerFactory call goes through ReadOnlyApi. Only the methods in
+  ALLOWED_CALLS can be called; they are reading methods according to the
+  PowerFactory 2026 Python reference. Writing or executing methods are only
+  checked for existence (looked up, never called).
+* Attributes are checked with HasAttribute(name) for names from fixed
+  allowlists; their values are never read. The only attribute values read are
+  the two result-object references in REFERENCE_ATTRIBUTES, which are used and
+  never shown.
+* No name, path, key, description, user, comment, value, time stamp, count or
+  model size is read for output. Result cells are only inspected for the
+  GetValue status code; the value itself is never looked at.
+* Every output line is "label: token" with the label from LABELS and the token
+  from TOKENS (or a validated small integer for the version lines). A failed
+  check yields ERROR_<nn> for its category, never the exception text.
+* No file is written, no network is used, nothing is executed, created,
+  changed, deleted or activated. The probe does not switch study cases or
+  operation scenarios and does not use GetFromStudyCase (it creates a missing
+  command).
 
-1. ComSimoutage: every attribute with type, unit, value and PowerFactory's own
-   description; time sweep, AC/DC method, result recording, post-fault phases
-   and remedial actions are highlighted by keyword.
-2. ComStatsim: period, time step and time definition, and the study time.
-3. Contingency definitions: classes found, number of cases, the equipment
-   each one switches, where they are stored.
-4. Contingency result objects (ElmRes): rows, columns, variables, time and
-   contingency columns, and whether rows look dense or sparse.
-5. The ElmRes interface: which reading and writing methods exist (by
-   introspection only, nothing is called except reading methods).
-6. Project folders and objects that could hold persistent GridLens results,
-   settings and case configurations.
-7. The grids of the model (active and inactive) with their lines,
-   transformers and terminals, and the grids of each contingency's equipment
-   (ComOutage.GetObject, a reading method of the Python reference).
-
-Version 1.1 also reads the sub-results of a time sweep (one child ElmRes per
-study time) and counts the GetValue codes: per the Python reference, code 3
-means "not written because below the recording limit" in a sparse file.
-
-Every finding is one of: VERIFIED, PRESENT BUT UNTESTED, ABSENT, MISSING OR
-INACCESSIBLE, OPEN QUESTION. A method that exists is only "present but
-untested": its existence does not prove that it does what part 3 needs.
+A question that cannot be answered without reading project data is reported as
+NOT_VERIFIED_PRIVACY_RESTRICTION. tests/test_probe_contingency.py checks these
+rules with artificial objects; that is no guarantee for an unknown real project
+(see docs/superpowers/specs/2026-10-23-n1-settings-design.md, section 2.1).
 """
 
-import math
-import time
+import sys
 
-PROBE_VERSION = "1.1"
-MAX_VALUE_LENGTH = 160
-# At most this many items are printed in full per list (contingencies, columns, rows).
-LIST_LIMIT = 25
-# Rows read to judge the result structure.
-SAMPLE_ROWS = 50
+PROBE_VERSION = "2.0"
+PRIVACY_MODE = "STRICT"
 
-# Words that mark an attribute worth highlighting, by topic.
-TOPICS = (
-    ("time sweep", ("sweep", "time", "step", "period", "start", "end", "calc_t", "tstep", "date")),
-    ("AC/DC method", ("ldf", "method", "dc", "ac", "linear")),
-    ("result recording", ("res", "record", "result", "monitor", "filter")),
-    ("post-fault phases", ("post", "phase", "fault", "tpost", "stage")),
-    ("remedial actions", ("ras", "remedial", "action", "corrective", "redispatch")),
-    ("limits and restrictions", ("limit", "max", "min", "island", "unsupplied", "shed", "loading", "volt")),
+# --- What may be called, checked and printed --------------------------------
+# Reading methods only (PowerFactory 2026 Python reference):
+#   Application.GetActiveStudyCase / GetActiveProject / GetInterfaceVersion / GetCalcRelevantObjects,
+#   DataObject.GetClassName / GetContents / HasAttribute / GetAttributeType,
+#   ElmRes.Load / Release / GetNumberOfRows / GetNumberOfColumns / GetValue / GetVariable,
+#   ComOutage.GetObject ("get the element stored in line ...").
+ALLOWED_CALLS = frozenset((
+    "GetActiveStudyCase", "GetActiveProject", "GetInterfaceVersion", "GetCalcRelevantObjects",
+    "GetClassName", "GetContents", "HasAttribute", "GetAttributeType",
+    "Load", "Release", "GetNumberOfRows", "GetNumberOfColumns", "GetValue", "GetVariable",
+    "GetObject",
+))
+# Attribute values that may be read: references to the result objects, used and never shown.
+REFERENCE_ATTRIBUTES = frozenset(("p_rescnt", "p_rescntDC"))
+
+COMMAND_CLASSES = ("ComSimoutage", "ComStatsim", "ComNmink", "ComLdf")
+# Attributes whose existence and type (never the value) are checked, per class.
+SIMOUTAGE_ATTRIBUTES = (
+    "iEnableTS", "startTime", "endTime", "stepSize", "stepUnit", "stepNumber", "studyTime", "calcPeriod",
+    "isPlannedOutages", "p_rescnt", "p_rescntDC", "iopt_method", "iopt_Linear", "timePhases", "iopt_evts",
+    "rasActive", "iPerformOpt", "iopt_record", "loadmax", "vlmin", "vlmax", "diffLoadBase", "maxLoadBase",
 )
-# Candidate classes of contingency definitions and related objects. A class
-# without instance is reported as "no instance found", never as non-existent:
-# without CreateObject the probe cannot tell an unknown class from an unused one.
-CONTINGENCY_CLASSES = ("ComOutage", "ComContingency", "IntContingency", "ComNmink", "IntEvt", "EvtOutage",
-                       "EvtSwitch", "IntRas", "IntFltcases", "IntMon")
-STORAGE_CLASSES = ("IntFolder", "IntDplmap", "IntDplvec", "IntComment", "IntDocument", "IntUserdata", "IntReport",
-                   "SetDesktop", "IntScheme")
-PROJECT_FOLDERS = ("study", "scen", "netdat", "netmod", "oplib", "outage", "outages", "res", "script", "lib",
-                   "equip", "chars", "thermal", "ra", "demand", "templ")
-# Names of ElmRes methods, sorted by what they do; only READ_METHODS are ever called.
-READ_METHODS = ("Load", "Release", "GetNumberOfRows", "GetNumberOfColumns", "GetObject", "GetVariable", "GetValue",
-                "FindColumn", "FindMaxInColumn", "FindMinInColumn", "GetDescription", "GetUnit", "GetFirstValidObject",
-                "GetObjValue", "GetSubElmRes", "GetRelCase", "GetRelCaseNumber", "GetNumberOfContingencies")
-WRITE_METHODS = ("Init", "InitialiseWriting", "AddVariable", "Write", "WriteDraw", "Clear", "Flush", "Close",
-                 "SetAsDefault", "SetObj", "SetSubElmResKey")
-TIME_COUPLED_CLASSES = ("ElmQdsl",)
-# Equipment classes counted per grid.
-GRID_ELEMENT_CLASSES = ("ElmLne", "ElmTr2", "ElmTr3", "ElmTerm")
-# ComOutage.GetObject(line) is read for at most this many lines.
-MAX_OUTAGE_LINES = 200
-# Recording limits of ComSimoutage that make its results sparse.
-RECORDING_ATTRIBUTES = ("iopt_record", "loadmax", "loadmax_nk", "vlmin", "vlmax", "vmax_step", "phiu_step",
-                        "diffLoadRestr", "diffLoadBase", "maxLoadBase", "diffVoltRestr", "diffVoltBase",
-                        "maxVoltRestr", "maxVoltBase", "minVoltRestr", "minVoltBase", "recTermLoad", "termLoadThres")
+# Writing or executing methods: only whether they exist.
+SIMOUTAGE_METHODS = ("Execute", "ExecuteAndCheck", "AddCntcy", "AddContingencies", "RemoveContingencies",
+                     "ClearCont", "Reset", "Update", "GetNTopLoadedElms")
+OUTAGE_ATTRIBUTES = ("outserv", "n_k", "number")
+NMINK_ATTRIBUTES = ("optSel", "iopt_lne", "iopt_trf", "iopt_sym", "iopt_n1", "iopt_n2")
+NMINK_METHODS = ("AddRef", "Clear", "GenerateContingenciesForAnalysis", "GetAll")
+ELMRES_READ_METHODS = ("Load", "Release", "GetNumberOfRows", "GetNumberOfColumns", "GetValue", "GetVariable",
+                       "GetObject", "FindColumn", "GetColumnValues", "GetSubElmRes", "GetRelCase", "GetUnit",
+                       "GetDescription")
+ELMRES_WRITE_METHODS = ("InitialiseWriting", "AddVariable", "Write", "WriteDraw", "FinishWriting", "Flush",
+                        "Clear", "SetObj", "SetSubElmResKey", "SetAsDefault")
+# Equipment classes a contingency may switch; only membership is reported.
+EQUIPMENT_CLASSES = frozenset(("ElmLne", "ElmTr2", "ElmTr3", "ElmTr4", "ElmTerm", "ElmSym", "ElmGenstat", "ElmPvsys",
+                               "ElmLod", "ElmCoup", "ElmScap", "ElmSind", "ElmShnt", "ElmVsc", "ElmRec", "ElmBranch"))
+# Standard PowerFactory variable names that would mark a contingency or phase reference in a result
+# object. Only "one of them is recorded" is reported, never which variable or column. The list is a
+# starting point: a variable that is not in it cannot be recognised.
+CONTINGENCY_VARIABLES = frozenset(("c:maxCntcy", "c:cntcy", "b:icntcy", "b:ifcase", "c:ifcase", "c:ncont"))
+PHASE_VARIABLES = frozenset(("b:tphase", "c:tphase", "c:timephase"))
+LOADING_VARIABLES = frozenset(("c:loading", "c:maxLoading", "m:loading"))
+VOLTAGE_VARIABLES = frozenset(("m:u", "m:u1", "c:maxvolt", "c:minvolt"))
+STORAGE_CLASSES = ("IntDplmap", "IntDplvec", "IntFolder")
+# Bounds of the GetValue status sample: rows x columns of one result object.
+SAMPLE_ROWS, SAMPLE_COLUMNS = 50, 40
+# GetValue status codes (Python reference): 0 ok, 1 row out of bound, 2 column out of bound,
+# 3 not written in a sparse file because below the recording limit.
+CODE_OK, CODE_SPARSE = 0, 3
 
-VERIFIED, UNTESTED, ABSENT, MISSING, OPEN = ("VERIFIED", "PRESENT BUT UNTESTED", "ABSENT", "MISSING OR INACCESSIBLE",
-                                             "OPEN QUESTION")
-KINDS = (VERIFIED, UNTESTED, ABSENT, MISSING, OPEN)
-
-
-def emit(app, message=""):
-    printer = getattr(app, "PrintPlain", None)
-    if callable(printer):
-        try:
-            printer(message)
-            return
-        except Exception:
-            pass
-    print(message, flush=True)
-
-
-def call(method, *args):
-    """Call a reading PowerFactory method; None when it fails or is no method."""
-    if not callable(method):
-        return None
-    try:
-        return method(*args)
-    except Exception:
-        return None
+TOKENS = frozenset((
+    "TRUE", "FALSE", "NO", "PRESENT", "ABSENT", "AVAILABLE", "AVAILABLE_UNTESTED", "NOT_AVAILABLE",
+    "DETECTED", "NOT_DETECTED", "NOT_VERIFIED", "NOT_VERIFIED_PRIVACY_RESTRICTION", "NOT_APPLICABLE", "STRICT",
+    "INTEGER", "INTEGER64", "DOUBLE", "STRING", "OBJECT", "INTEGER_VEC", "DOUBLE_VEC", "STRING_VEC", "OBJECT_VEC",
+    "OTHER_TYPE",
+))
+ATTRIBUTE_TYPES = frozenset(("INTEGER", "INTEGER64", "DOUBLE", "STRING", "OBJECT", "INTEGER_VEC", "DOUBLE_VEC",
+                             "STRING_VEC", "OBJECT_VEC"))
+# Labels whose value is a small integer (validated) instead of a token.
+INTEGER_LABELS = frozenset(("Interface version", "Python major", "Python minor"))
+SECTIONS = ("PowerFactory API", "Study case", "Contingency Analysis", "Contingency set", "Contingency Definition",
+            "ElmRes", "Result Structure", "Network scope", "Storage", "Privacy")
+ERROR_CODES = {section: "ERROR_{:02d}".format(number) for number, section in enumerate(SECTIONS, 1)}
+PRIVACY_LABELS = ("Object names collected", "Project paths collected", "Network parameters collected",
+                  "Raw result values output", "Time stamps output", "Counts or sizes output", "Files written",
+                  "Network access", "Calculations executed", "Objects changed")
 
 
-def safe(obj, name, default=None):
-    try:
-        value = getattr(obj, name)
-    except Exception:
-        return default
-    return default if value is None else value
+def _labels():
+    labels = {"Privacy mode", "Interface version", "Python major", "Python minor", "Version compatibility",
+              "Active study case", "Error"}
+    labels |= {"{} available".format(name) for name in COMMAND_CLASSES}
+    labels |= {"Time sweep interface", "Planned outage interface", "Recording limit interface",
+               "Result interface", "Time phase interface", "Remedial action interface",
+               "Regional analysis interface"}
+    for attribute in SIMOUTAGE_ATTRIBUTES + OUTAGE_ATTRIBUTES + NMINK_ATTRIBUTES:
+        labels |= {"Attribute {}".format(attribute), "Type {}".format(attribute)}
+    labels |= {"ComSimoutage.{}".format(name) for name in SIMOUTAGE_METHODS}
+    labels |= {"ComNmink.{}".format(name) for name in NMINK_METHODS}
+    labels |= {"ElmRes.{}".format(name) for name in ELMRES_READ_METHODS + ELMRES_WRITE_METHODS}
+    labels |= {"Contingencies in the command", "ComOutage.GetObject", "Equipment readable",
+               "Equipment class recognised", "Equipment grid attribute"}
+    labels |= {"AC result object", "Readable", "Rows present", "Columns present", "Sub-results per study time",
+               "Sub-result readable", "Index column readable", "Sparse recording indicator",
+               "Loading variables recorded", "Voltage variables recorded", "Contingency identification",
+               "Time phase identification", "Time identification"}
+    labels |= {"Grids readable", "Element grid attribute"}
+    labels |= {"{} instances".format(name) for name in STORAGE_CLASSES}
+    labels |= set(PRIVACY_LABELS)
+    return frozenset(labels)
 
 
-def class_of(obj):
-    try:
-        return str(obj.GetClassName())
-    except Exception:
-        return ""
+LABELS = _labels()
 
 
-def name_of(obj):
-    value = safe(obj, "loc_name", "")
-    if value:
-        return str(value)
-    return "<unnamed>"
+class PrivacyViolation(RuntimeError):
+    """A line that is not on the allowlist was about to be printed: a defect of the probe, never shown."""
 
 
-def path_of(obj):
-    try:
-        return str(obj.GetFullName())
-    except Exception:
-        return name_of(obj)
+class ProbeError(Exception):
+    """A check failed; it carries no message, only the check category is reported."""
 
 
-def render(value):
-    if isinstance(value, (list, tuple)):
-        parts = ["{} '{}'".format(class_of(item), name_of(item)) if hasattr(item, "GetClassName") else str(item)
-                 for item in value[:LIST_LIMIT]]
-        text = "[{}{}]".format(", ".join(parts), ", ... {} more".format(len(value) - LIST_LIMIT) if len(value) > LIST_LIMIT else "")
-    elif hasattr(value, "GetClassName"):
-        text = "{} '{}'".format(class_of(value), name_of(value))
-    else:
-        text = str(value)
-    return text if len(text) <= MAX_VALUE_LENGTH else text[:MAX_VALUE_LENGTH] + " ...(truncated)"
+class Report:
+    """The only way to output anything: fixed labels and fixed tokens."""
+
+    def __init__(self, printer):
+        self.printer = printer
+        self.lines = []
+        self.current = None
+
+    def title(self):
+        self._print("GridLens Diagnostic Probe {}".format(PROBE_VERSION))
+        self._print("Privacy Mode: {}".format(PRIVACY_MODE))
+
+    def section(self, name):
+        if name not in SECTIONS:
+            raise PrivacyViolation()
+        self.current = name
+        self._print("")
+        self._print(name + ":")
+
+    def add(self, label, token):
+        if label not in LABELS:
+            raise PrivacyViolation()
+        if label in INTEGER_LABELS:
+            if not (isinstance(token, int) and not isinstance(token, bool) and 0 <= token <= 999):
+                token = "NOT_VERIFIED"
+        elif token not in TOKENS and token not in ERROR_CODES.values():
+            raise PrivacyViolation()
+        self._print("  {}: {}".format(label, token))
+
+    def error(self):
+        self.add("Error", ERROR_CODES[self.current])
+
+    def _print(self, line):
+        self.lines.append(line)
+        self.printer(line)
 
 
-def contents(obj, pattern="*", recursive=0):
-    return list(call(safe(obj, "GetContents"), pattern, recursive) or [])
-
-
-def methods_of(obj):
-    """Public method names, by introspection; nothing is called."""
-    try:
-        names = dir(obj)
-    except Exception:
-        return []
-    return sorted(name for name in names if name[:1].isupper() and callable(safe(obj, name)))
-
-
-def attribute_names(obj):
-    """Attribute names: PowerFactory's accessor where it works, else dir()."""
-    for getter in ("GetAttributes", "GetAttributeNames"):
-        returned = call(safe(obj, getter))
-        try:
-            names = sorted({str(item).strip() for item in returned or () if str(item).strip()})
-        except TypeError:
-            names = []
-        if names:
-            return names
-    try:
-        candidates = sorted(dir(obj))
-    except Exception:
-        return []
-    return [name for name in candidates if not name.startswith("_") and not name[:1].isupper()
-            and safe(obj, name) is not None and not callable(safe(obj, name))]
-
-
-def describe(obj, name):
-    """(value, type, unit, description) of one attribute, all read only."""
-    value = safe(obj, name)
-    kind = call(safe(obj, "GetAttributeType"), name)
-    unit = call(safe(obj, "GetAttributeUnit"), name)
-    description = call(safe(obj, "GetAttributeDescription"), name)
-    return value, "" if kind is None else str(kind), str(unit or ""), str(description or "")
-
-
-def number(value):
-    if isinstance(value, bool):
-        return None
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    return result if math.isfinite(result) else None
-
-
-def epoch_text(value):
-    seconds = number(value)
-    if seconds is None or seconds < 315532800.0:
-        return None
-    try:
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(seconds))
-    except (OverflowError, OSError, ValueError):
-        return None
-
-
-class Findings:
-    """The classified results, printed again as a summary at the end."""
+class ReadOnlyApi:
+    """Gateway for every PowerFactory access; it records each call for the tests."""
 
     def __init__(self, app):
         self.app = app
-        self.items = []
+        self.calls = []
 
-    def add(self, kind, topic, text):
-        self.items.append((kind, topic, text))
-        emit(self.app, "    [{}] {}: {}".format(kind, topic, text))
+    def call(self, obj, method, *args):
+        if method not in ALLOWED_CALLS:
+            raise PrivacyViolation()
+        self.calls.append(method)
+        try:
+            return getattr(obj, method)(*args)
+        except Exception:
+            raise ProbeError() from None
 
-    def summary(self):
-        emit(self.app)
-        emit(self.app, "=" * 78)
-        emit(self.app, "SUMMARY - GridLens contingency probe {}".format(PROBE_VERSION))
-        emit(self.app, "=" * 78)
-        for kind in KINDS:
-            entries = [(topic, text) for item_kind, topic, text in self.items if item_kind == kind]
-            emit(self.app)
-            emit(self.app, "{} ({})".format(kind, len(entries)))
-            emit(self.app, "-" * 78)
-            for topic, text in entries:
-                emit(self.app, "  - {}: {}".format(topic, text))
-            if not entries:
-                emit(self.app, "  (none)")
+    def has_method(self, obj, method):
+        """Whether the method exists; it is looked up, never called."""
+        try:
+            return callable(getattr(obj, method))
+        except Exception:
+            return False
 
+    def has_attribute(self, obj, attribute):
+        try:
+            return self.call(obj, "HasAttribute", attribute) in (1, True)
+        except ProbeError:
+            return False
 
-def heading(app, text):
-    emit(app)
-    emit(app, "=" * 78)
-    emit(app, text)
-    emit(app, "=" * 78)
+    def attribute_type(self, obj, attribute):
+        try:
+            kind = self.call(obj, "GetAttributeType", attribute)
+        except ProbeError:
+            return "NOT_VERIFIED"
+        # Only a known type keyword is used; anything else is reported as OTHER_TYPE.
+        keyword = kind.split(",")[0].strip().upper() if isinstance(kind, str) else ""
+        return keyword if keyword in ATTRIBUTE_TYPES else "OTHER_TYPE"
 
+    def reference(self, obj, attribute):
+        """The value of a result-object reference attribute; used, never shown."""
+        if attribute not in REFERENCE_ATTRIBUTES:
+            raise PrivacyViolation()
+        try:
+            return getattr(obj, attribute)
+        except Exception:
+            return None
 
-def print_attributes(app, obj, findings, topic):
-    """Every attribute, then the ones that match a topic keyword."""
-    names = attribute_names(obj)
-    if not names:
-        findings.add(MISSING, topic, "{} exposes no readable attribute".format(class_of(obj)))
-        return {}
-    described = {}
-    emit(app, "  attributes ({}):".format(len(names)))
-    for name in names:
-        value, kind, unit, description = describe(obj, name)
-        described[name] = (value, description)
-        signature = ", ".join(part for part in (kind, unit) if part)
-        when = epoch_text(value) if any(word in name.lower() for word in ("time", "start", "end")) else None
-        emit(app, "    {}{} = {}{}{}".format(name, " [{}]".format(signature) if signature else "", render(value),
-                                         " ({})".format(when) if when else "",
-                                         "   -- " + description if description else ""))
-    for label, words in TOPICS:
-        hits = [name for name, (_, description) in described.items()
-                if any(word in name.lower() or word in description.lower() for word in words)]
-        emit(app, "  {} - candidate attributes: {}".format(label, ", ".join(hits[:40]) or "none"))
-    return described
+    def class_of(self, obj):
+        try:
+            value = self.call(obj, "GetClassName")
+        except ProbeError:
+            return ""
+        return value if isinstance(value, str) else ""
 
+    def contents(self, obj, pattern):
+        try:
+            found = self.call(obj, "GetContents", pattern)
+            return list(found or [])
+        except (ProbeError, TypeError):
+            return []
 
-def study_commands(study_case, class_name):
-    """Commands of that class in the study case, found without creating one."""
-    return [item for item in contents(study_case, "*.{}".format(class_name)) if class_of(item) == class_name]
-
-
-def probe_comsimoutage(app, study_case, findings):
-    heading(app, "1. ComSimoutage (contingency analysis command)")
-    commands = study_commands(study_case, "ComSimoutage")
-    if not commands:
-        findings.add(MISSING, "ComSimoutage", "the active study case contains no ComSimoutage; the probe does not "
-                                              "create one. Add a contingency analysis to the study case and run the probe again")
-        return []
-    findings.add(VERIFIED, "ComSimoutage", "{} command(s) in the study case: {}".format(
-        len(commands), ", ".join(name_of(item) for item in commands)))
-    for command in commands:
-        emit(app)
-        emit(app, "  {} ({})".format(name_of(command), path_of(command)))
-        described = print_attributes(app, command, findings, "ComSimoutage")
-        for name, (value, description) in described.items():
-            if class_of(value) == "ElmRes":
-                findings.add(VERIFIED, "ComSimoutage result binding", "{}.{} -> ElmRes '{}' ({})".format(
-                    name_of(command), name, name_of(value), description or "no description"))
-        sweep = [name for name, (_, description) in described.items()
-                 if "sweep" in name.lower() or "sweep" in description.lower()]
-        if sweep:
-            findings.add(UNTESTED, "time sweep", "attributes {} exist; whether they reproduce the ComStatsim time steps "
-                                                "exactly is not verified without a calculation".format(", ".join(sweep)))
-        else:
-            findings.add(OPEN, "time sweep", "no attribute of {} mentions a time sweep in name or description".format(
-                name_of(command)))
-        children = contents(command)
-        counts = {}
-        for child in children:
-            counts[class_of(child)] = counts.get(class_of(child), 0) + 1
-        emit(app, "  children: {}".format(", ".join("{} x{}".format(kind, count) for kind, count in sorted(counts.items()))
-                                          or "none"))
-        findings.add(VERIFIED, "ComSimoutage children", "{}: {}".format(
-            name_of(command), ", ".join("{} x{}".format(kind, count) for kind, count in sorted(counts.items())) or "none"))
-        emit(app, "  methods: {}".format(", ".join(methods_of(command))))
-    return commands
+    def of_class(self, obj, class_name):
+        return [item for item in self.contents(obj, "*." + class_name) if self.class_of(item) == class_name]
 
 
-def probe_comstatsim(app, study_case, findings):
-    heading(app, "2. ComStatsim (quasi-dynamic simulation) and study time")
-    commands = study_commands(study_case, "ComStatsim")
-    if not commands:
-        findings.add(MISSING, "ComStatsim", "no ComStatsim in the active study case")
-    for command in commands:
-        emit(app)
-        emit(app, "  {} ({})".format(name_of(command), path_of(command)))
-        described = print_attributes(app, command, findings, "ComStatsim")
-        start, end = (number(described.get(name, (None,))[0]) for name in ("startTime", "endTime"))
-        if start is not None and end is not None:
-            findings.add(VERIFIED, "QDS period", "{} to {} (startTime/endTime, epoch seconds)".format(
-                epoch_text(start) or start, epoch_text(end) or end))
-        else:
-            findings.add(MISSING, "QDS period", "startTime/endTime not readable on {}".format(name_of(command)))
-        step = [(name, described[name][0]) for name in ("calcPeriod", "stepSize", "stepUnit") if name in described]
-        findings.add(VERIFIED if step else MISSING, "QDS time step", ", ".join(
-            "{}={}".format(name, render(value)) for name, value in step) or "calcPeriod/stepSize/stepUnit not readable")
-        result = described.get("results", (None,))[0]
-        if class_of(result) == "ElmRes":
-            describe_result(app, result, findings, "QDS result object")
-    for setting in contents(study_case, "*.SetTime"):
-        emit(app)
-        emit(app, "  study time {} ({})".format(name_of(setting), path_of(setting)))
-        described = print_attributes(app, setting, findings, "SetTime")
-        zone = [name for name, (_, description) in described.items()
-                if "zone" in name.lower() or "zone" in description.lower() or "utc" in description.lower()]
-        findings.add(VERIFIED if zone else OPEN, "time definition", "time zone attributes: {}".format(", ".join(zone))
-                     if zone else "no time zone attribute on SetTime; epoch seconds are shown in the local time of this computer")
-    coupled = []
-    for pattern in TIME_COUPLED_CLASSES:
-        found = call(safe(app, "GetCalcRelevantObjects"), "*." + pattern) or []
-        if found:
-            coupled.append("{} x{}".format(pattern, len(found)))
-    findings.add(VERIFIED, "time-coupled models", ", ".join(coupled) + " in the active grid; whether the contingency "
-                 "time sweep starts from the same internal state as the QDS is not verifiable read-only"
-                 if coupled else "no ElmQdsl in the active grid")
+def flag(value, yes="TRUE", no="FALSE"):
+    return yes if value else no
 
 
-def probe_contingencies(app, project, study_case, commands, findings):
-    heading(app, "3. Contingency definitions")
-    roots = [("study case", study_case)] + [("command " + name_of(command), command) for command in commands]
-    if project is not None:
-        roots.append(("project", project))
-    seen = set()
-    for class_name in CONTINGENCY_CLASSES:
-        found = []
-        for where, root in roots:
-            for item in contents(root, "*.{}".format(class_name), 1):
-                key = path_of(item)
-                if class_of(item) == class_name and key not in seen:
-                    seen.add(key)
-                    found.append((where, item))
-        if not found:
-            findings.add(OPEN, "contingency class " + class_name, "no instance found in the study case, its "
-                                                                 "contingency commands or the project")
-            continue
-        findings.add(VERIFIED, "contingency class " + class_name, "{} instance(s), first in {}".format(
-            len(found), found[0][0]))
-        emit(app)
-        emit(app, "  {}: {} instance(s)".format(class_name, len(found)))
-        for where, item in found[:LIST_LIMIT]:
-            emit(app, "    {} ({}) in {}".format(name_of(item), path_of(item), where))
-            for name in ("loc_name", "number", "cpCase", "iopt_tp", "outserv", "event", "obj_id"):
-                value = safe(item, name)
-                if value is not None and name != "loc_name":
-                    emit(app, "      {} = {}".format(name, render(value)))
-            switched = []
-            for child in contents(item):
-                target = safe(child, "p_target") or safe(child, "obj_id")
-                switched.append("{} {}".format(class_of(child), render(target) if target is not None else name_of(child)))
-            if switched:
-                emit(app, "      events/equipment: {}".format("; ".join(switched[:LIST_LIMIT])))
-        first = found[0][1]
-        emit(app, "  attributes of the first {}:".format(class_name))
-        print_attributes(app, first, findings, class_name)
-    findings.add(OPEN, "contingency set", "which of the classes above PowerFactory 2026 uses as the contingency set "
-                                          "of ComSimoutage must be confirmed from section 1 (children and references)")
+def check_api(api, report, state):
+    report.add("Privacy mode", PRIVACY_MODE)
+    try:
+        version = api.call(api.app, "GetInterfaceVersion")
+    except ProbeError:
+        version = None
+    report.add("Interface version", version)
+    report.add("Python major", sys.version_info[0])
+    report.add("Python minor", sys.version_info[1])
+    # Which interface versions GridLens supports is not established yet.
+    report.add("Version compatibility", "NOT_VERIFIED")
 
 
-def describe_result(app, elmres, findings, topic, depth=0):
-    """Structure of one ElmRes, with reading methods only."""
-    emit(app)
-    emit(app, "  {} '{}' ({})".format(topic, name_of(elmres), path_of(elmres)))
-    loaded = call(safe(elmres, "Load"))
-    rows, columns = number(call(safe(elmres, "GetNumberOfRows"))), number(call(safe(elmres, "GetNumberOfColumns")))
-    emit(app, "    Load() -> {}; rows = {}; columns = {}".format(render(loaded), rows, columns))
-    if rows is None or columns is None:
-        findings.add(MISSING, topic, "'{}': row or column count not readable".format(name_of(elmres)))
-        call(safe(elmres, "Release"))
+def check_study_case(api, report, state):
+    try:
+        state["study_case"] = api.call(api.app, "GetActiveStudyCase")
+    except ProbeError:
+        state["study_case"] = None
+    report.add("Active study case", flag(state["study_case"] is not None, "PRESENT", "ABSENT"))
+    for class_name in COMMAND_CLASSES:
+        found = api.of_class(state["study_case"], class_name) if state["study_case"] is not None else []
+        state[class_name] = found[0] if found else None
+        report.add("{} available".format(class_name), flag(found))
+
+
+def _attributes(api, report, obj, attributes):
+    present = {}
+    for attribute in attributes:
+        present[attribute] = api.has_attribute(obj, attribute)
+        report.add("Attribute {}".format(attribute), flag(present[attribute], "PRESENT", "ABSENT"))
+        if present[attribute]:
+            report.add("Type {}".format(attribute), api.attribute_type(obj, attribute))
+    return present
+
+
+def _methods(api, report, obj, prefix, methods):
+    for name in methods:
+        report.add("{}.{}".format(prefix, name), flag(api.has_method(obj, name), "AVAILABLE_UNTESTED", "NOT_AVAILABLE"))
+
+
+def check_simoutage(api, report, state):
+    command = state.get("ComSimoutage")
+    if command is None:
+        report.add("Time sweep interface", "NOT_APPLICABLE")
         return
-    rows, columns = int(rows), int(columns)
-    variables, classes, special = {}, {}, []
-    for column in range(min(columns, 5000)):
-        variable = str(call(safe(elmres, "GetVariable"), column) or "")
-        obj = call(safe(elmres, "GetObject"), column)
-        variables[variable] = variables.get(variable, 0) + 1
-        classes[class_of(obj) or "-"] = classes.get(class_of(obj) or "-", 0) + 1
-        lowered = variable.lower()
-        if any(word in lowered for word in ("case", "cont", "fault", "time", "nr", "id")) or obj is None:
-            special.append((column, variable, class_of(obj) or "-", name_of(obj) if obj is not None else "-"))
-    emit(app, "    variables: {}".format(", ".join("{} x{}".format(name, count) for name, count in sorted(variables.items())[:60])))
-    emit(app, "    object classes: {}".format(", ".join("{} x{}".format(name, count) for name, count in sorted(classes.items()))))
-    for column, variable, kind, name in special[:LIST_LIMIT]:
-        emit(app, "    column {}: {} of {} '{}' (time, case or id column candidate)".format(column, variable, kind, name))
-    timeline = []
-    empty = 0
-    checked = 0
-    codes = {}
-    for row in range(min(rows, SAMPLE_ROWS)):
-        timeline.append(call(safe(elmres, "GetValue"), row, -1))
-        for column in range(min(columns, 40)):
-            value = call(safe(elmres, "GetValue"), row, column)
-            checked += 1
-            code = value[0] if isinstance(value, (list, tuple)) and len(value) > 1 else None
-            codes[code] = codes.get(code, 0) + 1
-            payload = value[1] if isinstance(value, (list, tuple)) and len(value) > 1 else value
-            if number(payload) is None:
-                empty += 1
-    emit(app, "    first values of the time column (-1): {}".format(render(timeline[:12])))
-    emit(app, "    GetValue codes in the sample (0 ok, 3 below the recording limit): {}".format(
-        ", ".join("{}: {}".format(code, count) for code, count in sorted(codes.items(), key=lambda item: str(item[0])))
-        or "none"))
-    if codes.get(3):
-        findings.add(VERIFIED, topic + " sparse", "'{}': {} of {} sampled cells return code 3 (not written, below the "
-                     "recording limit)".format(name_of(elmres), codes[3], checked))
-    findings.add(VERIFIED, topic, "'{}': {} rows x {} columns, {} distinct variables".format(
-        name_of(elmres), rows, columns, len(variables)))
-    findings.add(VERIFIED if checked else OPEN, topic + " density", "{} of {} sampled cells without a number "
-                 "(rows 0..{}, columns 0..{}); empty cells suggest a sparse structure, but only a known contingency x "
-                 "time-step count can prove it".format(empty, checked, min(rows, SAMPLE_ROWS) - 1, min(columns, 40) - 1))
-    call(safe(elmres, "Release"))
-    subresults = [child for child in contents(elmres) if class_of(child) == "ElmRes"]
-    if subresults and depth < 1:
-        findings.add(VERIFIED, topic + " sub-results", "{} child ElmRes, e.g. {}".format(
-            len(subresults), ", ".join(name_of(child) for child in subresults[:5])))
-        for child in subresults[:2]:
-            for name in ("cnttime", "pResElm", "calTp"):
-                value = safe(child, name)
-                if value is not None:
-                    emit(app, "    sub-result {}: {} = {}{}".format(name_of(child), name, render(value),
-                                                                  " ({})".format(epoch_text(value)) if epoch_text(value) else ""))
-            describe_result(app, child, findings, topic + " (one study time)", depth + 1)
+    present = _attributes(api, report, command, SIMOUTAGE_ATTRIBUTES)
+    sweep = all(present[name] for name in ("iEnableTS", "startTime", "endTime", "stepSize", "stepUnit"))
+    report.add("Time sweep interface", flag(sweep, "PRESENT", "ABSENT"))
+    report.add("Planned outage interface", flag(present["isPlannedOutages"], "PRESENT", "ABSENT"))
+    report.add("Recording limit interface", flag(present["loadmax"] or present["iopt_record"], "PRESENT", "ABSENT"))
+    report.add("Result interface", flag(present["p_rescnt"], "PRESENT", "ABSENT"))
+    report.add("Time phase interface", flag(present["timePhases"], "PRESENT", "ABSENT"))
+    report.add("Remedial action interface", flag(present["rasActive"], "PRESENT", "ABSENT"))
+    report.add("Regional analysis interface", flag(present["iPerformOpt"], "PRESENT", "ABSENT"))
+    _methods(api, report, command, "ComSimoutage", SIMOUTAGE_METHODS)
+    state["results"] = api.reference(command, "p_rescnt") if present["p_rescnt"] else None
 
 
-def probe_results(app, study_case, commands, findings):
-    heading(app, "4. Contingency result objects (ElmRes)")
-    for command in commands:
-        limits = ["{}={}".format(name, render(safe(command, name))) for name in RECORDING_ATTRIBUTES
-                  if safe(command, name) is not None]
-        emit(app, "  recording limits of {}: {}".format(name_of(command), ", ".join(limits) or "none readable"))
-        if limits:
-            findings.add(VERIFIED, "recording limits", "{}: {} - values inside these limits are not written, so a "
-                         "missing value is not 'no violation'".format(name_of(command), ", ".join(limits[:6])))
-    candidates = {}
-    for command in commands:
-        for name in attribute_names(command):
-            value = safe(command, name)
-            if class_of(value) == "ElmRes":
-                candidates[path_of(value)] = value
-    for item in contents(study_case, "*.ElmRes", 1):
-        lowered = (name_of(item) + " " + str(safe(item, "calTp", ""))).lower()
-        if any(word in lowered for word in ("cont", "outage", "n-1", "simoutage")):
-            candidates[path_of(item)] = item
-    if not candidates:
-        findings.add(MISSING, "contingency ElmRes", "no ElmRes bound to a ComSimoutage and none whose name suggests "
-                                                    "contingency results; run a contingency analysis once by hand to "
-                                                    "let the probe read its structure")
-        return None
-    first = None
-    for key in sorted(candidates)[:5]:
-        describe_result(app, candidates[key], findings, "contingency ElmRes")
-        first = first or candidates[key]
-    findings.add(OPEN, "contingency identity", "how a result row names its contingency and its time step must be "
-                                               "read from the column list above and confirmed with a known case")
-    return first
-
-
-def probe_elmres_interface(app, elmres, study_case, findings):
-    heading(app, "5. ElmRes interface (introspection only)")
-    sample = elmres
-    if sample is None:
-        sample = next(iter(contents(study_case, "*.ElmRes", 1)), None)
-    if sample is None:
-        findings.add(MISSING, "ElmRes interface", "no ElmRes in the study case to inspect")
+def check_contingency_set(api, report, state):
+    command = state.get("ComSimoutage")
+    outages = api.of_class(command, "ComOutage") if command is not None else []
+    report.add("Contingencies in the command", flag(outages, "PRESENT", "ABSENT"))
+    if not outages:
         return
-    methods = methods_of(sample)
-    emit(app, "  methods of ElmRes '{}': {}".format(name_of(sample), ", ".join(methods)))
-    for name in READ_METHODS:
-        if name in methods:
-            findings.add(VERIFIED if name in ("Load", "Release", "GetNumberOfRows", "GetNumberOfColumns", "GetObject",
-                                              "GetVariable", "GetValue") else UNTESTED, "ElmRes read " + name, "present")
-    for name in WRITE_METHODS:
-        if name in methods:
-            findings.add(UNTESTED, "ElmRes write " + name, "present, never called by the probe; whether it can store "
-                                                           "GridLens classification values needs tools/test_contingency.py on a project copy")
-        else:
-            findings.add(ABSENT, "ElmRes write " + name, "not offered by this ElmRes")
-    others = [name for name in methods if name not in READ_METHODS + WRITE_METHODS]
-    emit(app, "  other methods: {}".format(", ".join(others)))
+    first = outages[0]
+    _attributes(api, report, first, OUTAGE_ATTRIBUTES)
+    has_getter = api.has_method(first, "GetObject")
+    report.add("ComOutage.GetObject", flag(has_getter, "AVAILABLE", "NOT_AVAILABLE"))
+    element = None
+    if has_getter:
+        try:
+            element = api.call(first, "GetObject", 0)
+        except ProbeError:
+            element = None
+    # Only whether an element comes back, whether its class is a known equipment class and
+    # whether it carries the grid attribute; never which element.
+    report.add("Equipment readable", flag(element is not None))
+    report.add("Equipment class recognised", flag(element is not None and api.class_of(element) in EQUIPMENT_CLASSES))
+    report.add("Equipment grid attribute", flag(element is not None and api.has_attribute(element, "cpGrid"),
+                                                "PRESENT", "ABSENT"))
 
 
-def probe_storage(app, project, study_case, findings):
-    heading(app, "6. Places for persistent results, settings and case configurations")
-    getter = safe(app, "GetProjectFolder")
-    for key in PROJECT_FOLDERS:
-        folder = call(getter, key)
-        if folder is not None:
-            findings.add(VERIFIED, "project folder '{}'".format(key), "{} ({})".format(class_of(folder), path_of(folder)))
-    kept = [item for item in contents(study_case, "*.ElmRes") if name_of(item).startswith("GridLens_")]
-    findings.add(VERIFIED, "GridLens result objects", "{} ElmRes named GridLens_* in the study case{}".format(
-        len(kept), ": " + ", ".join(name_of(item) for item in kept[:8]) if kept else ""))
-    counts = {}
-    for child in contents(study_case):
-        counts[class_of(child)] = counts.get(class_of(child), 0) + 1
-    emit(app, "  study case children: {}".format(", ".join("{} x{}".format(kind, count) for kind, count in sorted(counts.items()))))
-    for class_name in STORAGE_CLASSES:
-        found = contents(project, "*.{}".format(class_name), 1) if project is not None else []
-        found = [item for item in found if class_of(item) == class_name]
-        if found:
-            findings.add(VERIFIED, "storage class " + class_name, "{} instance(s), e.g. {}".format(
-                len(found), path_of(found[0])))
-            emit(app, "  first {}:".format(class_name))
-            print_attributes(app, found[0], findings, class_name)
-        else:
-            findings.add(OPEN, "storage class " + class_name, "no instance in the project; whether the class can be "
-                                                              "created there is not verifiable without CreateObject")
-    findings.add(OPEN, "native settings storage", "which object can hold an immutable GridLens settings snapshot per "
-                                                  "run must be decided from the instances above and tested on a project copy")
+def check_nmink(api, report, state):
+    command = state.get("ComNmink")
+    if command is None:
+        report.add("ComNmink available", "FALSE")
+        return
+    _attributes(api, report, command, NMINK_ATTRIBUTES)
+    _methods(api, report, command, "ComNmink", NMINK_METHODS)
 
 
-def grid_of(obj):
-    """Grid name of an element: attribute cpGrid, else the ElmNet in its path."""
-    grid = safe(obj, "cpGrid")
-    if hasattr(grid, "GetClassName"):
-        return name_of(grid)
-    for part in reversed(path_of(obj).split("\\")):
-        if part.endswith(".ElmNet"):
-            return part[:-len(".ElmNet")]
-    return ""
+def check_elmres(api, report, state):
+    results = state.get("results")
+    if results is None or api.class_of(results) != "ElmRes":
+        report.add("AC result object", "ABSENT")
+        state["results"] = None
+        return
+    report.add("AC result object", "PRESENT")
+    for name in ELMRES_READ_METHODS:
+        report.add("ElmRes.{}".format(name), flag(api.has_method(results, name), "AVAILABLE", "NOT_AVAILABLE"))
+    for name in ELMRES_WRITE_METHODS:
+        report.add("ElmRes.{}".format(name), flag(api.has_method(results, name), "AVAILABLE_UNTESTED", "NOT_AVAILABLE"))
 
 
-def outage_elements(outage):
-    """The interrupted components of a ComOutage, by ComOutage.GetObject(line) until None."""
-    found = []
-    getter = safe(outage, "GetObject")
-    for line in range(MAX_OUTAGE_LINES if callable(getter) else 0):
-        element = call(getter, line)
-        if element is None:
-            break
-        found.append(element)
+def _status(returned):
+    """The GetValue status code; the value next to it is never looked at."""
+    if isinstance(returned, (list, tuple)) and returned and isinstance(returned[0], int):
+        return returned[0]
+    return None
+
+
+def _inspect(api, result):
+    """Structure of one result object as booleans; values are never kept or shown."""
+    found = dict.fromkeys(("readable", "rows", "columns", "index", "sparse", "contingency", "phase", "loading",
+                           "voltage"), False)
+    try:
+        api.call(result, "Load")
+    except ProbeError:
+        return found
+    try:
+        rows, columns = api.call(result, "GetNumberOfRows"), api.call(result, "GetNumberOfColumns")
+        if not all(isinstance(number, (int, float)) and not isinstance(number, bool) for number in (rows, columns)):
+            return found
+        found["readable"] = True
+        rows, columns = int(rows), int(columns)
+        found["rows"], found["columns"] = rows > 0, columns > 0
+        for column in range(min(columns, SAMPLE_COLUMNS)):
+            variable = api.call(result, "GetVariable", column)
+            if isinstance(variable, str):
+                found["contingency"] |= variable in CONTINGENCY_VARIABLES
+                found["phase"] |= variable in PHASE_VARIABLES
+                found["loading"] |= variable in LOADING_VARIABLES
+                found["voltage"] |= variable in VOLTAGE_VARIABLES
+        for row in range(min(rows, SAMPLE_ROWS)):
+            found["index"] |= _status(api.call(result, "GetValue", row)) == CODE_OK
+            for column in range(min(columns, SAMPLE_COLUMNS)):
+                found["sparse"] |= _status(api.call(result, "GetValue", row, column)) == CODE_SPARSE
+    except ProbeError:
+        found["readable"] = False
+    finally:
+        try:
+            api.call(result, "Release")
+        except ProbeError:
+            pass
     return found
 
 
-def probe_grids(app, project, commands, findings):
-    heading(app, "7. Grids of the model and of the contingencies")
-    grids = {}
-    for grid in call(safe(app, "GetCalcRelevantObjects"), "*.ElmNet") or []:
-        grids[name_of(grid)] = "active"
-    for grid in contents(call(safe(app, "GetProjectFolder"), "netdat") or project, "*.ElmNet", 1):
-        grids.setdefault(name_of(grid), "inactive")
-    counts = {}
-    for class_name in GRID_ELEMENT_CLASSES:
-        for element in call(safe(app, "GetCalcRelevantObjects"), "*." + class_name) or []:
-            key = (grid_of(element) or "(no grid)", class_name)
-            counts[key] = counts.get(key, 0) + 1
-    for name in sorted(set(grids) | {grid for grid, _ in counts}, key=str.casefold):
-        emit(app, "  {:<40} {:<9} {}".format(name, grids.get(name, "-"), ", ".join(
-            "{} x{}".format(class_name, counts[(name, class_name)]) for class_name in GRID_ELEMENT_CLASSES
-            if (name, class_name) in counts) or "no line, transformer or terminal"))
-    findings.add(VERIFIED if grids else MISSING, "grids", "{} grid(s): {}".format(len(grids), ", ".join(
-        "{} ({})".format(name, state) for name, state in sorted(grids.items())[:12])) if grids else "no ElmNet found")
-    for command in commands:
-        outages = [item for item in contents(command, "*.ComOutage") if class_of(item) == "ComOutage"]
-        by_grid, unreadable = {}, []
-        emit(app)
-        emit(app, "  contingencies of {} and the grids of their equipment:".format(name_of(command)))
-        for index, outage in enumerate(outages):
-            elements = outage_elements(outage)
-            if not elements:
-                unreadable.append(name_of(outage))
-            names = sorted({grid_of(element) or "(no grid)" for element in elements})
-            for name in names:
-                by_grid[name] = by_grid.get(name, 0) + 1
-            if index < LIST_LIMIT * 4:
-                emit(app, "    {} (Not analysed: {}): {} | grids: {}".format(
-                    name_of(outage), safe(outage, "outserv", "?"),
-                    ", ".join("{} '{}'".format(class_of(element), name_of(element)) for element in elements[:6]) or "-",
-                    ", ".join(names) or "-"))
-        findings.add(VERIFIED if outages and len(unreadable) < len(outages) else OPEN, "contingency equipment",
-                     "{} of {} contingencies of {} name their equipment through ComOutage.GetObject; per grid: {}".format(
-                         len(outages) - len(unreadable), len(outages), name_of(command),
-                         ", ".join("{} {}".format(name, count) for name, count in sorted(by_grid.items())) or "none"))
+def check_result_structure(api, report, state):
+    results = state.get("results")
+    if results is None:
+        report.add("Readable", "NOT_APPLICABLE")
+        return
+    top = _inspect(api, results)
+    report.add("Readable", flag(top["readable"]))
+    report.add("Rows present", flag(top["rows"]))
+    report.add("Columns present", flag(top["columns"]))
+    children = api.of_class(results, "ElmRes")
+    report.add("Sub-results per study time", flag(children, "DETECTED", "NOT_DETECTED"))
+    sample = top
+    if children:
+        sample = _inspect(api, children[0])
+        report.add("Sub-result readable", flag(sample["readable"]))
+    report.add("Index column readable", flag(sample["index"]))
+    report.add("Sparse recording indicator", flag(sample["sparse"], "DETECTED", "NOT_DETECTED"))
+    report.add("Loading variables recorded", flag(sample["loading"], "DETECTED", "NOT_DETECTED"))
+    report.add("Voltage variables recorded", flag(sample["voltage"], "DETECTED", "NOT_DETECTED"))
+    # Without reading column objects or values, an identification can be confirmed but never ruled out.
+    report.add("Contingency identification", "DETECTED" if sample["contingency"] else "NOT_VERIFIED_PRIVACY_RESTRICTION")
+    report.add("Time phase identification", "DETECTED" if sample["phase"] else "NOT_VERIFIED_PRIVACY_RESTRICTION")
+    # Proving the time base would mean reading the index values, which are study times.
+    report.add("Time identification", "NOT_VERIFIED_PRIVACY_RESTRICTION")
 
 
-def probe(app):
-    findings = Findings(app)
-    heading(app, "GridLens contingency probe {} - read only".format(PROBE_VERSION))
-    emit(app, "  started {}".format(time.strftime("%Y-%m-%d %H:%M:%S")))
-    project = call(safe(app, "GetActiveProject"))
-    study_case = call(safe(app, "GetActiveStudyCase"))
-    version = call(safe(app, "GetVersion")) or call(safe(app, "GetBuildNumber"))
-    findings.add(VERIFIED if version else MISSING, "PowerFactory version", render(version) if version else "not readable")
-    if project is None or study_case is None:
-        findings.add(MISSING, "context", "no active project or study case; activate both and run the probe again")
-        findings.summary()
-        return findings
-    findings.add(VERIFIED, "context", "project '{}', study case '{}'".format(name_of(project), name_of(study_case)))
-    holder = {"commands": [], "result": None}
-    sections = (
-        lambda: probe_comstatsim(app, study_case, findings),
-        lambda: holder.update(commands=probe_comsimoutage(app, study_case, findings)),
-        lambda: probe_contingencies(app, project, study_case, holder["commands"], findings),
-        lambda: holder.update(result=probe_results(app, study_case, holder["commands"], findings)),
-        lambda: probe_elmres_interface(app, holder.get("result"), study_case, findings),
-        lambda: probe_storage(app, project, study_case, findings),
-        lambda: probe_grids(app, project, holder["commands"], findings),
-    )
-    for section in sections:
+def check_network_scope(api, report, state):
+    try:
+        grids = list(api.call(api.app, "GetCalcRelevantObjects", "*.ElmNet") or [])
+        lines = list(api.call(api.app, "GetCalcRelevantObjects", "*.ElmLne") or [])
+    except (ProbeError, TypeError):
+        grids, lines = [], []
+    report.add("Grids readable", flag(grids))
+    report.add("Element grid attribute", flag(lines and api.has_attribute(lines[0], "cpGrid"), "PRESENT", "ABSENT"))
+
+
+def check_storage(api, report, state):
+    try:
+        project = api.call(api.app, "GetActiveProject")
+    except ProbeError:
+        project = None
+    for class_name in STORAGE_CLASSES:
+        found = project is not None and bool(api.of_class(project, class_name))
+        # Whether GridLens may create such objects needs a separate, released write test.
+        report.add("{} instances".format(class_name), flag(found, "DETECTED", "NOT_DETECTED"))
+
+
+CHECKS = (
+    ("PowerFactory API", check_api),
+    ("Study case", check_study_case),
+    ("Contingency Analysis", check_simoutage),
+    ("Contingency set", check_contingency_set),
+    ("Contingency Definition", check_nmink),
+    ("ElmRes", check_elmres),
+    ("Result Structure", check_result_structure),
+    ("Network scope", check_network_scope),
+    ("Storage", check_storage),
+)
+
+
+def probe(app, printer=None):
+    """Run every check; returns the report (report.lines is the complete output, report.api the call log)."""
+    report = Report(printer or app.PrintPlain)
+    report.title()
+    api = ReadOnlyApi(app)
+    state = {}
+    for section, check in CHECKS:
+        report.section(section)
         try:
-            section()
-        except Exception as exc:  # one failing section must not hide the others
-            findings.add(MISSING, "probe section", "stopped with {}: {}".format(type(exc).__name__, exc))
-    for question in (
-            "Does a ComSimoutage time sweep compute exactly the ComStatsim time steps (start, end, step, last step)?",
-            "Does the time sweep apply IntPlannedout objects in their windows with the same iopt_maint semantics as the QDS?",
-            "Which result rows and columns identify contingency, time step and post-fault phase?",
-            "Are contingency results sparse (only violations stored) or dense?",
-            "Which object holds the common contingency set, and can n-1 and (n-1)' share it unchanged?",
-            "Can an ElmRes store GridLens classification codes, and can they be read back unchanged?",
-            "Which native object stores GridLens settings and case configurations inside the project?",
-            "What does PowerFactory report for a contingency whose element a planned outage already switches off?"):
-        findings.add(OPEN, "part 3", question)
-    findings.summary()
-    return findings
+            check(api, report, state)
+        except PrivacyViolation:
+            raise
+        except Exception:
+            # Never the exception text: only the category of the failed check.
+            report.error()
+    report.section("Privacy")
+    for label in PRIVACY_LABELS:
+        report.add(label, "NO")
+    report.api = api
+    return report
 
 
 def main():
     import powerfactory  # noqa: F401  (only available inside PowerFactory)
 
-    app = powerfactory.GetApplication()
-    probe(app)
+    probe(powerfactory.GetApplication())
 
 
 if __name__ == "__main__":

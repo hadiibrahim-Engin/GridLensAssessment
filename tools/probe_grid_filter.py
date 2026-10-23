@@ -3,6 +3,11 @@
 A stand-alone diagnostic: it needs nothing but PowerFactory. It only reads;
 nothing is calculated, written or published.
 
+PRIVACY: LOCAL USE ONLY. Its purpose needs project data, so its output contains
+project, grid and equipment names, paths and values. Do not pass that output
+on to external developers or AI systems; tools/probe_contingency.py is the
+strict-privacy probe whose output may be shared.
+
 Create a ComPython for this file anywhere in the active study case and run it
 once. It applies the same grid filter as gridlens_report.py and prints
 
@@ -34,6 +39,9 @@ def emit(app, message=""):
         except Exception:
             pass
     print(message, flush=True)
+
+
+PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use tools/probe_contingency.py (strict privacy)."
 
 
 # --- The grid filter, kept identical to gridlens_report.py ------------------
@@ -292,6 +300,7 @@ def main():
         print("PowerFactory returned no application object.", flush=True)
         return
     emit(app, "=== GridLens grid-filter probe (read-only) ===")
+    emit(app, PRIVACY_NOTE)
     emit(app, "GRID_NAME_FILTER : {!r}".format(GRID_NAME_FILTER))
     emit(app, "MONITORING_GRIDS : {!r}".format(MONITORING_GRIDS))
     for step in (report_grids, report_examples, report_elements, report_result_series):
