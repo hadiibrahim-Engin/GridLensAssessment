@@ -2960,6 +2960,73 @@ class RunLogger:
                     for i in range(len(line))))
 
 
+class RunStats:
+    """Time and calls per service and the number of calculations of one run, for the summary at its end."""
+
+    # Order of the summary; services not listed follow in the order they were first used.
+    COUNT_LABELS = (
+        ('qds_runs', 'QDS runs (ComStatsim.Execute)'), ('qds_steps', 'QDS time steps calculated'),
+        ('reused_cases', 'cases reused without a QDS run'), ('series', 'result series read'),
+        ('values', 'result values read'), ('n1_created', 'contingency analyses created'),
+        ('n1_sweeps', 'contingency analysis runs (ComSimoutage.Execute)'), ('n1_times', 'n-1 study times calculated'),
+        ('n1_loadflows', 'contingency load flows (study time x contingency)'),
+        ('n1_classified', 'n-1 results classified'), ('report_rows', 'report table rows built'))
+
+    def __init__(self):
+        self.started = time.monotonic()
+        self.services = {}
+        self.counts = {}
+
+    def add(self, service, seconds, calls=1):
+        entry = self.services.setdefault(service, [0, 0.0])
+        entry[0] += calls
+        entry[1] += max(0.0, seconds)
+
+    def count(self, name, number=1):
+        self.counts[name] = self.counts.get(name, 0) + number
+
+    def measure(self, service):
+        """with RUN_STATS.measure('...'): adds the time of the block to the service."""
+        stats = self
+
+        class _Block:
+            def __enter__(self):
+                self.started = time.monotonic()
+                return self
+
+            def __exit__(self, *_unused):
+                stats.add(service, time.monotonic() - self.started)
+                return False
+        return _Block()
+
+    def rows(self):
+        total = time.monotonic() - self.started
+        rows = [(service, str(calls), '{:.1f}'.format(seconds), '{:.0f} %'.format(100.0 * seconds / total) if total else '-')
+                for service, (calls, seconds) in self.services.items()]
+        measured = sum(seconds for _, seconds in self.services.values())
+        rows.append(('other (logging, checks, waiting)', '-', '{:.1f}'.format(max(0.0, total - measured)), '-'))
+        rows.append(('total', '-', '{:.1f}'.format(total), '100 %'))
+        return rows
+
+    def count_rows(self):
+        return [(label, '{:,}'.format(self.counts[key]).replace(',', ' ')) for key, label in self.COUNT_LABELS
+                if self.counts.get(key)]
+
+
+RUN_STATS = RunStats()
+
+
+def log_run_summary(logger, stats=None):
+    """The time per service and the number of calculations, at the end of every run (also a failed one)."""
+    stats = stats or RUN_STATS
+    logger.section("RUN SUMMARY · time per service and calculations")
+    logger.table(("Service", "Calls", "Time [s]", "Share"), stats.rows())
+    counted = stats.count_rows()
+    if counted:
+        logger.detail("")
+        logger.table(("Calculations", "Number"), counted)
+
+
 def _call_without_or_with_zero(method):
     try:
         return method()
@@ -4998,6 +5065,10 @@ class CaseManagerDialog:
 
     # --- window -----------------------------------------------------------------
     def build(self):
+        with RUN_STATS.measure("case manager: build window"):
+            self._build()
+
+    def _build(self):
         ttk, root = self.ttk, self.root
         self._style()
         root.title('GridLens {} - Case Manager'.format(PUBLISHER_VERSION))
@@ -5373,12 +5444,9 @@ class CaseManagerDialog:
         strip.columnconfigure(1, weight=1)
         options = self._card(strip, row=0, column=0, sticky='nsew', padx=(0, 4))
         ttk.Label(options, text='Calculation', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 4))
-        self.n0_var = tk.BooleanVar(value='n-0' in self.editor.config['assessments'])
+        # n-0 (the QDS of REF and every case) is always calculated, so it has no control here.
         self.n1_var = tk.BooleanVar(value=N1_REFERENCE in self.editor.config['assessments'])
         self.n1_prime_var = tk.BooleanVar(value=N1_PRIME in self.editor.config['assessments'])
-        n0 = ttk.Checkbutton(options, text='n-0 - reference QDS', variable=self.n0_var, command=self.apply_assessments)
-        n0.grid(row=1, column=0, sticky='w')
-        self.tip(n0, HELP_TEXTS['n0'])
         n1 = ttk.Checkbutton(options, text='n-1 - reference contingency analysis', variable=self.n1_var,
                              command=self.apply_assessments)
         n1.grid(row=2, column=0, sticky='w')
@@ -5808,6 +5876,10 @@ class CaseManagerDialog:
 
     def refresh_overview(self):
         """Fixed background and rules, the calculation preview, the problems, the status line and the tab labels."""
+        with RUN_STATS.measure("case manager: refresh after an edit"):
+            self._refresh_overview()
+
+    def _refresh_overview(self):
         self.fixed_table.set_rows(self.editor.fixed_rows())
         self.rule_table.set_rows([(str(index), cells) for index, cells in self.editor.rule_rows()])
         lines, _ = self.editor.summary()
@@ -6185,17 +6257,13 @@ class CaseManagerDialog:
 
     # --- calculation -----------------------------------------------------------
     def apply_assessments(self):
-        if not self.n0_var.get():
-            # The report is built on the n-0 QDS, so it is always calculated.
-            self.n0_var.set(True)
-            self.messagebox.showinfo('Assessment', 'n-0 is always calculated: the report is built on it.', parent=self.root)
         if self.n1_prime_var.get() and not self.n1_var.get():
             # (n-1)' is compared with n-1: ticking (n-1)' ticks n-1, unticking n-1 unticks (n-1)'.
             if self.n1_prime_var.get() and self.editor.config['assessments'].count(N1_PRIME):
                 self.n1_prime_var.set(False)
             else:
                 self.n1_var.set(True)
-        self.editor.set_assessments(self.n0_var.get(), self.n1_var.get(), self.n1_prime_var.get())
+        self.editor.set_assessments(True, self.n1_var.get(), self.n1_prime_var.get())
         self.refresh_overview()
 
     def _settings_ready(self, title):
@@ -6238,7 +6306,6 @@ class CaseManagerDialog:
                 saved.get('revision')), parent=self.root):
             return
         self.editor.load(saved)
-        self.n0_var.set('n-0' in self.editor.config['assessments'])
         self.n1_var.set(N1_REFERENCE in self.editor.config['assessments'])
         self.n1_prime_var.set(N1_PRIME in self.editor.config['assessments'])
         for key in self.setting_vars:
@@ -6254,7 +6321,7 @@ class CaseManagerDialog:
         self.finish_editing()
         if not self._settings_ready('Start calculation'):
             return
-        problem = self.editor.set_assessments(self.n0_var.get(), self.n1_var.get(), self.n1_prime_var.get())
+        problem = self.editor.set_assessments(True, self.n1_var.get(), self.n1_prime_var.get())
         problems = ([problem] if problem else []) + validate_case_config(self.editor.config)
         if problems:
             self.messagebox.showerror('Start calculation', '\n'.join(problems), parent=self.root)
@@ -6439,10 +6506,13 @@ def _run_calculation(app, study_case, qds, case_id, name, description,
     try:
         returned = qds.Execute()
     except Exception as exc:
+        RUN_STATS.add("QDS calculation (PowerFactory)", time.monotonic() - started)
         raise GridLensError(
             "{} calculation was interrupted or failed: {}. {}".format(
                 case_id, _friendly_exception(exc), REFUSED_HINT)) from None
     elapsed = time.monotonic() - started
+    RUN_STATS.add("QDS calculation (PowerFactory)", elapsed)
+    RUN_STATS.count("qds_runs")
     code = return_code(returned)
     if code is None or code != 0.0:
         raise GridLensError(
@@ -6460,10 +6530,15 @@ def _run_calculation(app, study_case, qds, case_id, name, description,
             case_id, elapsed), 4)
     logger.write("EXTRACTION", "Reading and validating {} results.".format(case_id), 5)
     try:
+        reading = time.monotonic()
         snapshot.Load()
         counters = {}
         series, labels, plot_times, unit, absolute, origin = collect_series(
             snapshot, counters)
+        RUN_STATS.add("read QDS results (ElmRes)", time.monotonic() - reading)
+        RUN_STATS.count("qds_steps", len(labels))
+        RUN_STATS.count("series", len(series))
+        RUN_STATS.count("values", len(series) * len(labels))
         if current_setting("monitoring_grids") or GRID_NAME_FILTER:
             logger.write(
                 "EXTRACTION",
@@ -6853,7 +6928,8 @@ def _run_planning_case(app, study_case, qds, plan, request, records, reference,
         out_of_service = {key for record in plan["members"] for key in record.get("component_keys") or ()}
         started = time.monotonic()
         try:
-            compare_case(result, reference, [plan["windows"][record["key"]] for record in plan["members"]], out_of_service)
+            with RUN_STATS.measure("compare case with REF"):
+                compare_case(result, reference, [plan["windows"][record["key"]] for record in plan["members"]], out_of_service)
         except Exception as exc:
             # The QDS ran and its ElmRes is kept; only this case's assessment is lost.
             raise GridLensError("{} was calculated, but its comparison with the reference failed: {}".format(
@@ -7037,14 +7113,21 @@ def run_n1_sweep(command, times, active_keys, records, excluded, label):
                 command, N1_IGNORE_ATTRIBUTE, [0.0] * len(times), 'ignored study times of the contingency analysis'):
             raise GridLensError("The ignored study times [{}] of the contingency analysis could not be cleared for "
                                 "{}.".format(N1_IGNORE_ATTRIBUTE, label))
+        started = time.monotonic()
         try:
             code = command.Execute()
         except Exception as exc:
+            RUN_STATS.add("n-1 contingency analysis (PowerFactory)", time.monotonic() - started)
             raise GridLensError("The contingency analysis for {} stopped: {}. {}".format(
                 label, _friendly_exception(exc), REFUSED_HINT.split(' The result object')[0])) from None
+        RUN_STATS.add("n-1 contingency analysis (PowerFactory)", time.monotonic() - started)
+        RUN_STATS.count("n1_sweeps")
         if finite_number(code) != 0:
             raise GridLensError("The contingency analysis for {} ended with error code {}.".format(label, code))
-        found = read_n1_results(command)
+        with RUN_STATS.measure("read n-1 results"):
+            found = read_n1_results(command)
+        RUN_STATS.count("n1_times", len(found['times']))
+        RUN_STATS.count("n1_loadflows", len({(moment, key[0]) for moment, values in found['times'].items() for key in values}))
     if not _same_times(list(found['times']), times):
         raise GridLensError("The contingency analysis for {} calculated {} study time(s) instead of the {} written "
                             "ones.".format(label, len(found['times']), len(times)))
@@ -7081,7 +7164,9 @@ def run_n1_case(command, plan, request, records, grid, excluded, elements_of, pr
     active = background | {record['key'] for record in plan['members']}
     scenario = run_n1_sweep(command, times, active, records, excluded, "the (n-1)' scenario of " + label)
     switched_off = {component for record in plan['members'] for component in record.get('component_keys') or ()}
-    entry.update(kind="(n-1)'", comparison=compare_n1(reference, scenario, switched_off, elements_of))
+    with RUN_STATS.measure("classify (n-1)' against n-1"):
+        entry.update(kind="(n-1)'", comparison=compare_n1(reference, scenario, switched_off, elements_of))
+    RUN_STATS.count("n1_classified", sum(entry['comparison']['counts'].values()))
     entry['summary'] = "(n-1)' against n-1: " + n1_summary(entry['comparison'])
     return entry
 
@@ -7413,7 +7498,9 @@ def run_n1(app, study_case, qds, request, records, ready, results, logger, study
         # No contingency analysis here (e.g. the QDS study case): GridLens defines one and keeps it.
         name = "{}{}_N1".format(SNAPSHOT_PREFIX, datetime.now().strftime("%y%m%d-%H%M%S"))
         try:
-            command, made, refused = create_contingency_analysis(app, study_case, contingency_grid_selection(), name)
+            with RUN_STATS.measure("n-1: define contingencies"):
+                command, made, refused = create_contingency_analysis(app, study_case, contingency_grid_selection(), name)
+            RUN_STATS.count("n1_created")
             logger.write("CALCULATION", "The study case holds no contingency analysis: GridLens created '{}' with {} "
                          "contingencies (one per branch, transformer, reactor, compensation and FACTS element in {}; no "
                          "generators, loads or busbars){}. It stays in the study case.".format(
@@ -7493,6 +7580,8 @@ def _element_name(item, entry):
 
 
 def execute_gridlens(app):
+    global RUN_STATS
+    RUN_STATS = RunStats()
     logger = RunLogger(app)
     logger.step(1, "Startup and context")
     logger.write(
@@ -7555,13 +7644,17 @@ def execute_gridlens(app):
     state_errors = []
     period = qds_period(qds)
     logger.step(3, "Planned outages and planning cases")
-    records, candidates = classify_planned_outages(app, logger, period)
+    with RUN_STATS.measure("read planned outages"):
+        records, candidates = classify_planned_outages(app, logger, period)
     assign_definitions(records)
     # Read only, for the network scope of the case manager.
-    grids = project_grids(app)
-    contingencies = read_contingencies(study_case)
+    with RUN_STATS.measure("read grids and contingencies"):
+        grids = project_grids(app)
+        contingencies = read_contingencies(study_case)
+    case_manager = time.monotonic()
     request = obtain_case_request(app, records, candidates, period, logger, qds_time_info(qds, period), grids,
                                   contingencies)
+    RUN_STATS.add("case manager (window open, incl. your time)", time.monotonic() - case_manager)
     # The settings are fixed here, after the case manager has closed, and apply to the whole run.
     request["settings_snapshot"] = activate_settings(request.get("settings"))
     logger.write("SETTINGS", "Settings {} with classification rules {}: {}.".format(
@@ -7598,6 +7691,7 @@ def execute_gridlens(app):
                     logger.case("Case {} · {}".format(plan["id"], plan["name"]))
                     logger.detail("Same outages and windows as {}; its result is reused, no QDS run.".format(source["id"]))
                     results.append(_reused_result(source, plan, request))
+                    RUN_STATS.count("reused_cases")
                     continue
                 result = _run_planning_case(app, study_case, qds, plan, request, records, reference,
                                             original_result, logger, result_objects, study_time_state)
@@ -7613,12 +7707,14 @@ def execute_gridlens(app):
             run_n1(app, study_case, qds, request, records, ready, results, logger, study_time_state)
     finally:
         logger.step(6, "Restore and clean-up")
+        restoring = time.monotonic()
         logger.write("RESTORE", "Restoring the original PowerFactory state.", 6)
         state_errors.extend(_restore_study_time(study_time_state, logger))
         state_errors.extend(
             _restore_planned_outage_option(qds, original_option, logger))
         state_errors.extend(_restore_results_binding(qds, original_result))
         _log_kept_results(result_objects, logger)
+        RUN_STATS.add("restore PowerFactory state", time.monotonic() - restoring)
     if state_errors:
         raise GridLensError(
             "GridLens could not fully restore PowerFactory state: {}. Stop and "
@@ -7644,6 +7740,7 @@ def execute_gridlens(app):
         run_mode = "REFERENCE ONLY - NO PLANNING CASE TO CALCULATE"
     else:
         run_mode = "NO CALCULATION - NO PLANNING CASE TO CALCULATE"
+    building = time.monotonic()
     payload = build_cases_payload(
         study_case, results,
         object_name(project) if project else "Active PowerFactory model",
@@ -7651,6 +7748,8 @@ def execute_gridlens(app):
             len(result_objects), object_name(study_case), result_objects.name_for("*"))
         if result_objects else "No calculation executed",
         request, _generated_by(), run_mode)
+    RUN_STATS.add("build report tables", time.monotonic() - building)
+    RUN_STATS.count("report_rows", sum(len(payload.get(name) or []) for name, _ in TABLES))
     _log_findings(logger, payload)
     if report is None:
         counts = {name: len(payload.get(name) or []) for name, _ in TABLES}
@@ -7659,11 +7758,13 @@ def execute_gridlens(app):
             "Standalone run finished: {} report table(s) built, none published; {} planning case(s), {} calculated "
             "case(s).".format(len(counts), len(request["cases"]), len(results)), 7)
         logger.table(("Table", "Rows (built, not published)"), [(name, count) for name, count in counts.items() if count])
+        log_run_summary(logger)
         return counts
     logger.write(
         "REPORT", "Preparing publication of {} report tables.".format(len(TABLES)), 7)
-    counts = publish_report(report, payload, log=lambda message: logger.write(
-        "REPORT", message, 7))
+    with RUN_STATS.measure("publish report tables"):
+        counts = publish_report(report, payload, log=lambda message: logger.write(
+            "REPORT", message, 7))
     logger.write(
         "COMPLETE",
         "Report published successfully: {} table(s), {} planning case(s), "
@@ -7673,6 +7774,7 @@ def execute_gridlens(app):
     logger.table(
         ("Table", "Rows"),
         [(name, count) for name, count in counts.items() if count])
+    log_run_summary(logger)
     return counts
 
 
@@ -7726,6 +7828,7 @@ def main():
             "{} Recommended action: correct the reported condition, verify the "
             "active study case, and run GridLens again. {}".format(
                 _friendly_exception(exc), NO_REPORT_DATA.format(NO_REPORT_EXIT_CODE)), level="ERROR")
+        log_run_summary(logger)
     finally:
         # The interpreter can outlive the run; the next run starts from the defaults.
         reset_settings()
