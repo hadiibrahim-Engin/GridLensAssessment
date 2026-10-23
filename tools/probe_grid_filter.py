@@ -164,11 +164,25 @@ def report_grids(app):
     if not grids:
         emit(app, "  No ElmNet found in the active project.")
         return
+    summaries = 0
     for key in sorted(grids, key=lambda k: object_name(grids[k][0]).casefold()):
         grid, state = grids[key]
+        if is_summary_grid(grid):
+            summaries += 1
+            continue
         name = object_name(grid)
         selected = grid_in_scope(name)
         emit(app, "  [{}] {:<40} {:<8}".format("IN " if selected else "out", name, state))
+    if summaries:
+        emit(app, "  (+ {} summary grid(s) of study cases: no equipment, not offered by the case manager)".format(summaries))
+
+
+def is_summary_grid(grid):
+    """The "Summary Grid" every study case carries: an ElmNet stored in the IntCase."""
+    try:
+        return class_name(grid.GetParent()) == "IntCase"
+    except Exception:
+        return False
 
 
 def report_examples(app):
@@ -225,11 +239,19 @@ def report_elements(app):
 
 def report_result_series(app):
     section(app, "4. RESULT SERIES THE REPORT WOULD READ")
-    getter = getattr(app, "GetFromStudyCase", None)
-    qds = getter("ComStatsim") if callable(getter) else None
-    result = safe_attr(qds, "results") if qds is not None else None
+    # GetContents, not GetFromStudyCase: the latter creates a ComStatsim when the study case has none.
+    try:
+        found = [item for item in app.GetActiveStudyCase().GetContents("*.ComStatsim") or []
+                 if class_name(item) == "ComStatsim"]
+    except Exception:
+        found = []
+    if not found:
+        emit(app, "  No ComStatsim in the active study case; nothing to inspect.")
+        return
+    result = safe_attr(found[0], "results")
     if result is None:
-        emit(app, "  No ComStatsim.results bound; nothing to inspect.")
+        emit(app, "  ComStatsim.results is not bound to a result object; GridLens would stop with that message.")
+        emit(app, "  Bind the result object of the quasi-dynamic simulation, then run this probe again.")
         return
     emit(app, "  Result object: '{}'".format(object_name(result)))
     try:

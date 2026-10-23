@@ -34,7 +34,7 @@ rules with artificial objects; that is no guarantee for an unknown real project
 
 import sys
 
-PROBE_VERSION = "2.0"
+PROBE_VERSION = "2.1"
 PRIVACY_MODE = "STRICT"
 
 # --- What may be called, checked and printed --------------------------------
@@ -231,15 +231,15 @@ class ReadOnlyApi:
             return ""
         return value if isinstance(value, str) else ""
 
-    def contents(self, obj, pattern):
+    def contents(self, obj, pattern, recursive=False):
         try:
-            found = self.call(obj, "GetContents", pattern)
+            found = self.call(obj, "GetContents", pattern, 1) if recursive else self.call(obj, "GetContents", pattern)
             return list(found or [])
         except (ProbeError, TypeError):
             return []
 
-    def of_class(self, obj, class_name):
-        return [item for item in self.contents(obj, "*." + class_name) if self.class_of(item) == class_name]
+    def of_class(self, obj, class_name, recursive=False):
+        return [item for item in self.contents(obj, "*." + class_name, recursive) if self.class_of(item) == class_name]
 
 
 def flag(value, yes="TRUE", no="FALSE"):
@@ -435,7 +435,8 @@ def check_storage(api, report, state):
     except ProbeError:
         project = None
     for class_name in STORAGE_CLASSES:
-        found = project is not None and bool(api.of_class(project, class_name))
+        # Stored anywhere in the project, so the search is recursive (GetContents(pattern, 1)).
+        found = project is not None and bool(api.of_class(project, class_name, recursive=True))
         # Whether GridLens may create such objects needs a separate, released write test.
         report.add("{} instances".format(class_name), flag(found, "DETECTED", "NOT_DETECTED"))
 
