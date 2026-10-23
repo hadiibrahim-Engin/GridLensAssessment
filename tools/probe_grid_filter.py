@@ -40,6 +40,8 @@ def emit(app, message=""):
 # tests/test_probe_grid_filter.py fails if the two ever behave differently.
 
 GRID_NAME_FILTER = ''  # type a grid name part here to preview what it would select
+# Grids as chosen in the case manager (Settings -> Network scope); they take precedence over GRID_NAME_FILTER.
+MONITORING_GRIDS = ()
 VARIABLES = {'line': ('c:loading', 'm:loading'), 'transformer': ('c:loading', 'm:loading'), 'voltage': ('m:u', 'm:u1')}
 CLASS_CATEGORIES = {'ElmLne': ('line',), 'ElmTr2': ('transformer',), 'ElmTr3': ('transformer',), 'ElmTerm': ('voltage',)}
 
@@ -87,8 +89,14 @@ def element_grid_name(obj):
     return ''
 
 
+def grid_in_scope(grid_name):
+    if MONITORING_GRIDS:
+        return grid_name in MONITORING_GRIDS
+    return not GRID_NAME_FILTER or GRID_NAME_FILTER in grid_name
+
+
 def element_in_scope(obj):
-    return not GRID_NAME_FILTER or GRID_NAME_FILTER in element_grid_name(obj)
+    return grid_in_scope(element_grid_name(obj))
 
 
 def result_category(obj, variable):
@@ -151,7 +159,7 @@ def report_grids(app):
     for key in sorted(grids, key=lambda k: object_name(grids[k][0]).casefold()):
         grid, state = grids[key]
         name = object_name(grid)
-        selected = not GRID_NAME_FILTER or GRID_NAME_FILTER in name
+        selected = grid_in_scope(name)
         emit(app, "  [{}] {:<40} {:<8}".format("IN " if selected else "out", name, state))
 
 
@@ -201,7 +209,7 @@ def report_elements(app):
             element_class, total, " (first {} inspected)".format(len(objects)) if total > len(objects) else "",
             inside, outside, no_grid, disagree))
         for grid, count in sorted(by_grid.items(), key=lambda entry: -entry[1])[:8]:
-            selected = grid != "<no grid>" and (not GRID_NAME_FILTER or GRID_NAME_FILTER in grid)
+            selected = grid != "<no grid>" and grid_in_scope(grid)
             emit(app, "      [{}] {:<40} {:>6}".format("IN " if selected else "out", grid, count))
         for example in disagree_examples:
             emit(app, "      differs: " + example)
@@ -285,6 +293,7 @@ def main():
         return
     emit(app, "=== GridLens grid-filter probe (read-only) ===")
     emit(app, "GRID_NAME_FILTER : {!r}".format(GRID_NAME_FILTER))
+    emit(app, "MONITORING_GRIDS : {!r}".format(MONITORING_GRIDS))
     for step in (report_grids, report_examples, report_elements, report_result_series):
         try:
             step(app)

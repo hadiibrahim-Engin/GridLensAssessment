@@ -26,6 +26,13 @@ What it reports:
    introspection only, nothing is called except reading methods).
 6. Project folders and objects that could hold persistent GridLens results,
    settings and case configurations.
+7. The grids of the model (active and inactive) with their lines,
+   transformers and terminals, and the grids of each contingency's equipment
+   (ComOutage.GetObject, a reading method of the Python reference).
+
+Version 1.1 also reads the sub-results of a time sweep (one child ElmRes per
+study time) and counts the GetValue codes: per the Python reference, code 3
+means "not written because below the recording limit" in a sparse file.
 
 Every finding is one of: VERIFIED, PRESENT BUT UNTESTED, ABSENT, MISSING OR
 INACCESSIBLE, OPEN QUESTION. A method that exists is only "present but
@@ -35,7 +42,7 @@ untested": its existence does not prove that it does what part 3 needs.
 import math
 import time
 
-PROBE_VERSION = "1.0"
+PROBE_VERSION = "1.1"
 MAX_VALUE_LENGTH = 160
 # At most this many items are printed in full per list (contingencies, columns, rows).
 LIST_LIMIT = 25
@@ -67,6 +74,14 @@ READ_METHODS = ("Load", "Release", "GetNumberOfRows", "GetNumberOfColumns", "Get
 WRITE_METHODS = ("Init", "InitialiseWriting", "AddVariable", "Write", "WriteDraw", "Clear", "Flush", "Close",
                  "SetAsDefault", "SetObj", "SetSubElmResKey")
 TIME_COUPLED_CLASSES = ("ElmQdsl",)
+# Equipment classes counted per grid.
+GRID_ELEMENT_CLASSES = ("ElmLne", "ElmTr2", "ElmTr3", "ElmTerm")
+# ComOutage.GetObject(line) is read for at most this many lines.
+MAX_OUTAGE_LINES = 200
+# Recording limits of ComSimoutage that make its results sparse.
+RECORDING_ATTRIBUTES = ("iopt_record", "loadmax", "loadmax_nk", "vlmin", "vlmax", "vmax_step", "phiu_step",
+                        "diffLoadRestr", "diffLoadBase", "maxLoadBase", "diffVoltRestr", "diffVoltBase",
+                        "maxVoltRestr", "maxVoltBase", "minVoltRestr", "minVoltBase", "recTermLoad", "termLoadThres")
 
 VERIFIED, UNTESTED, ABSENT, MISSING, OPEN = ("VERIFIED", "PRESENT BUT UNTESTED", "ABSENT", "MISSING OR INACCESSIBLE",
                                              "OPEN QUESTION")
@@ -374,7 +389,7 @@ def probe_contingencies(app, project, study_case, commands, findings):
                                           "of ComSimoutage must be confirmed from section 1 (children and references)")
 
 
-def describe_result(app, elmres, findings, topic):
+def describe_result(app, elmres, findings, topic, depth=0):
     """Structure of one ElmRes, with reading methods only."""
     emit(app)
     emit(app, "  {} '{}' ({})".format(topic, name_of(elmres), path_of(elmres)))
@@ -402,29 +417,52 @@ def describe_result(app, elmres, findings, topic):
     timeline = []
     empty = 0
     checked = 0
+    codes = {}
     for row in range(min(rows, SAMPLE_ROWS)):
         timeline.append(call(safe(elmres, "GetValue"), row, -1))
         for column in range(min(columns, 40)):
             value = call(safe(elmres, "GetValue"), row, column)
             checked += 1
+            code = value[0] if isinstance(value, (list, tuple)) and len(value) > 1 else None
+            codes[code] = codes.get(code, 0) + 1
             payload = value[1] if isinstance(value, (list, tuple)) and len(value) > 1 else value
             if number(payload) is None:
                 empty += 1
     emit(app, "    first values of the time column (-1): {}".format(render(timeline[:12])))
+    emit(app, "    GetValue codes in the sample (0 ok, 3 below the recording limit): {}".format(
+        ", ".join("{}: {}".format(code, count) for code, count in sorted(codes.items(), key=lambda item: str(item[0])))
+        or "none"))
+    if codes.get(3):
+        findings.add(VERIFIED, topic + " sparse", "'{}': {} of {} sampled cells return code 3 (not written, below the "
+                     "recording limit)".format(name_of(elmres), codes[3], checked))
     findings.add(VERIFIED, topic, "'{}': {} rows x {} columns, {} distinct variables".format(
         name_of(elmres), rows, columns, len(variables)))
     findings.add(VERIFIED if checked else OPEN, topic + " density", "{} of {} sampled cells without a number "
                  "(rows 0..{}, columns 0..{}); empty cells suggest a sparse structure, but only a known contingency x "
                  "time-step count can prove it".format(empty, checked, min(rows, SAMPLE_ROWS) - 1, min(columns, 40) - 1))
+    call(safe(elmres, "Release"))
     subresults = [child for child in contents(elmres) if class_of(child) == "ElmRes"]
-    if subresults:
+    if subresults and depth < 1:
         findings.add(VERIFIED, topic + " sub-results", "{} child ElmRes, e.g. {}".format(
             len(subresults), ", ".join(name_of(child) for child in subresults[:5])))
-    call(safe(elmres, "Release"))
+        for child in subresults[:2]:
+            for name in ("cnttime", "pResElm", "calTp"):
+                value = safe(child, name)
+                if value is not None:
+                    emit(app, "    sub-result {}: {} = {}{}".format(name_of(child), name, render(value),
+                                                                  " ({})".format(epoch_text(value)) if epoch_text(value) else ""))
+            describe_result(app, child, findings, topic + " (one study time)", depth + 1)
 
 
 def probe_results(app, study_case, commands, findings):
     heading(app, "4. Contingency result objects (ElmRes)")
+    for command in commands:
+        limits = ["{}={}".format(name, render(safe(command, name))) for name in RECORDING_ATTRIBUTES
+                  if safe(command, name) is not None]
+        emit(app, "  recording limits of {}: {}".format(name_of(command), ", ".join(limits) or "none readable"))
+        if limits:
+            findings.add(VERIFIED, "recording limits", "{}: {} - values inside these limits are not written, so a "
+                         "missing value is not 'no violation'".format(name_of(command), ", ".join(limits[:6])))
     candidates = {}
     for command in commands:
         for name in attribute_names(command):
@@ -502,6 +540,70 @@ def probe_storage(app, project, study_case, findings):
                                                   "run must be decided from the instances above and tested on a project copy")
 
 
+def grid_of(obj):
+    """Grid name of an element: attribute cpGrid, else the ElmNet in its path."""
+    grid = safe(obj, "cpGrid")
+    if hasattr(grid, "GetClassName"):
+        return name_of(grid)
+    for part in reversed(path_of(obj).split("\\")):
+        if part.endswith(".ElmNet"):
+            return part[:-len(".ElmNet")]
+    return ""
+
+
+def outage_elements(outage):
+    """The interrupted components of a ComOutage, by ComOutage.GetObject(line) until None."""
+    found = []
+    getter = safe(outage, "GetObject")
+    for line in range(MAX_OUTAGE_LINES if callable(getter) else 0):
+        element = call(getter, line)
+        if element is None:
+            break
+        found.append(element)
+    return found
+
+
+def probe_grids(app, project, commands, findings):
+    heading(app, "7. Grids of the model and of the contingencies")
+    grids = {}
+    for grid in call(safe(app, "GetCalcRelevantObjects"), "*.ElmNet") or []:
+        grids[name_of(grid)] = "active"
+    for grid in contents(call(safe(app, "GetProjectFolder"), "netdat") or project, "*.ElmNet", 1):
+        grids.setdefault(name_of(grid), "inactive")
+    counts = {}
+    for class_name in GRID_ELEMENT_CLASSES:
+        for element in call(safe(app, "GetCalcRelevantObjects"), "*." + class_name) or []:
+            key = (grid_of(element) or "(no grid)", class_name)
+            counts[key] = counts.get(key, 0) + 1
+    for name in sorted(set(grids) | {grid for grid, _ in counts}, key=str.casefold):
+        emit(app, "  {:<40} {:<9} {}".format(name, grids.get(name, "-"), ", ".join(
+            "{} x{}".format(class_name, counts[(name, class_name)]) for class_name in GRID_ELEMENT_CLASSES
+            if (name, class_name) in counts) or "no line, transformer or terminal"))
+    findings.add(VERIFIED if grids else MISSING, "grids", "{} grid(s): {}".format(len(grids), ", ".join(
+        "{} ({})".format(name, state) for name, state in sorted(grids.items())[:12])) if grids else "no ElmNet found")
+    for command in commands:
+        outages = [item for item in contents(command, "*.ComOutage") if class_of(item) == "ComOutage"]
+        by_grid, unreadable = {}, []
+        emit(app)
+        emit(app, "  contingencies of {} and the grids of their equipment:".format(name_of(command)))
+        for index, outage in enumerate(outages):
+            elements = outage_elements(outage)
+            if not elements:
+                unreadable.append(name_of(outage))
+            names = sorted({grid_of(element) or "(no grid)" for element in elements})
+            for name in names:
+                by_grid[name] = by_grid.get(name, 0) + 1
+            if index < LIST_LIMIT * 4:
+                emit(app, "    {} (Not analysed: {}): {} | grids: {}".format(
+                    name_of(outage), safe(outage, "outserv", "?"),
+                    ", ".join("{} '{}'".format(class_of(element), name_of(element)) for element in elements[:6]) or "-",
+                    ", ".join(names) or "-"))
+        findings.add(VERIFIED if outages and len(unreadable) < len(outages) else OPEN, "contingency equipment",
+                     "{} of {} contingencies of {} name their equipment through ComOutage.GetObject; per grid: {}".format(
+                         len(outages) - len(unreadable), len(outages), name_of(command),
+                         ", ".join("{} {}".format(name, count) for name, count in sorted(by_grid.items())) or "none"))
+
+
 def probe(app):
     findings = Findings(app)
     heading(app, "GridLens contingency probe {} - read only".format(PROBE_VERSION))
@@ -523,6 +625,7 @@ def probe(app):
         lambda: holder.update(result=probe_results(app, study_case, holder["commands"], findings)),
         lambda: probe_elmres_interface(app, holder.get("result"), study_case, findings),
         lambda: probe_storage(app, project, study_case, findings),
+        lambda: probe_grids(app, project, holder["commands"], findings),
     )
     for section in sections:
         try:
