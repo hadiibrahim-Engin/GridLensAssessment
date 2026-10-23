@@ -1911,6 +1911,56 @@ def compare_case(result, reference, windows, out_of_service_keys=()):
     result['assessment'] = assessment
     return result
 
+# Loading in % below which an outaged branch counts as switched off; above it in REF it carried load.
+OFF_LOADING = 0.5
+OUTAGE_APPLIED, OUTAGE_EFFECT, OUTAGE_NO_EFFECT, OUTAGE_UNCHECKED = 'APPLIED', 'EFFECT SEEN', 'NO EFFECT', 'NOT CHECKABLE'
+
+
+def outage_effects(result, reference, plan):
+    """For every outage of a case: did it take effect in the results? [(outage name, status, reason)].
+
+    APPLIED: inside its window a recorded component carries no load in the
+    case while it does in REF. EFFECT SEEN: its components are not recorded,
+    but the network differs from REF inside the window. NO EFFECT: the case
+    equals REF inside the window - the outage was most likely not applied.
+    NOT CHECKABLE: no REF, no absolute time axis or no result row in the window.
+    """
+    checks = []
+    hours = result.get('hours') or []
+    case_items, ref_items = result.get('item_by_key') or {}, (reference or {}).get('item_by_key') or {}
+    comparable = reference is not None and _same_time_axis(reference, result)
+    for record in plan['members']:
+        window = plan['windows'][record['key']]
+        rows = window_rows(hours, [window]) if result.get('absolute') and window != (None, None) else []
+        if not comparable or not rows:
+            checks.append((record['name'], OUTAGE_UNCHECKED, 'no reference on the same time axis'
+                           if not comparable else 'no result row inside its window'))
+            continue
+        components = set(record.get('component_keys') or ())
+        recorded = [(case_items[key], ref_items[key]) for key in case_items
+                    if key[0] != 'voltage' and key[1] in components and key in ref_items
+                    and 'values' in case_items[key] and 'values' in ref_items[key]]
+        off = [name for case_item, ref_item in recorded
+               if max((abs(case_item['values'][row] or 0.0) for row in rows), default=0.0) <= OFF_LOADING
+               and max((abs(ref_item['values'][row] or 0.0) for row in rows), default=0.0) > OFF_LOADING
+               for name in [case_item['element_name']]]
+        if off:
+            checks.append((record['name'], OUTAGE_APPLIED, 'without load in its window: ' + clip_text(', '.join(off), 120)))
+            continue
+        changed = any(
+            any(case_item['values'][row] != ref_items[key]['values'][row] for row in rows)
+            for key, case_item in case_items.items()
+            if key in ref_items and 'values' in case_item and 'values' in ref_items[key])
+        if recorded and not changed:
+            checks.append((record['name'], OUTAGE_NO_EFFECT, 'its components carry the same load as in REF inside its window'))
+        elif changed:
+            checks.append((record['name'], OUTAGE_EFFECT, 'components not recorded; the network differs from REF inside its window'
+                           if not recorded else 'the network differs from REF inside its window'))
+        else:
+            checks.append((record['name'], OUTAGE_NO_EFFECT, 'nothing differs from REF inside its window'))
+    return checks
+
+
 def release_values(result):
     """Drop the full-resolution arrays of a compared case; statistics and plot points stay."""
     for item in result['item_by_key'].values():
@@ -2347,6 +2397,7 @@ def _model_quality(payload, results, request=None):
     _quality(payload, 'settings', 'Settings', 'INFO' if not snapshot['overrides'] else 'WARNING',
              'Settings {}, classification rules {}: {}. Stored provisionally in the case configuration file.'.format(
                  snapshot['settings_version'], snapshot['classification_version'], overrides_text(snapshot['overrides'])))
+    outage_quality(payload, results)
     n1_quality(payload, results)
 
 QDS_TIME_BASE_TEXT = ('Complete ComStatsim period: every run covers the whole simulated period with the ComStatsim time step; '
@@ -6985,6 +7036,18 @@ def _apply_overrides(guard, plan):
                 raise GridLensError("{} of outage '{}' could not be set for case {}.".format(attribute, record["name"], plan["id"]))
 
 
+def applied_text(command, records, option=PLANNED_OUTAGE_OPTION):
+    """What PowerFactory will apply, read back from the objects: the option and every outage not Ignored."""
+    found, value = _read_setting(command, option)
+    if found and finite_number(value) == 0.0:
+        applied = 'none, the option is off'
+    else:
+        applied = ', '.join(record['name'] for record in records
+                            if finite_number(safe_attr(record['_object'], 'outserv', 1)) == 0.0) or 'none'
+    return "Read back before the calculation: 'Planned outages' [{}] = {}; planned outages applied: {}.".format(
+        option, _format_setting_value(value) if found else 'unreadable', applied)
+
+
 def _active_text(plan, background):
     names = [record["name"] for record in plan["members"]] if plan else []
     text = "active: " + (", ".join(names) or "none")
@@ -7015,6 +7078,7 @@ def _calculate_reference(app, study_case, qds, request, records, original_result
             ", ".join(record["name"] for record in background)))
         with StateGuard() as guard:
             _isolate_outages(guard, {record["key"] for record in background}, records, "the reference")
+            logger.detail(applied_text(qds, records))
             result = _calculate_qds(app, study_case, qds, REFERENCE_CASE_ID, name, original_result, logger,
                                     result_objects, reference_fingerprint(request), announce=False)
         result.update(description="Network state with the fixed planned outages.",
@@ -7057,6 +7121,7 @@ def _calculate_case(app, study_case, qds, plan, request, records, original_resul
         with StateGuard() as guard:
             _isolate_outages(guard, active, records, "case " + plan["id"])
             _apply_overrides(guard, plan)
+            logger.detail(applied_text(qds, records))
             run = _calculate_qds(app, study_case, qds, plan["id"], plan["name"], original_result, logger,
                                  result_objects, plan["fingerprint"], announce=False)
         run.update(info, run_note=note)
@@ -7085,6 +7150,14 @@ def evaluate_case(run, reference, logger):
     try:
         result = evaluate_qds(run, info["description"], plan, logger)
         result["run_note"] = run.get("run_note", "")
+        try:
+            result["outage_checks"] = outage_effects(result, reference, plan)
+        except Exception as exc:
+            result["outage_checks"] = [(record["name"], OUTAGE_UNCHECKED, "check failed: " + _friendly_exception(exc))
+                                       for record in plan["members"]]
+        for name, status, reason in result["outage_checks"]:
+            logger.detail("Outage '{}': {} - {}.".format(name, status, reason),
+                          "WARNING" if status == OUTAGE_NO_EFFECT else "INFO")
         out_of_service = {key for record in plan["members"] for key in record.get("component_keys") or ()}
         started = time.monotonic()
         try:
@@ -7268,6 +7341,7 @@ def run_n1_sweep(command, times, active_keys, records, excluded, label, keep=Non
                 command, N1_IGNORE_ATTRIBUTE, [0.0] * len(times), 'ignored study times of the contingency analysis'):
             raise GridLensError("The ignored study times [{}] of the contingency analysis could not be cleared for "
                                 "{}.".format(N1_IGNORE_ATTRIBUTE, label))
+        applied = applied_text(command, records, N1_PLANNED_OPTION)
         started = time.monotonic()
         try:
             code = command.Execute()
@@ -7289,7 +7363,7 @@ def run_n1_sweep(command, times, active_keys, records, excluded, label, keep=Non
         else:
             with RUN_STATS.measure("read n-1 results"):
                 found = read_n1_results(command)
-    return dict(found, written_times=list(times))
+    return dict(found, written_times=list(times), applied=applied)
 
 
 def keep_copy(study_case, obj, name, mark):
@@ -7797,6 +7871,9 @@ def calculate_n1(app, study_case, qds, request, records, ready, logger, study_ti
                 plan['id'], "; ".join(clock_errors)))
         if entry['status'] == 'CALCULATED':
             entry['elements_of'] = elements_of
+            for kind, sweep in ((N1_REFERENCE, entry['reference']), (N1_PRIME, entry['scenario'])):
+                if sweep and sweep.get('applied'):
+                    logger.detail("{}: {}".format(kind, sweep['applied']))
             logger.detail("Calculated at {} study time(s) in {:.1f}s.".format(entry['times'], time.monotonic() - started))
         else:
             logger.detail("n-1 not evaluated: {}".format(entry['reason']), "WARNING")
@@ -7936,6 +8013,21 @@ def kept_runs(study_case, stamp, request, ready, logger):
                                   'scenario': {'kept': scenario, 'recording_limits': recording_limits_of(scenario)}
                                   if prime else None}
     return runs, n1
+
+
+def outage_quality(payload, results):
+    """One Model Quality row per case: did each of its planned outages take effect in the results?"""
+    for result in results:
+        checks = result.get('outage_checks')
+        if not checks:
+            continue
+        doubtful = [(name, status) for name, status, _ in checks if status in (OUTAGE_NO_EFFECT, OUTAGE_UNCHECKED)]
+        counts = ', '.join('{} {}'.format(sum(1 for _, found, _ in checks if found == status), status)
+                           for status in (OUTAGE_APPLIED, OUTAGE_EFFECT, OUTAGE_NO_EFFECT, OUTAGE_UNCHECKED)
+                           if any(found == status for _, found, _ in checks))
+        detail = '; '.join('{}: {}'.format(clip_text(name, 40), status) for name, status in doubtful[:3])
+        _quality(payload, 'outages_' + result['id'], 'Outages applied ' + result['id'],
+                 'WARNING' if doubtful else 'PASS', counts + ('. ' + detail + '.' if detail else '.'), result['id'])
 
 
 def n1_quality(payload, results):
@@ -8092,7 +8184,12 @@ def execute_gridlens(app):
                 logger.write(
                     "CALCULATION",
                     "No planning case can be calculated; the case runs were skipped.", 4, "WARNING")
-            if ready and N1_REFERENCE in (request.get("assessments") or ()):
+            if N1_REFERENCE not in (request.get("assessments") or ()):
+                logger.write("CALCULATION", "n-1 is not calculated: it is not ticked in the case manager "
+                             "(Assessments: n-1, (n-1)').", 4)
+            elif not ready:
+                logger.write("CALCULATION", "n-1 is not calculated: no planning case can be calculated.", 4, "WARNING")
+            else:
                 n1_runs = calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state,
                                        result_objects)
     finally:

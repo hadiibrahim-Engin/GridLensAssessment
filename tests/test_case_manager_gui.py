@@ -89,9 +89,10 @@ def opened(monkeypatch, tmp_path):
     seen = {}
 
     def answer(result):
-        def run_case_manager(records, config, period, config_path, user="", qds_text="", qds_info=None):
+        def run_case_manager(records, config, period, config_path, user="", qds_text="", qds_info=None, grids=None,
+                             contingencies=None):
             seen.update(records=records, config=config, period=period, config_path=config_path, qds_text=qds_text,
-                        qds_info=qds_info)
+                        qds_info=qds_info, grids=grids, contingencies=contingencies)
             return result(records, config) if callable(result) else result
         monkeypatch.setattr(gl, "run_case_manager", run_case_manager)
     return gl, seen, answer

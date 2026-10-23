@@ -62,26 +62,45 @@ line and the action bar stay visible on both tabs:
     per planned outage* (creates at most five), and for the selected case
     *Run*. Every case contains only the outages assigned
     directly to it. Copying, editing or deleting a case leaves the others unchanged.
-  - **Calculation** (below, left): *n-0 - reference QDS*, *n-1 - reference
-    contingency analysis* and *(n-1)' - contingency analysis with planned-outage
-    scenarios*. n-1 and (n-1)' are visible but **disabled** until the
-    PowerFactory contingency interface is verified (part 3); their hover text
-    says so. The QDS period of the active ComStatsim and *Show calculation
+  - **Calculation** (below, left): *n-1 - reference contingency analysis* and
+    *(n-1)' - contingency analysis with planned-outage scenarios*. n-0 (the QDS
+    of REF and every case) is always calculated and has no control; (n-1)'
+    needs n-1 (ticking it ticks n-1). *Results*: *Calculate now*, or
+    *Re-evaluate the kept run of <date time>* – then nothing is calculated and
+    the kept result objects of that run are assessed again with the current
+    settings; a case changed since then is NOT EVALUATED. The choice is not
+    saved with the cases. The QDS period of the active ComStatsim and *Show calculation
     preview* (collapsible, see below).
   - **Problems and warnings** (below, right): everything that stops or limits
     the calculation, including invalid settings. The tab label shows the
     number, e.g. *Case Manager (1)*.
 - **Settings** – an action bar (*Restore defaults*, *Apply settings*, *Save
-  settings*, state of the settings) and five pages:
+  settings*, state of the settings) and six pages:
+  - *Network scope*: two lists with **every grid of the model** (inactive ones
+    labelled; the summary grid of a study case is not offered). *Assessed
+    equipment*: only lines, transformers and terminals in
+    the selected grids are assessed (QDS and n-1); none selected = every
+    grid; *Select all grids*, *Clear selection*. *Contingencies*: *Same grids as
+    the assessed equipment* or *Own selection*; below, the preview "x of y
+    contingencies … in scope"; the n-1 run sets the contingencies outside to
+    *Not analysed* for the run and restores them.
+    A selection takes effect at once.
   - *Limits*: thermal limits (warning thresholds and n-0 limits, lines and
     transformers separately; limit handling for n-1 and (n-1)') and voltage
-    limits (three kV bands and 0.95–1.05 p.u. for any other nominal voltage,
-    marked as GridLens proposal; post-fault voltage limits read only).
+    limits (one band in p.u. of the nominal voltage for every voltage level,
+    default 0.95–1.05 p.u., marked as GridLens proposal; the de-energised
+    threshold 0.1 p.u.; post-fault voltage limits read only).
+  - *Report and run*: appendix thresholds (1 %-point, 0.005 p.u.), rows of the
+    Top-N lists (10), points per time plot (200), the reference case REF
+    (on/off), planning cases at most (5, up to 20) and n-1 study times per case
+    at most (2000). The case limit acts at once in the Case Manager tab.
   - *Classification*: n-0 change tolerances and the n-1 / (n-1)'
     classification parameters (rules version 1.0).
   - *Contingency analysis*: contingency set, categories, monitored scope,
     AC/DC, islanding, unsupplied load, load shedding, post-fault phases,
     remedial actions – category B, **read only** (`not verified yet`).
+    Without a contingency analysis in the study case, GridLens defines one for
+    n-1 itself (see *Calculation options*).
   - *QDS time base*: start, end, time step and time definition of the active
     ComStatsim, read only.
   - *Fixed background & rules*: the former tab of that name, unchanged: the
@@ -102,7 +121,7 @@ calculates; read only until verified).
 
 Each entry is checked while it is typed: finite number, positive limits,
 non-negative tolerances, a value from the list for the n-1 limit handling. On
-*Apply* also minimum < maximum for every voltage band and warning ≤ limit. An
+*Apply* also de-energised threshold < minimum < maximum voltage and warning ≤ limit. An
 invalid field turns red with its message, the tab reads *Settings (!)* and
 *Start calculation* and *Save* refuse with the list of problems. *Start
 calculation* and *Save* apply edited values first. *Restore defaults* removes
@@ -245,13 +264,21 @@ is drawn as a short light band, so far-apart outages stay readable
 
 - **n-0 – reference QDS**: the base state without planned outages and without
   additional contingencies, with the ComStatsim load and infeed profiles. It is
-  the only assessment that can be chosen today; the existing reference and
-  case QDS runs stay as they are.
+  always calculated: the report is built on it.
 - **n-1 – reference contingency analysis** and **(n-1)' – contingency analysis
-  with planned-outage scenarios**: shown but disabled. The hover text says
-  that the native PowerFactory contingency analysis is enabled once its
-  interface is verified. Nothing of n-1 is calculated or reported; a
-  configuration that asks for it is refused with that reason.
+  with planned-outage scenarios**: calculated with the contingency analysis
+  (ComSimoutage) of the active study case, at the QDS time steps inside the
+  outage windows of each case (GridLens writes them into `studyTime` for the
+  run). n-1 runs with the fixed outages only, (n-1)' with the outages of the
+  case; every result of (n-1)' is classified against n-1 at the same study time
+  and contingency. Without a contingency analysis in the active study case
+  (e.g. the QDS study case) GridLens creates `GridLens_<stamp>_N1` there, with
+  one contingency per line/branch, transformer, reactor, compensation and FACTS
+  element of the activated contingency grids – no generators, loads or busbars –
+  and keeps it after the run. A contingency whose equipment the case already switches
+  off is NOT_APPLICABLE. Until the report has n-1 chapters (part 4) the result
+  appears in the log and as row *n-1 <case>* on the Model Quality Assurance
+  page.
 - **QDS period**: taken from the active ComStatsim and shown only (also on
   *Settings → QDS time base*). There is no time optimisation: no shortened
   window, no segmentation, no extra time step, no changed time step; every run
@@ -353,6 +380,6 @@ It updates immediately when Run flags or case settings change. Each ready case
 lists its name, description, planned outages and effective time windows, n-0
 assessment, full QDS period and shared background. The common settings name the
 reference, background outage windows, planning rules and the settings
-overrides; n-1 and (n-1)' are named as not available. Identical cases show
+overrides and the chosen assessments. Identical cases show
 which result is planned for reuse. Blocked cases show their reason; cases with
 the Run flag off are listed separately as excluded. Previewing starts no calculation.

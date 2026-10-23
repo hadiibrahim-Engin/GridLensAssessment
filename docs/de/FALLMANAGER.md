@@ -66,25 +66,44 @@ Statuszeile und Aktionsleiste bleiben auf beiden Reitern sichtbar:
     Freischaltungen. Kopieren, Ändern oder Löschen verändert die anderen Fälle nicht.
   - **Calculation** (unten links): *n-0 - reference QDS*, *n-1 - reference
     contingency analysis* und *(n-1)' - contingency analysis with
-    planned-outage scenarios*. n-1 und (n-1)' sind sichtbar, aber
-    **deaktiviert**, bis die PowerFactory-Contingency-Schnittstelle verifiziert
-    ist (Teil 3); ihr Hover-Text sagt das. Dazu der QDS-Zeitraum des aktiven
+    planned-outage scenarios*. n-0 (die QDS von REF und jedem Fall) wird immer
+    gerechnet und hat kein Bedienelement; (n-1)' braucht n-1 (ein Haken bei
+    (n-1)' setzt n-1). *Results*: *Calculate now* oder *Re-evaluate the kept
+    run of <Datum Zeit>* – dann wird nichts gerechnet, und die behaltenen
+    Ergebnisobjekte dieses Laufs werden mit den aktuellen Settings neu bewertet;
+    ein seitdem geänderter Fall ist NOT EVALUATED. Die Auswahl wird nicht mit den
+    Fällen gespeichert. Dazu der QDS-Zeitraum des aktiven
     ComStatsim und *Show calculation preview* (einklappbar, siehe unten).
   - **Problems and warnings** (unten rechts): alles, was die Berechnung
     verhindert oder einschränkt, auch ungültige Settings. Der Reiter zeigt die
     Zahl, z. B. *Case Manager (1)*.
 - **Settings** – eine Leiste (*Restore defaults*, *Apply settings*, *Save
-  settings*, Zustand der Settings) und fünf Seiten:
+  settings*, Zustand der Settings) und sechs Seiten:
+  - *Network scope*: zwei Listen mit **jedem Grid des Modells** (inaktive
+    gekennzeichnet; das Summary Grid eines Study Case wird nicht angeboten).
+    *Assessed equipment*: nur Leitungen, Transformatoren und
+    Knoten in den gewählten Grids werden bewertet (QDS und n-1); keine
+    Auswahl = jedes Grid; *Select all grids*, *Clear selection*. *Contingencies*:
+    *Same grids as the assessed equipment* oder *Own selection*; darunter die
+    Vorschau „x of y contingencies … in scope“; der n-1-Lauf setzt die Fehlerfälle
+    außerhalb für den Lauf auf *Not analysed* und setzt sie zurück. Eine Auswahl
+    wirkt sofort.
   - *Limits*: thermische Grenzwerte (Warnschwellen und n-0-Grenzen, Leitungen
     und Transformatoren getrennt; Grenzwertbehandlung für n-1 und (n-1)') und
-    Spannungsgrenzen (drei kV-Bänder und 0,95–1,05 p.u. für jede andere
-    Nennspannung, als GridLens-Vorschlag gekennzeichnet; Post-Fault-Spannungs­grenzen
-    schreibgeschützt).
+    Spannungsgrenzen (ein Band in p.u. der Nennspannung für jede Spannungsebene,
+    Standard 0,95–1,05 p.u., als GridLens-Vorschlag gekennzeichnet; die
+    Spannungslos-Schwelle 0,1 p.u.; Post-Fault-Spannungsgrenzen schreibgeschützt).
+  - *Report and run*: Anhang-Schwellen (1 %-Punkt, 0,005 p.u.), Zeilen der
+    Top-N-Listen (10), Punkte je Zeitplot (200), der Referenzfall REF (an/aus),
+    höchstens Planungsfälle (5, bis 20) und höchstens n-1-Zeitpunkte je Fall
+    (2000). Die Fall-Grenze wirkt sofort im Reiter Case Manager.
   - *Classification*: n-0-Änderungstoleranzen und die Parameter der
     n-1-/(n-1)'-Klassifizierung (Regelversion 1.0).
   - *Contingency analysis*: Contingency-Set, Kategorien, überwachter Bereich,
     AC/DC, Inselbildung, nicht versorgte Last, Lastabwurf, Post-Fault-Phasen,
     Remedial Actions – Kategorie B, **schreibgeschützt** (`not verified yet`).
+    Ohne Contingency Analysis im Study Case legt GridLens für n-1 selbst eine
+    an (siehe Berechnungsoptionen).
   - *QDS time base*: Beginn, Ende, Zeitschritt und Zeitdefinition des aktiven
     ComStatsim, schreibgeschützt.
   - *Fixed background & rules*: der bisherige Reiter dieses Namens, unverändert:
@@ -105,8 +124,8 @@ oder `edited, not applied`. *Category* ist `A · evaluation` (deutet Ergebnisse,
 
 Jede Eingabe wird beim Tippen geprüft: endliche Zahl, positive Grenzen,
 nicht negative Toleranzen, ein Wert aus der Liste für die n-1-Grenzwertbehandlung.
-Bei *Apply* zusätzlich Minimum < Maximum je Spannungsband und Warnschwelle ≤
-Grenze. Ein ungültiges Feld wird rot mit seiner Meldung, der Reiter heißt
+Bei *Apply* zusätzlich Spannungslos-Schwelle < Minimum < Maximum der Spannung und
+Warnschwelle ≤ Grenze. Ein ungültiges Feld wird rot mit seiner Meldung, der Reiter heißt
 *Settings (!)*, und *Start calculation* sowie *Save* lehnen mit der Liste der
 Probleme ab. *Start calculation* und *Save* übernehmen geänderte Werte zuerst.
 *Restore defaults* entfernt jeden Override.
@@ -252,13 +271,21 @@ damit weit auseinanderliegende FS lesbar bleiben (`timeline_scale`).
 
 - **n-0 – Referenz-QDS**: der Grundzustand ohne geplante Freischaltungen und
   ohne zusätzliche Fehlerfälle, mit den Last- und Einspeiseprofilen des
-  ComStatsim. Derzeit die einzige wählbare Bewertung; Referenz- und Fall-QDS
-  bleiben wie bisher.
+  ComStatsim. Wird immer gerechnet: Der Bericht baut darauf auf.
 - **n-1 – Referenz-Ausfallanalyse** und **(n-1)' – Ausfallanalyse mit
-  FS-Szenarien**: sichtbar, aber deaktiviert. Der Hover-Text sagt, dass die
-  native PowerFactory Contingency Analysis nach Abschluss der
-  Schnittstellenverifikation aktiviert wird. Von n-1 wird nichts gerechnet oder
-  berichtet; eine Konfiguration, die es verlangt, wird mit diesem Grund abgelehnt.
+  FS-Szenarien**: gerechnet mit der Contingency Analysis (ComSimoutage) des
+  aktiven Study Case, zu den QDS-Zeitschritten in den FS-Fenstern jedes Falls
+  (GridLens schreibt sie für den Lauf in `studyTime`). n-1 rechnet nur mit den
+  festen FS, (n-1)' mit den FS des Falls; jedes Ergebnis von (n-1)' wird gegen
+  n-1 zum selben Zeitpunkt und Fehlerfall eingestuft. Ohne Contingency Analysis
+  im aktiven Study Case (z. B. dem QDS-Study-Case) legt GridLens dort
+  `GridLens_<Stempel>_N1` an, mit je einem Fehlerfall pro Leitung/Zweig,
+  Transformator, Drossel, Kompensationsanlage und FACTS-Element der aktivierten
+  Contingency-Grids – keine Erzeuger, Lasten oder Sammelschienen – und behält sie
+  nach dem Lauf. Ein Fehlerfall, dessen
+  Betriebsmittel der Fall schon ausschaltet, ist NOT_APPLICABLE. Bis der Bericht
+  n-1-Kapitel hat (Teil 4), steht das Ergebnis im Log und als Zeile *n-1 <Fall>*
+  auf der Seite Model Quality Assurance.
 - **QDS-Zeitraum**: aus dem aktiven ComStatsim, nur angezeigt (auch unter
   *Settings → QDS time base*). Es gibt keine Zeitoptimierung: kein verkürztes
   Fenster, keine Segmentierung, keine zusätzlichen Zeitpunkte, kein geänderter

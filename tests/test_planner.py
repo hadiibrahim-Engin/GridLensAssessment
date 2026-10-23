@@ -595,8 +595,17 @@ class _LongElmRes:
     def GetUnit(self, column):
         return self.units[column]
 
-    def GetColumnValues(self, column):
-        return self.columns[column]
+    def GetColumnValues(self, vector, column):
+        vector.V = list(self.columns[column])
+        return 0
+
+
+@pytest.fixture(autouse=True)
+def _column_buffer(monkeypatch):
+    class IntVec:
+        def GetClassName(self):
+            return "IntVec"
+    monkeypatch.setattr(gl, "COLUMN_BUFFER", IntVec())
 
 
 def gl_obj(name, kind):
@@ -817,12 +826,15 @@ def test_timeline_scale_is_monotonic_and_needs_a_window():
     assert gl.timeline_scale([(None, None)], 500) == (None, [])
 
 
-def test_gui_14_and_16_n1_is_refused_and_no_time_optimisation_remains(editor):
+def test_gui_14_and_16_n1_rules_and_no_time_optimisation_remains(editor):
     edit, _ = editor
 
     assert edit.set_assessments(False, False) == "Select at least one assessment."
-    assert "not available" in edit.set_assessments(True, True)
-    assert "not available" in edit.set_assessments(True, False, True)
+    assert "always calculated" in edit.set_assessments(False, True)
+    assert "needs n-1" in edit.set_assessments(True, False, True)
+    assert edit.set_assessments(True, True, True) is None
+    assert edit.config["assessments"] == ["n-0", "n-1", "(n-1)'"]
+    assert not gl.validate_case_config(edit.config)
     assert edit.set_assessments(True, False) is None
     assert edit.config["assessments"] == ["n-0"] and "mode" not in edit.config
     optimised = gl.CaseEditor(edit.records, dict(edit.config, mode="optimized"), PERIOD)
@@ -1144,7 +1156,8 @@ def test_gui_the_editor_never_changes_the_configuration_it_was_given(editor):
 @pytest.mark.parametrize("change, message", [
     (lambda data: data.update(assessments=[]), "assessments must name"),
     (lambda data: data.update(assessments=["n-2"]), "assessments must name"),
-    (lambda data: data.update(assessments=["n-0", "n-1"]), "n-1 contingency analysis is not part"),
+    (lambda data: data.update(assessments=["n-1"]), "n-0 quasi-dynamic assessment is always calculated"),
+    (lambda data: data.update(assessments=["n-0", "(n-1)'"]), "needs n-1"),
     (lambda data: data["cases"].append({"id": "E", "outages": [], "enabled": "yes"}), "enabled must be"),
 ])
 def test_assessments_and_enabled_flags_are_validated(change, message):

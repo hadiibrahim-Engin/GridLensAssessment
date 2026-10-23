@@ -382,7 +382,7 @@ WORSENED > EXCEEDED > DE-ENERGISED > PRE-EXISTING > IMPROVED > RESOLVED > OK).
 Betriebsmittel, die der Fall selbst ausschaltet, sind OUT OF SERVICE, nie
 RESOLVED. Werte genau auf der Grenze sind keine Verletzung. Auslastungsgrenze
 standardmäßig 100 % (die Bemessung der Elemente steckt bereits in
-`c:loading`), Spannungsbänder je Nennspannung wie in 7.x; beides sind seit
+`c:loading`), ein Spannungsband in p.u. der Nennspannung für jede Spannungsebene; beides sind seit
 Teil 2 Einstellungen (7.5).
 
 Urteil je Fall, die erste zutreffende Zeile gilt:
@@ -404,9 +404,79 @@ Fehlende oder fehlerhafte Ergebnisse ergeben nie NO LIMIT EXCEEDED.
 Jeder Grenzwert und jede Toleranz der Bewertung ist eine **Einstellung**
 (`SETTINGS` in `gridlens_report.py`, Version `SETTINGS_VERSION = '1.0'`).
 Standards sind die Werte des Codes: Warnschwelle 80 %, n-0-Auslastungsgrenze
-100 % (Leitungen und Transformatoren getrennt), die kV-Bänder aus
-`VOLTAGE_LIMITS_KV`, 0,95–1,05 p.u. für jede andere Nennspannung (als
-GridLens-Vorschlag gekennzeichnet), Änderungstoleranzen 0,1 %-Punkte / 0,001 p.u.
+100 % (Leitungen und Transformatoren getrennt), ein Spannungsband von
+0,95–1,05 p.u. für jede Spannungsebene (als GridLens-Vorschlag gekennzeichnet;
+die kV-Bänder je Spannungsebene sind seit dem 23. Oktober 2026 ersetzt),
+Änderungstoleranzen 0,1 %-Punkte / 0,001 p.u. Die früheren Skriptkonstanten
+TOP_N, MAX_PLOT_POINTS, ENERGIZED_MIN_PU, die Anhang-Schwellen,
+RUN_REFERENCE_CASE, MAX_CASES und MAX_N1_TIMES sind die Standards gleichnamiger
+Settings (`setting_value()`). CASE_SLOTS, die Versionen und die Startoptionen
+bleiben Konstanten: Davon hängen MRT oder Start ab.
+
+Rechnung und Veröffentlichung sind getrennt: Ein ComPython, das nicht unter
+einem IntReport liegt, rechnet, baut und prüft alle Berichtstabellen und
+protokolliert die Ergebnisse, veröffentlicht aber nichts (eigenständiger Lauf,
+Exit-Code 0).
+
+Ein Lauf hat **zwei Phasen**. Phase 1 (Log-Schritt 4) rechnet nur: REF und
+jeden Fall in sein eigenes, behaltenes `GridLens_<Stempel>_<Fall>`, und jeden
+n-1-Durchlauf in eine behaltene Kopie seines Ergebnisobjekts (`…_<Fall>_N1`,
+`…_<Fall>_N1P`; verweigert PowerFactory die Kopie, wird dieser Durchlauf sofort
+gelesen). Jedes behaltene Objekt nennt in seiner Beschreibung seinen Fall, den
+Fingerabdruck des Falls und bei n-1 die Aufzeichnungsgrenzen. Schritt 5 setzt
+den PowerFactory-Zustand zurück; Phase 2 (Schritt 6) liest, vergleicht und
+klassifiziert die behaltenen Objekte; Schritt 7 baut und veröffentlicht den
+Bericht. Das Speicherbudget stoppt Phase 2, bevor der nächste Fall gelesen
+wird; alles Gerechnete bleibt erhalten.
+
+**Neu auswerten ohne Rechnung:** Die Auswahl *Results* im Fallmanager listet
+die behaltenen Läufe des Study Case (`kept_stamps`). Wer einen wählt,
+überspringt Phase 1 ganz – nichts wird gerechnet, PowerFactory nicht verändert –
+und Phase 2 liest die Objekte dieses Laufs mit den aktuellen Settings
+(`kept_runs`). Ein Fall, dessen FS oder Fenster sich seitdem geändert haben
+(anderer Fingerabdruck) oder dessen Objekt fehlt, ist NOT EVALUATED mit Grund;
+ein geänderter REF stoppt den Lauf.
+
+**Werden die Außerbetriebnahmen wirklich angewendet?** Drei Prüfungen machen
+das in Log und Bericht sichtbar:
+
+- Ob n-1 läuft, steht immer im Log: „n-1 is not calculated: it is not ticked
+  in the case manager“, „… no planning case can be calculated“ oder die
+  verwendete Contingency Analysis.
+- Vor jedem QDS-Lauf mit Außerbetriebnahmen und vor jedem n-1-Sweep liest
+  GridLens zurück, was PowerFactory anwenden wird (`applied_text`): die Option
+  (`iopt_maint` bzw. `isPlannedOutages`) und jede Außerbetriebnahme mit
+  „Ignored“ = 0; steht die Option auf 0, meldet die Zeile, dass keine gilt.
+- In Phase 2 wird jede Außerbetriebnahme eines Falls in ihrem eigenen Fenster
+  gegen REF geprüft (`outage_effects`): **APPLIED** (ein aufgezeichnetes
+  Betriebsmittel ist im Fall lastfrei, in REF nicht), **EFFECT SEEN**
+  (Betriebsmittel nicht aufgezeichnet, das Netz weicht aber von REF ab),
+  **NO EFFECT** (der Fall gleicht REF im Fenster; vermutlich nicht angewendet,
+  Warnung im Log), **NOT CHECKABLE** (kein REF auf derselben Zeitachse oder
+  keine Ergebniszeile im Fenster). Die Model-Quality-Seite trägt je Fall eine
+  Zeile `outages_<case>`.
+
+Jeder Lauf endet mit einer **Laufübersicht** (`RunStats`, `log_run_summary`),
+auch ein fehlgeschlagener: Zeit und Aufrufe je Dienst (FS lesen, Grids und
+Fehlerfälle lesen, der Fallmanager mit Fensteraufbau und Aktualisierungen, jede
+QDS und Contingency Analysis in PowerFactory, Ergebnisse lesen, Vergleich und
+Klassifizierung, Zurücksetzen, Berichtstabellen bauen und veröffentlichen) und
+die Zahl der Berechnungen (QDS-Läufe und Zeitschritte, wiederverwendete Fälle,
+gelesene Reihen und Werte, angelegte und gerechnete Contingency Analyses,
+n-1-Zeitpunkte, Lastflüsse je Fehlerfall, eingestufte n-1-Ergebnisse,
+Berichtszeilen).
+
+Ergebnisse werden spaltenweise gelesen: `ElmRes.GetColumnValues(IntVec, Spalte)`
+füllt einen temporären IntVec `GridLens_column_buffer`, der im laufenden
+ComPython für den Lauf angelegt und beim Zurücksetzen gelöscht wird. Ohne ihn
+wäre jeder Wert ein eigener `GetValue`-Aufruf; die Laufübersicht zählt beide
+Lesearten, ein langsamer Lauf zeigt also sofort, ob das Blocklesen gegriffen
+hat. Eine Spannungsspalte eines n-1-Unterergebnisses mit einer 0 wird
+zellweise gelesen, weil nicht verifiziert ist, was das Blocklesen in eine Zelle
+innerhalb der Aufzeichnungsgrenzen (Code 3) schreibt. Geplante Freischaltungen
+werden je FS in einem Durchgang gelesen, das ganze Projekt wird nur durchsucht,
+wenn der Outage-Ordner keine enthält, und ohne Grid-Auswahl wird je
+Ergebnisspalte kein Grid abgefragt.
 
 | Kategorie | Bedeutung | Beispiele | Änderbar |
 |---|---|---|---|
@@ -611,11 +681,14 @@ freizuschalten. Kürzere QDS-Fenster sind entfernt und nicht vorgesehen.
 Teil 1 (freigegeben am 23. Oktober 2026): `tools/probe_contingency.py`, streng
 lesend (kein `Execute`, `CreateObject`, `SetAttribute`, kein `GetFromStudyCase`,
 das einen fehlenden Befehl anlegt; `tests/test_probe_contingency.py` prüft den
-Quelltext). Es meldet ComSimoutage, ComStatsim, Contingency-Definitionen,
-Contingency-`ElmRes`, die `ElmRes`-Schnittstelle und Ablage-Kandidaten als
-VERIFIED, PRESENT BUT UNTESTED, ABSENT, MISSING OR INACCESSIBLE oder OPEN
-QUESTION. `tools/test_contingency.py` bereitet eine sehr kleine Testrechnung auf
-einer ausdrücklich benannten Projektkopie vor; es ist abgeschaltet
+Quelltext). Probe 1.0 meldete ComSimoutage, ComStatsim, Contingency-Definitionen,
+Contingency-`ElmRes`, die `ElmRes`-Schnittstelle und Ablage-Kandidaten mit
+Namen und Werten. Seit dem 23. Oktober 2026 läuft Probe 2.0 im **strikten
+Privacy-Modus**: nur feste Labels und Status-Tokens, kein Name, Pfad, Wert,
+Zeitpunkt oder Zähler, jeder PowerFactory-Aufruf über ein lesendes Gateway
+(siehe Spezifikation, Abschnitt 2.1). Ihre Ausgabe darf weitergegeben werden;
+die übrigen Werkzeuge sind nur lokal. `tools/test_contingency.py` bereitet eine
+sehr kleine Testrechnung auf einer ausdrücklich benannten Projektkopie vor; es ist abgeschaltet
 (`ENABLED = False`), fragt vor jedem Schreiben, stellt wieder her und prüft – und
 wird gesondert freigegeben.
 
@@ -628,7 +701,8 @@ deaktiviert.
 | implementiert und lokal getestet (Unit-Tests) | Settings-Modell, Prüfung, Snapshot, `classify_comparison`, Entfernen der Zeitoptimierung, n-0 mit Settings (Regression mit Standards) |
 | nur mit Mock-Objekten oder lokalem Tk getestet | Fallmanager mit zwei Reitern, Settings-Reiter, Tooltips (Tk 8.6 unter macOS); die Probe gegen nachgebildete PowerFactory-Objekte |
 | braucht einen echten PowerFactory-2026-Test | der Probe-Lauf selbst; Tk in PowerFactory; der n-0-Lauf mit Settings-Overrides; die Berichtszeile *Settings* im gerenderten PDF |
-| bis Teil 3 bewusst deaktiviert | n-1, (n-1)', Parameter der Kategorie B, Post-Fault-Spannungsgrenzen, native Ablage der Settings und von `GL_<Szenario>_CLASSIFICATION` |
+| Teil 3 (n-1-Lauf), mit Mock-Objekten getestet | n-1 und (n-1)' über `run_n1` / `run_n1_case` / `run_n1_sweep`, Zeitpunkte auf dem QDS-Raster in den Fenstern des Falls, Contingency-Grid-Filter, `compare_n1`, Zeilen *n-1 <Fall>* auf der QA-Seite (`tests/test_n1_core.py`); braucht einen echten PowerFactory-Lauf |
+| weiterhin nur gelesen | Parameter der Kategorie B außer den Contingency-Grids, Post-Fault-Spannungsgrenzen, native Ablage der Settings und von `GL_<Szenario>_CLASSIFICATION`, n-1-Berichtskapitel (Teil 4) |
 
 Voraussetzungen für Teil 3 (jede beantwortet durch die Ausgabe der Probe oder
 einen freigegebenen Lauf von `tools/test_contingency.py`):

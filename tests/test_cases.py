@@ -378,3 +378,71 @@ def test_report_names_the_settings_and_the_rules_version(default_settings_afterw
     assert "classification rules 1.0" in quality["settings"]["message"]
     assert "GridLens defaults" in quality["settings"]["message"]
     assert "provisionally" in quality["settings"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Did each outage take effect?
+# ---------------------------------------------------------------------------
+LINE_KEY = "Project\\ElmLne\\L-220 Nordring.ElmLne"
+
+
+def _effect_result(case_id, values=None):
+    """All lines of LINES; `values` replaces whole series by element name."""
+    series = [_item("line", name, (values or {}).get(name, vals)) for name, vals in LINES.items()]
+    return gl.case_result({"id": case_id, "name": case_id, "hours": HOURS, "absolute": True}, series, LABELS, TIMES, "h")
+
+
+def _effect_plan(component_keys):
+    record = _record(0, "Outage A", rows=(1, 3), component_keys=component_keys)
+    return _request([record])["cases"][0]
+
+
+def test_an_outaged_line_without_load_in_its_window_is_applied():
+    plan = _effect_plan([LINE_KEY])
+    reference = _effect_result("REF")
+    case = _effect_result("OUT01", {"L-220 Nordring": [76, 0, 0, 82, 88, 84], "L-380 Rhein": [71, 90, 91, 75, 78, 77]})
+    [(name, status, reason)] = gl.outage_effects(case, reference, plan)
+    assert (name, status) == ("Outage A", gl.OUTAGE_APPLIED)
+    assert "L-220 Nordring" in reason
+
+
+def test_an_unrecorded_component_counts_when_the_network_differs_in_the_window():
+    plan = _effect_plan(["Project\\ElmCoup\\Switch 7.ElmCoup"])
+    case = _effect_result("OUT01", {"L-380 Rhein": [71, 90, 91, 75, 78, 77]})
+    [(_, status, _)] = gl.outage_effects(case, _effect_result("REF"), plan)
+    assert status == gl.OUTAGE_EFFECT
+
+
+def test_a_case_equal_to_ref_in_the_window_shows_no_effect():
+    plan = _effect_plan([LINE_KEY])
+    # A difference outside the window does not count.
+    case = _effect_result("OUT01", {"L-380 Rhein": [71, 74, 76, 99, 78, 77]})
+    [(_, status, _)] = gl.outage_effects(case, _effect_result("REF"), plan)
+    assert status == gl.OUTAGE_NO_EFFECT
+
+
+def test_the_effect_is_not_checkable_without_reference_or_window_rows():
+    plan = _effect_plan([LINE_KEY])
+    assert gl.outage_effects(_effect_result("OUT01"), None, plan)[0][1] == gl.OUTAGE_UNCHECKED
+    late = _request([_record(0, "Outage A", rows=(1, 3), component_keys=[LINE_KEY])])["cases"][0]
+    late["windows"] = {key: (BASE + 10 * 3600.0, BASE + 12 * 3600.0) for key in late["windows"]}
+    assert gl.outage_effects(_effect_result("OUT01"), _effect_result("REF"), late)[0][1] == gl.OUTAGE_UNCHECKED
+
+
+def test_outage_quality_warns_about_an_outage_without_effect():
+    payload = {"ScriptedModelQuality": []}
+    results = [{"id": "OUT01", "outage_checks": [("Outage A", gl.OUTAGE_APPLIED, ""), ("Outage B", gl.OUTAGE_NO_EFFECT, "")]},
+               {"id": "OUT02", "outage_checks": [("Outage C", gl.OUTAGE_EFFECT, "")]}, {"id": "REF"}]
+    gl.outage_quality(payload, results)
+    first, second = payload["ScriptedModelQuality"]
+    assert (first["check_id"], first["status"]) == ("outages_OUT01", "WARNING")
+    assert "1 APPLIED, 1 NO EFFECT" in first["message"] and "Outage B: NO EFFECT" in first["message"]
+    assert (second["status"], second["message"]) == ("PASS", "1 EFFECT SEEN.")
+
+
+def test_applied_text_reads_the_option_and_the_flags_back():
+    records = [{"name": "Outage A", "_object": Obj("Outage A", "IntPlannedout", outserv=0)},
+               {"name": "Outage B", "_object": Obj("Outage B", "IntPlannedout", outserv=1)}]
+    text = gl.applied_text(Obj("QDS", "ComStatsim", iopt_maint=1), records)
+    assert "[iopt_maint] = 1" in text and "applied: Outage A." in text
+    assert "= unreadable" in gl.applied_text(Obj("QDS", "ComStatsim"), records[1:])

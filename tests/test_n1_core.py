@@ -1,0 +1,473 @@
+"""The n-1 core: study times on the QDS grid, reading the contingency results and classifying (n-1)' against n-1."""
+
+from __future__ import annotations
+
+import importlib.util
+
+import pytest
+
+from _paths import delivered
+
+SPEC = importlib.util.spec_from_file_location("gridlens_n1", delivered("gridlens_report.py"))
+gl = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(gl)
+
+H = 3600.0
+START = 1462060800.0
+GRID = (START, START + 23 * H, H)
+
+
+@pytest.fixture(autouse=True)
+def defaults():
+    gl.reset_settings()
+    yield
+    gl.reset_settings()
+
+
+class Obj:
+    def __init__(self, name, kind, **attributes):
+        self.loc_name, self._kind = name, kind
+        self.__dict__.update(attributes)
+
+    def GetClassName(self):
+        return self._kind
+
+    def GetFullName(self):
+        return "\\Grid\\" + self.loc_name + "." + self._kind
+
+
+class Sub(Obj):
+    """One sub-result: rows are contingencies, columns (element, variable); cells {(row, column): (code, value)}."""
+
+    def __init__(self, moment, outages, columns, cells):
+        super().__init__("sub", "ElmRes", cnttime=moment)
+        self._outages, self._columns, self._cells = outages, columns, cells
+
+    def Load(self):
+        return None
+
+    def Release(self):
+        return None
+
+    def GetNumberOfRows(self):
+        return len(self._outages)
+
+    def GetNumberOfColumns(self):
+        return len(self._columns)
+
+    def GetObject(self, column):
+        return self._columns[column][0]
+
+    def GetVariable(self, column):
+        return self._columns[column][1]
+
+    def GetObjectValue(self, row):
+        return [0, self._outages[row]]
+
+    def GetValue(self, row, column):
+        return list(self._cells.get((row, column), (1, 0.0)))
+
+
+class Folder(Obj):
+    def __init__(self, subs):
+        super().__init__("results", "ElmRes")
+        self._subs = subs
+
+    def GetContents(self, pattern="*"):
+        return list(self._subs)
+
+
+LINE_A, LINE_B = Obj("Line A", "ElmLne"), Obj("Line B", "ElmLne")
+BUS = Obj("Bus 1", "ElmTerm", uknom=380.0)
+C1, C2 = Obj("C1", "ComOutage"), Obj("C2", "ComOutage")
+COLUMNS = [(LINE_A, "c:loading"), (LINE_B, "c:loading"), (BUS, "m:u"), (LINE_A, "c:maxCntcy")]
+
+
+def command(cells_by_time, outages=(C1, C2), loadmax=80.0):
+    subs = [Sub(moment, list(outages), COLUMNS, cells) for moment, cells in cells_by_time.items()]
+    return Obj("CA", "ComSimoutage", p_rescnt=Folder(subs), loadmax=loadmax, vlmin=0.95, vlmax=1.05)
+
+
+def test_study_times_are_the_qds_steps_inside_the_windows():
+    windows = [(START + 2.5 * H, START + 5 * H), (START + 4 * H, START + 6 * H), (START + 22 * H, START + 30 * H)]
+    assert gl.n1_study_times(windows, GRID) == [START + step * H for step in (3, 4, 5, 22, 23)]
+    assert gl.n1_study_times([(START + 2.2 * H, START + 2.8 * H)], GRID) == [], "no QDS step inside the window"
+    assert len(gl.n1_study_times([(None, None)], GRID)) == 24, "an unknown window covers the QDS period"
+    with pytest.raises(gl.GridLensError, match="more than 5 study times"):
+        gl.n1_study_times([(START, START + 10 * H)], GRID, limit=5)
+
+
+def test_qds_grid_reads_period_and_step():
+    qds = Obj("QDS", "ComStatsim", startTime=START, endTime=START + 23 * H, stepSize=15, stepUnit=1)
+    assert gl.qds_grid(qds) == (START, START + 23 * H, 900.0)
+    assert gl.qds_grid(Obj("QDS", "ComStatsim", startTime=START, endTime=START + H, stepSize=1, stepUnit=5)) is None
+
+
+def test_results_are_read_per_study_time_with_code_3_kept_apart():
+    cells = {(0, 0): (0, 95.0), (0, 1): (3, 0.0), (0, 2): (0, 0.99), (0, 3): (0, 7.0), (1, 0): (0, 60.0)}
+    found = gl.read_n1_results(command({START: cells}))
+
+    values = found["times"][START]
+    a, b, bus, c1, c2 = (gl.object_key(obj) for obj in (LINE_A, LINE_B, BUS, C1, C2))
+    assert values[(c1, a, "loading")] == 95.0 and values[(c1, b, "loading")] is None
+    assert values[(c1, bus, "voltage")] == 0.99 and values[(c2, a, "loading")] == 60.0
+    assert (c2, b, "loading") not in values, "neither written nor code 3: left out, never zero"
+    assert all(key[2] in ("loading", "voltage") for key in values), "c:maxCntcy is not read"
+    assert found["categories"][bus] == "voltage" and found["nominal_kv"][bus] == 380.0
+    assert found["contingencies"][c1] == "C1" and found["recording_limits"]["loading"] == (80.0,)
+
+
+def test_the_monitoring_grid_filter_applies_to_n1_results():
+    found = gl.read_n1_results(command({START: {(0, 0): (0, 95.0), (0, 1): (0, 50.0)}}),
+                               in_scope=lambda obj: obj is not LINE_B)
+    assert gl.object_key(LINE_B) not in found["elements"]
+
+
+def _read(cells, outages=(C1, C2), loadmax=80.0):
+    return gl.read_n1_results(command({START: cells}, outages, loadmax))
+
+
+def test_a_new_overload_in_the_scenario_is_new_and_unchanged_values_are_ok():
+    reference = _read({(0, 0): (0, 90.0), (1, 0): (0, 85.0)})
+    scenario = _read({(0, 0): (0, 112.0), (1, 0): (0, 85.0)})
+
+    comparison = gl.compare_n1(reference, scenario)
+
+    worst = comparison["elements"][(gl.object_key(LINE_A), "loading")]["worst"]
+    assert worst["status"] == "NEW" and worst["contingency_name"] == "C1" and worst["delta"] == pytest.approx(22.0)
+    assert comparison["counts"] == {"NEW": 1, "OK": 1}
+    assert gl.n1_summary(comparison) == "NEW 1, OK 1"
+
+
+def test_a_contingency_the_case_already_switches_off_is_not_applicable_others_failed():
+    reference = _read({(0, 0): (0, 90.0), (1, 0): (0, 85.0)})
+    scenario = _read({(0, 0): (0, 95.0)}, outages=(C1,))
+    line_b = gl.object_key(LINE_B)
+    c2 = gl.object_key(C2)
+
+    applicable = gl.compare_n1(reference, scenario, switched_off={line_b}, contingency_elements={c2: {line_b}})
+    assert applicable["counts"] == {"OK": 1, "NOT_APPLICABLE": 1}
+
+    other = gl.compare_n1(reference, scenario, switched_off={line_b}, contingency_elements={c2: {"elsewhere"}})
+    assert other["counts"] == {"OK": 1, "FAILED": 1}, "a missing contingency without a reason is never OK"
+
+
+def test_elements_the_case_switches_off_are_not_assessed():
+    reference = _read({(0, 0): (0, 90.0), (0, 1): (0, 70.0)})
+    scenario = _read({(0, 0): (0, 90.0)})
+    comparison = gl.compare_n1(reference, scenario, switched_off={gl.object_key(LINE_B)})
+    assert (gl.object_key(LINE_B), "loading") not in comparison["elements"]
+
+
+def test_values_inside_the_recording_limit_count_only_when_the_limit_proves_them():
+    reference = _read({(0, 0): (3, 0.0)})
+    scenario = _read({(0, 0): (0, 110.0)})
+    worst = gl.compare_n1(reference, scenario)["elements"][(gl.object_key(LINE_A), "loading")]["worst"]
+    assert worst["status"] == "NEW" and worst["delta"] is None
+
+    both = gl.compare_n1(reference, _read({(0, 0): (3, 0.0)}))
+    assert both["counts"] == {"OK": 1}
+
+    unproven = gl.compare_n1(_read({(0, 0): (3, 0.0)}, loadmax=120.0), _read({(0, 0): (0, 110.0)}, loadmax=120.0))
+    assert unproven["counts"] == {"NOT_EVALUATED": 1}, "a recording limit above 100 % proves nothing"
+
+
+def test_voltage_uses_the_p_u_band():
+    reference = _read({(0, 2): (0, 1.0)})
+    scenario = _read({(0, 2): (0, 0.93)})
+    worst = gl.compare_n1(reference, scenario)["elements"][(gl.object_key(BUS), "voltage")]["worst"]
+    assert worst["status"] == "NEW" and worst["limit"]["min"] == pytest.approx(gl.VOLTAGE_MIN)
+
+
+def test_a_study_time_missing_in_the_scenario_is_failed():
+    reference = gl.read_n1_results(command({START: {(0, 0): (0, 90.0)}, START + H: {(0, 0): (0, 90.0)}}))
+    scenario = gl.read_n1_results(command({START: {(0, 0): (0, 90.0)}}))
+    assert gl.compare_n1(reference, scenario)["counts"] == {"OK": 1, "FAILED": 1}
+
+
+# --- the run against an artificial contingency analysis -------------------------------------------
+class Analysis(Obj):
+    """A ComSimoutage that calculates like PowerFactory: the studyTime vector decides the study times, every
+    planned outage not Ignored applies inside its window, a contingency on switched-off equipment has no row."""
+
+    def __init__(self, outages, planned, lines, fail=False):
+        super().__init__("CA", "ComSimoutage", isPlannedOutages=1, studyTime=[START], bIgnoreTime=[0.0], loadmax=80.0,
+                         vlmin=0.95, vlmax=1.05)
+        self._outages, self._planned, self._lines, self._fail, self.runs = outages, planned, lines, fail, []
+        self.p_rescnt = Folder([])
+
+    def GetContents(self, pattern="*"):
+        return list(self._outages) if pattern in ("*", "*.ComOutage") else []
+
+    def Execute(self):
+        self.runs.append((self.isPlannedOutages, tuple(self.studyTime)))
+        if self._fail:
+            return 1
+        subs = []
+        for moment, skip in zip(self.studyTime, self.bIgnoreTime):
+            if skip:
+                continue
+            active = [fs for fs in self._planned if self.isPlannedOutages and fs.outserv == 0
+                      and fs.starttime <= moment < fs.endtime]
+            off = {gl.object_key(item) for fs in active for item in fs.components}
+            rows = [outage for outage in self._outages if outage.outserv == 0 and gl.object_key(outage.element) not in off]
+            columns = [(line, "c:loading") for line in self._lines if gl.object_key(line) not in off]
+            cells = {(row, column): (0, 90.0 + (20.0 if active else 0.0)) for row in range(len(rows))
+                     for column in range(len(columns))}
+            subs.append(Sub(moment, rows, columns, cells))
+        self.p_rescnt = Folder(subs)
+        return 0
+
+
+class Study(Obj):
+    def __init__(self, children):
+        super().__init__("Study", "IntCase")
+        self._children = children
+
+    def GetContents(self, pattern="*"):
+        return [child for child in self._children if pattern in ("*", "*." + child.GetClassName())]
+
+
+def _scenario(fail=False, grid_b=False):
+    lines = [Obj("L1", "ElmLne"), Obj("L2", "ElmLne"), Obj("L3", "ElmLne", cpGrid=Obj("Grid B", "ElmNet")) if grid_b
+             else Obj("L3", "ElmLne")]
+    outages = [Obj("C{}".format(number), "ComOutage", outserv=0, element=line) for number, line in enumerate(lines, 1)]
+    for outage in outages:
+        outage.GetObject = (lambda index, element=outage.element: element if index == 0 else None)
+    fs = Obj("FS", "IntPlannedout", outserv=1, starttime=START + 2 * H, endtime=START + 4 * H, components=[lines[1]])
+    other = Obj("Other", "IntPlannedout", outserv=0, starttime=START, endtime=START + 23 * H, components=[lines[2]])
+    analysis = Analysis(outages, [fs, other], lines, fail)
+    records = [{"key": "fs", "name": "FS", "_object": fs, "component_keys": [gl.object_key(lines[1])]},
+               {"key": "other", "name": "Other", "_object": other, "component_keys": [gl.object_key(lines[2])]}]
+    plan = {"id": "C1", "name": "Case 1", "members": [records[0]], "windows": {"fs": (START + 2 * H, START + 4 * H)},
+            "fingerprint": "f1"}
+    return analysis, records, plan, outages, (fs, other)
+
+
+class Logger:
+    def __init__(self):
+        self.lines = []
+
+    def write(self, stage, message, step=0, level="INFO"):
+        self.lines.append((level, message))
+
+    def case(self, message):
+        self.lines.append(("CASE", message))
+
+    def detail(self, message, level="INFO"):
+        self.lines.append((level, message))
+
+
+def test_a_case_runs_n1_and_n1_prime_on_the_qds_steps_of_its_windows_and_restores_everything():
+    analysis, records, plan, outages, (fs, other) = _scenario()
+    request = {"background": [], "assessments": ["n-0", "n-1", "(n-1)'"]}
+    equipment = gl.contingency_equipment(analysis)
+    elements_of = {gl.object_key(o): {gl.object_key(e) for e in els} for o, els in equipment}
+
+    entry = gl.run_n1_case(analysis, plan, request, records, GRID, [], elements_of, True, {})
+
+    assert analysis.runs == [(0, (START + 2 * H, START + 3 * H)), (1, (START + 2 * H, START + 3 * H))]
+    assert entry["status"] == "EVALUATED" and entry["kind"] == "(n-1)'" and entry["times"] == 2
+    # 2 study times x contingencies C1, C3 x lines L1, L3 are NEW; C2 trips L2, which the case switches off.
+    assert entry["comparison"]["counts"] == {"NEW": 8, "NOT_APPLICABLE": 4}
+    assert entry["summary"] == "(n-1)' against n-1: NEW 8, NOT_APPLICABLE 4"
+    assert (analysis.isPlannedOutages, analysis.studyTime, analysis.bIgnoreTime) == (1, [START], [0.0])
+    assert (fs.outserv, other.outserv) == (1, 0), "only the case's outage was active, and both are restored"
+
+
+def test_cases_with_the_same_study_times_share_one_reference_sweep():
+    analysis, records, plan, *_ = _scenario()
+    references = {}
+    request = {"background": [], "assessments": ["n-0", "n-1"]}
+    first = gl.run_n1_case(analysis, plan, request, records, GRID, [], {}, False, references)
+    gl.run_n1_case(analysis, dict(plan, id="C2"), request, records, GRID, [], {}, False, references)
+    assert len(analysis.runs) == 1 and first["kind"] == "n-1"
+    assert first["summary"] == "n-1 reference: 0 element(s) with a post-fault violation"
+
+
+def test_a_failed_calculation_or_other_study_times_are_errors_and_settings_are_restored():
+    analysis, records, plan, *_ = _scenario(fail=True)
+    with pytest.raises(gl.GridLensError, match="error code 1"):
+        gl.run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, True, {})
+    assert analysis.studyTime == [START]
+
+    analysis, records, plan, *_ = _scenario()
+    analysis.Execute = lambda: (setattr(analysis, "p_rescnt", Folder([])), 0)[1]
+    with pytest.raises(gl.GridLensError, match="0 study time"):
+        gl.run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, False, {})
+
+
+def test_contingencies_outside_the_contingency_grids_are_not_analysed_for_the_run_only():
+    analysis, records, plan, outages, _ = _scenario(grid_b=True)
+    excluded = gl.contingencies_outside(gl.contingency_equipment(analysis), ("Grid B",))
+    assert [outage.loc_name for outage in excluded] == ["C1", "C2"]
+    assert gl.contingencies_outside(gl.contingency_equipment(analysis), ()) == []
+
+    gl.run_n1_sweep(analysis, [START], set(), records, excluded, "test")
+    assert all(outage.outserv == 0 for outage in outages), "'Not analysed' is restored"
+
+
+def _run_n1(app, study, qds, request, records, ready, results, logger, clock, store=None):
+    """Both n-1 phases as a run does them: calculate (keeping copies where possible), then evaluate."""
+    entries = gl.calculate_n1(app, study, qds, request, records, ready, logger, clock,
+                              store or gl.ResultStore("261023-120000"))
+    gl.evaluate_n1(entries, request, ready, results, logger)
+    return entries
+
+
+def test_run_n1_marks_every_case_when_no_contingency_analysis_exists_and_reports_on_the_qa_page():
+    analysis, records, plan, *_ = _scenario()
+    results = [{"id": "C1"}]
+    qds = Obj("QDS", "ComStatsim", startTime=START, endTime=START + 23 * H, stepSize=1, stepUnit=2)
+    clock = {"object": Obj("time", "SetTime", cDate=1, cTime=2), "date": 1, "time": 2}
+    request = {"background": [], "assessments": ["n-0", "n-1", "(n-1)'"]}
+
+    _run_n1(App([]), Study([]), qds, request, records, [plan], results, Logger(), clock)
+    assert results[0]["n1"]["status"] == "NOT EVALUATED" and "no contingency can be defined" in results[0]["n1"]["reason"]
+    _run_n1(App([]), Study([analysis, analysis]), qds, request, records, [plan], results, Logger(), clock)
+    assert "more than one contingency analysis" in results[0]["n1"]["reason"]
+
+    logger = Logger()
+    _run_n1(App([]), Study([analysis]), qds, request, records, [plan, dict(plan, id="C2")], results + [{"id": "C2"}], logger, clock)
+    assert results[0]["n1"]["summary"].startswith("(n-1)' against n-1: NEW")
+    assert len(analysis.runs) == 2, "C2 has the same outages and windows: evaluated once"
+    read_back = [message for _, message in logger.lines if "Read back before the calculation" in message]
+    assert read_back == ["n-1: Read back before the calculation: 'Planned outages' [isPlannedOutages] = 0; "
+                         "planned outages applied: none, the option is off.",
+                         "(n-1)': Read back before the calculation: 'Planned outages' [isPlannedOutages] = 1; "
+                         "planned outages applied: FS."]
+
+    payload = gl.empty_payload()
+    gl.n1_quality(payload, results)
+    row = payload["ScriptedModelQuality"][0]
+    assert row["check_id"] == "n1_C1" and row["status"] == "FAIL" and "Caused: NEW L" in row["message"]
+
+
+
+class App:
+    def __init__(self, objects):
+        self._objects = objects
+
+    def GetCalcRelevantObjects(self, pattern):
+        return [obj for obj in self._objects if pattern == "*." + obj.GetClassName()]
+
+
+class NewOutage(Obj):
+    def SetObjs(self, elements):
+        self.element = elements[0]
+        self.GetObject = lambda index: elements[index] if index < len(elements) else None
+        return 0
+
+
+class Creating(Study):
+    """A study case without a contingency analysis; CreateObject makes one that can hold ComOutage objects."""
+
+    def CreateObject(self, kind, name):
+        assert kind == "ComSimoutage"
+        lines = [obj for obj in self._app._objects if obj.GetClassName() == "ElmLne"]
+        command = Analysis([], self._planned, lines)
+        command.loc_name, command.iEnableTS = name, 0
+
+        def create(kind, name):
+            outage = NewOutage(name, kind, outserv=0)
+            command._outages.append(outage)
+            return outage
+        command.CreateObject = create
+        self._children.append(command)
+        return command
+
+
+def test_without_a_contingency_analysis_gridlens_defines_one_for_the_selected_grids_and_keeps_it():
+    grid_a, grid_b = Obj("Grid A", "ElmNet"), Obj("Grid B", "ElmNet")
+    line, branch_line = Obj("L1", "ElmLne", cpGrid=grid_a), Obj("L2", "ElmLne", cpGrid=grid_a)
+    branch = Obj("Branch", "ElmBranch", cpGrid=grid_a)
+    branch_line.GetParent = lambda: branch
+    transformer, foreign = Obj("T1", "ElmTr2", cpGrid=grid_a), Obj("T2", "ElmTr2", cpGrid=grid_b)
+    others = [Obj("G1", "ElmSym", cpGrid=grid_a), Obj("Load", "ElmLod", cpGrid=grid_a), Obj("Bus", "ElmTerm", cpGrid=grid_a)]
+    app = App([line, branch_line, branch, transformer, foreign] + others)
+
+    assert [obj.loc_name for obj in gl.contingency_candidates(app, ("Grid A",))] == ["L1", "Branch", "T1"]
+    assert len(gl.contingency_candidates(app, ())) == 4, "no generators, loads, busbars; the branch replaces its line"
+
+    _, records, plan, _, planned = _scenario()
+    study = Creating([])
+    study._app, study._planned = app, list(planned)
+    gl.activate_settings({"monitoring_grids": ["Grid A"]})
+    results = [{"id": "C1"}]
+    logger = Logger()
+    qds = Obj("QDS", "ComStatsim", startTime=START, endTime=START + 23 * H, stepSize=1, stepUnit=2)
+    clock = {"object": Obj("time", "SetTime", cDate=1, cTime=2), "date": 1, "time": 2}
+    _run_n1(app, study, qds, {"background": [], "assessments": ["n-0", "n-1"]}, records, [plan], results, logger, clock)
+
+    created = study._children[0]
+    assert created.loc_name.startswith("GridLens_") and created.loc_name.endswith("_N1") and created.iEnableTS == 1
+    assert [outage.loc_name for outage in created._outages] == ["L1", "Branch", "T1"]
+    assert results[0]["n1"]["status"] == "EVALUATED"
+    assert any("GridLens created" in message and "3 contingencies" in message for _, message in logger.lines)
+
+
+
+class Vector(Obj):
+    def __init__(self):
+        super().__init__("buffer", "IntVec")
+
+
+class BulkSub(Sub):
+    """A sub-result that also answers GetColumnValues; code-3 cells come back as 0, as PowerFactory might."""
+
+    def GetColumnValues(self, vector, column):
+        vector.V = [self._cells.get((row, column), (1, 0.0))[1] if self._cells.get((row, column), (1,))[0] == 0 else 0.0
+                    for row in range(len(self._outages))]
+        return 0
+
+
+def test_n1_columns_are_read_in_one_call_and_a_voltage_column_with_a_zero_cell_by_cell(monkeypatch):
+    monkeypatch.setattr(gl, "COLUMN_BUFFER", Vector())
+    gl.RUN_STATS = gl.RunStats()
+    loading = BulkSub(START, [C1, C2], COLUMNS, {(0, 0): (0, 95.0), (1, 0): (3, 0.0)})
+    assert gl._n1_column(loading, 0, 2, "loading") == [95.0, 0.0], "0 % lies inside the recording limit anyway"
+    assert gl.RUN_STATS.counts == {"columns_bulk": 1}
+
+    voltage = BulkSub(START, [C1, C2], COLUMNS, {(0, 2): (0, 0.99), (1, 2): (3, 0.0)})
+    assert gl._n1_column(voltage, 2, 2, "voltage") == [0.99, None], "code 3 is read cell by cell, never a 0 p.u. value"
+    assert gl.RUN_STATS.counts["values_cellwise"] == 2
+
+
+
+class Keeping(Study):
+    """A study case whose AddCopy keeps a copy of an n-1 result object, as PowerFactory should."""
+
+    def AddCopy(self, obj):
+        copy = Folder(list(obj._subs))
+        self._children.append(copy)
+        return copy
+
+
+def test_n1_results_are_kept_as_copies_and_evaluated_from_them_also_later_without_a_calculation():
+    analysis, records, plan, *_ = _scenario()
+    study = Keeping([analysis])
+    qds = Obj("QDS", "ComStatsim", startTime=START, endTime=START + 23 * H, stepSize=1, stepUnit=2)
+    clock = {"object": Obj("time", "SetTime", cDate=1, cTime=2), "date": 1, "time": 2}
+    request = {"background": [], "assessments": ["n-0", "n-1", "(n-1)'"]}
+    results = [{"id": "C1"}]
+
+    entries = _run_n1(App([]), study, qds, request, records, [plan], results, Logger(), clock)
+
+    kept = [child for child in study._children if child.GetClassName() == "ElmRes"]
+    assert [child.loc_name for child in kept] == ["GridLens_261023-120000_C1_N1", "GridLens_261023-120000_C1_N1P"]
+    assert entries["C1"]["reference"]["kept"] is kept[0], "phase 2 reads the kept copy, not the contingency analysis"
+    assert "recording 80,0.95,1.05" in kept[0].desc[0] and "fingerprint f1" in kept[0].desc[0]
+    first = results[0]["n1"]["summary"]
+    assert first.startswith("(n-1)' against n-1: NEW")
+
+    # Later: the same kept copies are evaluated again, PowerFactory calculates nothing.
+    calls = len(analysis.runs)
+    gl.activate_settings({"run_reference": False})
+    try:
+        runs, n1 = gl.kept_runs(study, "261023-120000", request, [plan], Logger())
+    finally:
+        gl.reset_settings()
+    again = [{"id": "C1"}]
+    gl.evaluate_n1(n1, request, [plan], again, Logger())
+    assert again[0]["n1"]["summary"] == first and len(analysis.runs) == calls
+    assert runs[0]["failed"].startswith("the run 261023-120000 kept no result object"), "no QDS object in this study"

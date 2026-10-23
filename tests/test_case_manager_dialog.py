@@ -323,25 +323,21 @@ def test_gui_13_timeline_draws_every_outage_of_the_case(monkeypatch, records, co
     assert all(label in ("FS1", "FS2", "FS3", "FS4") for label in seen["labels"]), seen["labels"]
 
 
-def test_gui_14_to_16_options_n1_disabled_period_shown_no_optimisation(monkeypatch, records, config):
+def test_gui_14_to_16_only_n1_options_period_shown_no_optimisation(monkeypatch, records, config):
     def steps(dialog, root, seen):
         seen["texts"] = _texts(root)
         n1 = _button(root, "n-1 - reference contingency analysis")
         prime = _button(root, "(n-1)' - contingency analysis with planned-outage scenarios")
         seen["states"] = (str(n1.cget("state")), str(prime.cget("state")))
-        seen["tips"] = (dialog.tip_text(n1), dialog.tip_text(prime), dialog.tip_text(_button(root, "n-0 - reference QDS")))
-        dialog.n0_var.set(False)
-        dialog.apply_assessments = lambda: None  # no message box in the test
-        seen["n0"] = dialog.n0_var.get()
+        seen["tips"] = (dialog.tip_text(n1), dialog.tip_text(prime))
 
     _, seen = _run(monkeypatch, records, config, steps)
 
     assert "QDS: test period" in seen["texts"]
-    assert seen["states"] == ("disabled", "disabled")
-    assert all(gl.N1_UNAVAILABLE in tip for tip in seen["tips"][:2])
-    assert "without planned outages and without additional contingencies" in seen["tips"][2]
+    assert seen["states"] == ("normal", "normal")
+    assert all(gl.N1_NOTE in tip for tip in seen["tips"][:2]) and "Needs n-1" in seen["tips"][1]
     assert not any("ptimi" in text or "onservative" in text for text in seen["texts"])
-    assert "n-0 - reference QDS" in seen["texts"]
+    assert "n-0 - reference QDS" not in seen["texts"], "n-0 is always calculated: no control"
 
 
 def test_gui_17_cancel_returns_nothing(monkeypatch, records, config):
@@ -777,8 +773,9 @@ def test_settings_tab_shows_every_setting_with_source_and_hover_text(monkeypatch
 
     _, seen = _run(monkeypatch, records, config, steps)
 
-    assert seen["pages"] == ["Limits", "Classification", "Contingency analysis", "QDS time base", "Fixed background & rules"]
-    assert seen["keys"] == set(gl.SETTINGS_BY_KEY)
+    assert seen["pages"] == ["Network scope", "Limits", "Classification", "Report and run", "Contingency analysis",
+                             "QDS time base", "Fixed background & rules"]
+    assert seen["keys"] == {key for key, setting in gl.SETTINGS_BY_KEY.items() if setting["kind"] != "grids"}
     assert seen["line_limit"] == ("110", gl.SOURCE_USER) and seen["warning"] == gl.SOURCE_GRIDLENS
     assert seen["read_only"] and all(seen["read_only"].values()), "category B and post-fault fields are read only"
     assert all(len(text) > 40 for text in seen["tips"].values()), seen["tips"]
@@ -853,3 +850,50 @@ def test_tooltip_appears_after_the_delay_and_goes_on_leave(monkeypatch, records,
     assert 400 <= seen["delay"] <= 600
     assert seen["before"] and seen["shown"] and seen["gone"]
     assert "separate step" in seen["text"], "the start tooltip does not promise an automatic PDF"
+
+
+def test_network_scope_lists_the_grids_of_the_model_for_selection(monkeypatch, records, config):
+    grids = [("Grid A", True), ("Grid B", True), ("Grid C", False)]
+    contingencies = {"command": "Contingency Analysis", "contingencies": [
+        {"name": "Line A1", "number": 1, "analysed": True, "elements": ["Line A1"], "grids": ["Grid A"]},
+        {"name": "Line B1", "number": 2, "analysed": True, "elements": ["Line B1"], "grids": ["Grid B"]}]}
+    seen = {}
+
+    def mainloop(self):
+        dialog = self.report_callback_exception.__self__
+        self.update()
+        dialog.notebook.select(dialog.settings_tab)
+        self.update()
+        boxes = dialog.grid_lists
+        seen["listed"] = list(boxes["monitoring_grids"].get(0, "end"))
+        seen["contingency_state"] = str(boxes["contingency_grids"].cget("state"))
+        boxes["monitoring_grids"].selection_set(0)
+        boxes["monitoring_grids"].event_generate("<<ListboxSelect>>")
+        self.update()
+        seen["monitoring"] = dialog.editor.selected_grids("monitoring_grids")
+        seen["follows"] = list(boxes["contingency_grids"].curselection())
+        seen["preview"] = dialog.contingency_note.cget("text")
+        dialog.contingency_mode.set("own")
+        dialog.on_contingency_mode()
+        boxes["contingency_grids"].selection_clear(0, "end")
+        boxes["contingency_grids"].selection_set(1)
+        boxes["contingency_grids"].event_generate("<<ListboxSelect>>")
+        self.update()
+        seen["own"] = dialog.editor.selected_grids("contingency_grids")
+        seen["own_preview"] = dialog.contingency_note.cget("text")
+        seen["tips"] = [dialog.tip_text(box) for box in boxes.values()]
+        seen["problems"] = [dialog.problem_table.tree.item(item, "values") for item in dialog.problem_table.tree.get_children()]
+        _button(self, "Start calculation").invoke()
+
+    monkeypatch.setattr(tk.Tk, "mainloop", mainloop)
+    outcome = gl.run_case_manager(records, config, PERIOD, "/nonexistent/cases.json", "operator", "test period",
+                                  grids=grids, contingencies=contingencies)
+
+    assert seen["listed"] == ["Grid A", "Grid B", "Grid C  (inactive)"], "every grid of the model is offered"
+    assert seen["contingency_state"] == "disabled", "contingencies follow the assessed grids by default"
+    assert seen["monitoring"] == ("Grid A",) and seen["follows"] == [0]
+    assert seen["preview"].startswith("1 of 2 contingencies") and "Applied to the n-1 run" in seen["preview"]
+    assert seen["own"] == ("Grid B",) and seen["own_preview"].startswith("1 of 2 contingencies")
+    assert all("grid" in tip for tip in seen["tips"])
+    assert not seen["problems"]
+    assert outcome["settings"] == {"monitoring_grids": ("Grid A",), "contingency_grids": ("Grid B",)}

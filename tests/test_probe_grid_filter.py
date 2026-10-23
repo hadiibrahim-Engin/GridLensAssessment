@@ -78,3 +78,14 @@ def test_probe_needs_nothing_but_powerfactory():
     imports = {line.split()[1] for line in source.splitlines()
                if line.startswith(("import ", "from "))}
     assert imports <= {"time", "powerfactory"}, imports
+
+
+@pytest.mark.parametrize("grids", [("D7 Westnetz",), ("NL TenneT", "D7 Westnetz"), ("Unknown",)])
+@pytest.mark.parametrize("element", CASES, ids=lambda element: element.loc_name)
+def test_probe_follows_a_grid_selection_like_the_report(monkeypatch, element, grids):
+    monkeypatch.setattr(probe, "MONITORING_GRIDS", grids)
+    gl.activate_settings({"monitoring_grids": list(grids)})
+    try:
+        assert probe.element_in_scope(element) == gl.element_in_scope(element)
+    finally:
+        gl.reset_settings()

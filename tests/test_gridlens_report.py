@@ -23,6 +23,9 @@ def _assess_every_element(monkeypatch, tmp_path):
     monkeypatch.setattr(gl, "GRID_NAME_FILTER", "")
     monkeypatch.setattr(gl, "CASE_SOURCE", "per_outage")
     monkeypatch.setattr(gl, "CASE_CONFIG_DIR", str(tmp_path / "cases"))
+    # The IntVec a run creates for column reads; direct calls of collect_series use it too.
+    buffer = PFObject("GridLens_column_buffer", "IntVec")
+    monkeypatch.setattr(gl, "COLUMN_BUFFER", buffer)
 
 
 class PFObject:
@@ -102,8 +105,12 @@ class ElmRes(PFObject):
     def GetUnit(self, column):
         return self.units[column]
 
-    def GetColumnValues(self, column):
-        return self.columns[column]
+    def GetColumnValues(self, vector, column):
+        """As PowerFactory: fills the IntVec `vector` (attribute V) with the whole column and returns 0."""
+        if gl.class_name(vector) != "IntVec":
+            raise TypeError("PowerFactory requires an IntVec argument")
+        vector.V = list(self.columns[column])
+        return 0
 
     def FindColumn(self, variable):
         return self.variables.index(variable)
@@ -146,6 +153,9 @@ class StudyCase(PFObject):
         copy = result.clone()
         self.copies.append(copy)
         return copy
+
+    def GetContents(self, pattern="*", *_recursive):
+        return [copy for copy in self.copies if pattern in ("*", "*." + copy.kind)]
 
 
 class StudyTime(PFObject):
@@ -206,6 +216,14 @@ class Script(PFObject):
     def __init__(self, parent):
         super().__init__("Run GridLens", "ComPython")
         self.parent = parent
+        self.created = []
+
+    def CreateObject(self, kind, name):
+        vector = PFObject(name, kind)
+        vector.deleted = False
+        vector.Delete = lambda: setattr(vector, "deleted", True)
+        self.created.append(vector)
+        return vector
 
     def GetParent(self):
         return self.parent
@@ -1246,9 +1264,9 @@ class ScopedElmRes(ElmRes):
     def clone(self):
         return ScopedElmRes()
 
-    def GetColumnValues(self, column):
+    def GetColumnValues(self, vector, column):
         self.reads.append(column)
-        return super().GetColumnValues(column)
+        return super().GetColumnValues(vector, column)
 
 
 def test_scope_is_decided_by_the_grid_not_the_name(monkeypatch):
@@ -1316,7 +1334,7 @@ def test_report_states_which_elements_were_assessed(monkeypatch):
 
     scope = app.report.tables["ReportMeta"]["values"][0, "assessment_scope"]
     assert "grids named *D7*" in scope
-    assert any("Grid scope 'D7': 2 series assessed, 1 out of scope" in line
+    assert any("Grid scope (elements in grids named *D7*): 2 series assessed, 1 out of scope" in line
                for line in app.messages)
 
 
@@ -1365,19 +1383,13 @@ def test_long_text_is_shortened_with_an_ellipsis_not_a_hash():
 
 
 
-def test_voltage_band_follows_the_nominal_voltage():
-    lower, upper = gl.voltage_band(380.0)
-    assert (lower * 380.0, upper * 380.0) == pytest.approx((360.0, 420.0))
-    # 1.094 p.u. at 380 kV is 415.7 kV and inside the band.
+def test_one_voltage_band_in_pu_applies_to_every_voltage_level():
+    for nominal in (380.0, 220.0, 110.0, 20.0, None):
+        assert gl.voltage_band(nominal) == (gl.VOLTAGE_MIN, gl.VOLTAGE_MAX)
     item = {'category': 'voltage', 'limits': gl.voltage_band(380.0)}
-    assert not gl.is_critical(item, {'min': 1.0, 'max': 1.094})
-    assert gl.is_critical(item, {'min': 1.0, 'max': 1.121})
-    # 1.127 p.u. at 110 kV is 124 kV, above 123 kV.
-    item = {'category': 'voltage', 'limits': gl.voltage_band(110.0)}
-    assert gl.is_critical(item, {'min': 1.0, 'max': 1.127})
-    # Unknown levels keep the p.u. band.
-    assert gl.voltage_band(None) == (gl.VOLTAGE_MIN, gl.VOLTAGE_MAX)
-    assert gl.voltage_band(20.0) == (gl.VOLTAGE_MIN, gl.VOLTAGE_MAX)
+    assert not gl.is_critical(item, {'min': 0.95, 'max': 1.05}), "on the limit is no violation"
+    assert gl.is_critical(item, {'min': 1.0, 'max': 1.051})
+    assert "for every voltage level" in gl.voltage_limits_text()
 
 
 class VoltageElmRes(ElmRes):
@@ -1417,11 +1429,12 @@ def test_run_output_is_structured_in_steps_cases_and_tables(monkeypatch):
 
     text = "\n".join(app.messages)
     for step in ("STEP 1/7 \u00b7 Startup and context", "STEP 2/7 \u00b7 ComStatsim settings",
-                 "STEP 3/7 \u00b7 Planned outages and planning cases", "STEP 4/7 \u00b7 Calculation and extraction",
-                 "STEP 6/7 \u00b7 Restore and clean-up",
+                 "STEP 3/7 \u00b7 Planned outages and planning cases", "STEP 4/7 \u00b7 Calculation (phase 1)",
+                 "STEP 5/7 \u00b7 Restore and clean-up", "STEP 6/7 \u00b7 Evaluation (phase 2)",
                  "STEP 7/7 \u00b7 Results and report publication"):
         assert step in text
-    assert text.index("STEP 3/7") < text.index("STEP 4/7") < text.index("STEP 6/7") < text.index("STEP 7/7")
+    assert (text.index("STEP 3/7") < text.index("STEP 4/7") < text.index("STEP 5/7") < text.index("STEP 6/7")
+            < text.index("STEP 7/7")), "every calculation comes before every evaluation"
     assert ".. Case REF \u00b7 Reference" in text
     assert ".. Case OUT01 \u00b7 Outage A" in text
     assert "Outages: Outage A (" in text
@@ -1429,10 +1442,14 @@ def test_run_output_is_structured_in_steps_cases_and_tables(monkeypatch):
     # Tables: outages, series per case, results per case, published tables.
     for heading in ("Planned outage  Status", "Result series  Count", "Case   Name", "Table  Rows"):
         assert heading.split("  ")[0] in text
-    assert "Grids in the result file" in text
+    assert "Grids in the result file" not in text, "without a grid selection no grid is looked up"
     assert "SKIPPED" in text and "CONSIDERED" in text
     assert not any("LODF" in line for line in app.messages)
     assert "Kept result object 'GridLens_" in text
+    # What PowerFactory applies is read back before the case run, and whether n-1 runs is always said.
+    assert "Read back before the calculation: 'Planned outages' [iopt_maint] = 1; planned outages applied: Outage A." in text
+    assert "n-1 is not calculated: it is not ticked in the case manager" in text
+    assert "Outage 'Outage A': " in text
 
 
 class NanVoltageElmRes(VoltageElmRes):
@@ -1538,6 +1555,112 @@ def test_a_successful_run_names_the_report_to_generate():
 
     assert any("Generate the report now from the IntReport '{}'".format(app.report.loc_name) in line
                for line in app.messages)
+
+
+def test_without_an_intreport_the_run_calculates_and_builds_the_tables_but_publishes_nothing():
+    app = App((PlannedOutage("FS1"),))
+    folder = PFObject("Scripts", "IntFolder")
+    app.script.parent = folder
+
+    counts = gl.execute_gridlens(app)
+
+    assert counts["ScriptedReportMeta"] >= 1 and counts["ScriptedModelQuality"] >= 1
+    assert app.report.tables == {} and app.report.reset_calls == 0
+    assert any("standalone run" in line for line in app.messages)
+    assert any("Standalone run finished" in line for line in app.messages)
+
+
+def test_every_run_ends_with_the_time_per_service_and_the_number_of_calculations():
+    app = App((PlannedOutage("FS1"),))
+
+    gl.execute_gridlens(app)
+
+    text = "\n".join(app.messages)
+    assert "RUN SUMMARY" in text and "Service" in text and "Calls" in text and "Share" in text
+    for service in ("read planned outages", "QDS calculation (PowerFactory)", "read QDS results (ElmRes)",
+                    "build report tables", "publish report tables", "total"):
+        assert service in text, service
+    assert "QDS runs (ComStatsim.Execute)" in text and "result values read" in text
+    assert gl.RUN_STATS.counts["qds_runs"] >= 1 and gl.RUN_STATS.counts["values"] > 0
+
+
+def test_a_failed_run_also_ends_with_the_summary(monkeypatch):
+    import sys
+    import types
+    app = App((PlannedOutage("FS1"),), qds_failure=RuntimeError("method call failed"))
+    monkeypatch.setitem(sys.modules, "powerfactory", types.SimpleNamespace(GetApplication=lambda: app))
+
+    assert gl.main() is False
+
+    text = "\n".join(app.messages)
+    assert "PowerFactory names the cause in its own message" in text, "a refused command points at PowerFactory"
+    assert text.index("FAILED") < text.index("RUN SUMMARY")
+    assert "QDS calculation (PowerFactory)" in text
+
+
+def test_results_are_read_a_whole_column_per_call_and_the_buffer_is_deleted_after_the_run():
+    app = App((PlannedOutage("FS1"),))
+    gl.COLUMN_BUFFER = None
+
+    gl.execute_gridlens(app)
+
+    buffers = [item for item in app.script.created if item.kind == "IntVec"]
+    assert len(buffers) == 1 and buffers[0].deleted and gl.COLUMN_BUFFER is None
+    assert gl.RUN_STATS.counts.get("columns_bulk", 0) > 0 and not gl.RUN_STATS.counts.get("values_cellwise")
+    assert "result columns read in one call" in "\n".join(app.messages)
+
+
+def test_without_a_buffer_every_value_is_read_alone_and_the_summary_says_so():
+    class Cells(ElmRes):
+        def GetValue(self, row, column):
+            return [0, self.columns[column][row]]
+    gl.RUN_STATS = gl.RunStats()
+    gl.COLUMN_BUFFER = None
+    values = gl.read_column(Cells(), 1, 2)
+    assert values == [90.0, 110.0] and gl.RUN_STATS.counts["values_cellwise"] == 2
+
+
+def test_a_kept_run_is_re_evaluated_without_any_calculation(monkeypatch):
+    app = App((PlannedOutage("FS1"),))
+    gl.execute_gridlens(app)
+    stamps = gl.kept_stamps(app.study)
+    assert len(stamps) == 1 and all(copy.loc_name.startswith("GridLens_" + stamps[0]) for copy in app.study.copies)
+    calculations, copies = app.qds.execute_calls, len(app.study.copies)
+
+    real = gl.obtain_case_request
+
+    def choose_kept_run(*args, **kwargs):
+        request = real(*args, **kwargs)
+        request["evaluate_stamp"] = stamps[0]
+        return request
+    monkeypatch.setattr(gl, "obtain_case_request", choose_kept_run)
+    app.messages.clear()
+    gl.execute_gridlens(app)
+
+    assert app.qds.execute_calls == calculations and len(app.study.copies) == copies, "nothing calculated or copied"
+    text = "\n".join(app.messages)
+    assert "Re-evaluating the kept results of the run {}".format(stamps[0]) in text
+    assert "Report published successfully" in text
+
+
+def test_a_case_that_changed_since_the_kept_run_is_not_evaluated(monkeypatch):
+    app = App((PlannedOutage("FS1"),))
+    gl.execute_gridlens(app)
+    stamp = gl.kept_stamps(app.study)[0]
+    for copy in app.study.copies:
+        if not copy.loc_name.endswith("_REF"):
+            copy.desc = ["GridLens 8.0.0; case X; fingerprint another"]
+    real = gl.obtain_case_request
+
+    def choose_kept_run(*args, **kwargs):
+        request = real(*args, **kwargs)
+        request["evaluate_stamp"] = stamp
+        return request
+    monkeypatch.setattr(gl, "obtain_case_request", choose_kept_run)
+    app.messages.clear()
+    gl.execute_gridlens(app)
+
+    assert any("changed since the run {}".format(stamp) in line for line in app.messages)
 
 
 def test_a_result_object_with_only_dead_terminals_says_so():
@@ -1785,14 +1908,16 @@ def test_a_failing_comparison_fails_only_its_own_case(monkeypatch):
     assert [item.outserv for item in outages] == [0, 0] and app.qds.iopt_maint == 0
 
 
-def test_memory_budget_stops_before_the_next_run_and_restores(monkeypatch):
+def test_memory_budget_stops_the_evaluation_and_the_calculated_results_stay(monkeypatch):
     app = App((PlannedOutage("FS1"), PlannedOutage("FS2")))
     monkeypatch.setattr(gl, "MAX_RUN_CELLS", 1)
 
     with pytest.raises(gl.GridLensError, match="MAX_RUN_CELLS"):
         gl.execute_gridlens(app)
 
-    assert app.qds.execute_calls == 1, "no case starts once the reference exceeds the budget"
+    # Phase 1 calculates every run into its kept result object; phase 2 stops before reading the next one.
+    assert app.qds.execute_calls == 3 and len(app.study.copies) == 3
+    assert not any(copy.deleted for copy in app.study.copies), "kept result objects are never deleted"
     assert app.qds.iopt_maint == 0 and app.qds.results is app.original_result
     assert (app.study_time.cDate, app.study_time.cTime) == (20140501, 0)
 

@@ -376,8 +376,8 @@ An element takes its most severe step status (NEW > WORSENED > EXCEEDED >
 DE-ENERGISED > PRE-EXISTING > IMPROVED > RESOLVED > OK). Equipment the case
 itself switches off is OUT OF SERVICE, never RESOLVED. Values exactly on a
 limit are no violation. Loading limit 100 % by default (element ratings are
-already inside `c:loading`), voltage bands per nominal voltage as in 7.x; both
-are settings since part 2 (7.5).
+already inside `c:loading`), one voltage band in p.u. of the nominal voltage
+for every voltage level (default 0.95–1.05 p.u.); both are settings (7.5).
 
 Case verdict, first match wins:
 
@@ -398,9 +398,72 @@ Missing or failed results never produce NO LIMIT EXCEEDED.
 Every limit and tolerance of the assessment is a **setting** (`SETTINGS` in
 `gridlens_report.py`, version `SETTINGS_VERSION = '1.0'`). Defaults are the
 values of the code: loading warning 80 %, n-0 loading limit 100 % (lines and
-transformers separately), the kV bands of `VOLTAGE_LIMITS_KV`, 0.95–1.05 p.u.
-for any other nominal voltage (marked as a GridLens proposal), change
-tolerances 0.1 %-points / 0.001 p.u.
+transformers separately), one voltage band of 0.95–1.05 p.u. for every voltage
+level (marked as a GridLens proposal; the kV bands per voltage level were
+replaced on 23 October 2026), change tolerances 0.1 %-points / 0.001 p.u. The
+former script constants TOP_N, MAX_PLOT_POINTS, ENERGIZED_MIN_PU, the appendix
+thresholds, RUN_REFERENCE_CASE, MAX_CASES and MAX_N1_TIMES are the defaults of
+settings of the same meaning (`setting_value()`). CASE_SLOTS, the versions and
+the start options stay script constants: the MRT or the start depends on them.
+
+Calculation and publication are separate: a ComPython that is not below an
+IntReport calculates, builds and checks every report table and logs the
+results, but publishes nothing (standalone run, exit code 0).
+
+A run has **two phases**. Phase 1 (log step 4) only calculates: REF and every
+case into its own kept `GridLens_<stamp>_<case>`, and every n-1 sweep into a
+kept copy of its result object (`…_<case>_N1`, `…_<case>_N1P`; when PowerFactory
+refuses the copy, that sweep is read at once). Each kept object names its case,
+the case fingerprint and, for n-1, the recording limits in its description.
+Step 5 restores the PowerFactory state; phase 2 (step 6) reads, compares and
+classifies the kept objects; step 7 builds and publishes the report. The memory
+budget stops phase 2 before the next case is read; everything calculated stays.
+
+**Re-evaluation without calculation:** the case manager's *Results* choice
+lists the kept runs of the study case (`kept_stamps`). Choosing one skips
+phase 1 entirely – nothing is calculated, PowerFactory is not changed – and
+phase 2 reads that run's objects with the current settings (`kept_runs`). A
+case whose outages or windows changed since then (another fingerprint), or
+whose object is missing, is NOT EVALUATED with the reason; a changed REF stops
+the run.
+
+**Are the outages really applied?** Three checks make this visible in the
+log and the report:
+
+- Whether n-1 runs is always logged: "n-1 is not calculated: it is not
+  ticked in the case manager", "... no planning case can be calculated", or
+  the contingency analysis used.
+- Before every QDS run with planned outages and before every n-1 sweep,
+  GridLens reads back what PowerFactory will apply (`applied_text`): the
+  option (`iopt_maint` or `isPlannedOutages`) and every planned outage whose
+  'Ignored' flag is 0; with the option at 0 the line says that none applies.
+- In phase 2 each outage of a case is checked against REF inside its own
+  window (`outage_effects`): **APPLIED** (a recorded component carries no
+  load in the case but does in REF), **EFFECT SEEN** (components not
+  recorded, but the network differs from REF), **NO EFFECT** (the case equals
+  REF in the window; most likely not applied, logged as a warning), **NOT
+  CHECKABLE** (no REF on the same time axis or no result row in the window).
+  The model quality page carries one row `outages_<case>` per case.
+
+Every run ends with a **run summary** (`RunStats`, `log_run_summary`), also a
+failed one: time and calls per service (reading planned outages, grids and
+contingencies, the case manager with its window build and refreshes, each QDS
+and contingency analysis inside PowerFactory, reading results, comparison and
+classification, restore, building and publishing the report tables) and the
+number of calculations (QDS runs and time steps, reused cases, series and
+values read, contingency analyses created and run, n-1 study times,
+contingency load flows, classified n-1 results, report rows).
+
+Results are read one column per call: `ElmRes.GetColumnValues(IntVec, column)`
+fills a temporary IntVec `GridLens_column_buffer`, created in the running
+ComPython for the run and deleted in the restore step. Without it every value
+would be one `GetValue` call; the run summary counts both kinds of reads, so a
+slow run shows at once whether the bulk read worked. A voltage column of an
+n-1 sub-result that contains a 0 is read cell by cell, because what the bulk
+read writes into a cell inside the recording limits (code 3) is not verified.
+Planned outages are read in one pass per outage, the whole project is searched
+only when the outage folder holds none, and without a grid selection no grid
+is looked up per result column.
 
 | Category | Meaning | Examples | Editable |
 |---|---|---|---|
@@ -596,9 +659,12 @@ and not planned.
 Part 1 (released 23 October 2026): `tools/probe_contingency.py`, strictly read
 only (no `Execute`, `CreateObject`, `SetAttribute`, no `GetFromStudyCase`, which
 creates a missing command; `tests/test_probe_contingency.py` checks the source).
-It reports ComSimoutage, ComStatsim, contingency definitions, contingency
-`ElmRes`, the `ElmRes` interface and storage candidates as VERIFIED, PRESENT BUT
-UNTESTED, ABSENT, MISSING OR INACCESSIBLE or OPEN QUESTION.
+Probe 1.0 reported ComSimoutage, ComStatsim, contingency definitions,
+contingency `ElmRes`, the `ElmRes` interface and storage candidates with names
+and values. Since 23 October 2026 probe 2.0 runs in **strict privacy mode**:
+fixed labels and status tokens only, no name, path, value, study time or count,
+every PowerFactory call through a read-only gateway (see the spec,
+section 2.1). Its output may be shared; the other tools are local only.
 `tools/test_contingency.py` prepares a very small test calculation on an
 explicitly named project copy; it is disabled (`ENABLED = False`), asks before
 every write, restores and verifies – and its release is separate.
@@ -612,7 +678,8 @@ disabled.
 | implemented and tested locally (unit tests) | settings model, validation, snapshot, `classify_comparison`, removal of the time optimisation, n-0 with settings (default regression) |
 | tested with mock objects or local Tk only | case manager with two tabs, Settings tab, tooltips (Tk 8.6 on macOS); the probe against mock PowerFactory objects |
 | needs a real PowerFactory 2026 test | the probe run itself; Tk inside PowerFactory; the n-0 run with settings overrides; the report row *Settings* in the rendered PDF |
-| deliberately disabled until part 3 | n-1, (n-1)', category-B parameters, post-fault voltage limits, native storage of settings and of `GL_<scenario>_CLASSIFICATION` |
+| part 3 (n-1 run), tested with mock objects | n-1 and (n-1)' via `run_n1` / `run_n1_case` / `run_n1_sweep`, study times on the QDS grid inside the case windows, contingency grid filter, `compare_n1`, rows *n-1 <case>* on the QA page (`tests/test_n1_core.py`); needs a real PowerFactory run |
+| still read only | category-B parameters other than the contingency grids, post-fault voltage limits, native storage of settings and of `GL_<scenario>_CLASSIFICATION`, n-1 report chapters (part 4) |
 
 Prerequisites of part 3 (each answered by the probe output or by an approved
 run of `tools/test_contingency.py`):

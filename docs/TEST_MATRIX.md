@@ -9,8 +9,8 @@ Status categories:
 - **PowerFactory** – run in PowerFactory 2026 (none yet)
 - **Not verified** – open; needs PowerFactory or is not implemented
 
-Every row is **not verified in PowerFactory**. The automated suite: 454 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
-the 33 of `test_case_manager_dialog.py` open the real Tk window and are skipped only where `tkinter` is missing.
+Every row is **not verified in PowerFactory**. The automated suite: 494 tests, all run in the project `.venv` (python.org Python 3.11 with Tk 8.6);
+the 34 of `test_case_manager_dialog.py` open the real Tk window and are skipped only where `tkinter` is missing.
 
 ## Specification tests A–E
 
@@ -83,6 +83,8 @@ the 33 of `test_case_manager_dialog.py` open the real Tk window and are skipped 
 | damaged configuration named before use (8 variants) | `test_damaged_configuration_is_named_before_anything_reads_it` |
 | window that ends before it starts | `test_window_that_ends_before_it_starts_is_refused` |
 | unknown or Ignored fixed outages warned | `test_unknown_or_ignored_fixed_outages_are_warned_about` |
+| applied outages read back before each run; n-1 skip reason logged | `test_applied_text_reads_the_option_and_the_flags_back`, `test_run_output_is_structured_in_steps_cases_and_tables`, `test_run_n1_marks_every_case_when_no_contingency_analysis_exists_and_reports_on_the_qa_page` |
+| effect of each outage checked against REF in its window (APPLIED, EFFECT SEEN, NO EFFECT, NOT CHECKABLE), QA row | `test_an_outaged_line_without_load_in_its_window_is_applied`, `test_an_unrecorded_component_counts_when_the_network_differs_in_the_window`, `test_a_case_equal_to_ref_in_the_window_shows_no_effect`, `test_the_effect_is_not_checkable_without_reference_or_window_rows`, `test_outage_quality_warns_about_an_outage_without_effect` |
 | coverage text consistent with the verdict | `test_coverage_text_never_says_complete_when_the_verdict_does_not` |
 | failing comparison fails only its case, ElmRes kept | `test_a_failing_comparison_fails_only_its_own_case` |
 | memory budget stops before the next run | `test_memory_budget_stops_before_the_next_run_and_restores` |
@@ -145,10 +147,11 @@ Three levels of evidence, kept apart:
 
 | Area | What | Level | Tests |
 |---|---|---|---|
-| Probe | never calls `Execute`, `CreateObject`, `SetAttribute`, `GetFromStudyCase` or a writing `ElmRes` method; assigns no attribute; no `RUN_EXPERIMENT` | Static | `test_probe_never_calls_a_writing_method_or_assigns_an_attribute` |
-| Probe | all six sections reported; findings classified VERIFIED / PRESENT BUT UNTESTED / ABSENT / MISSING / OPEN; missing ComSimoutage reported, not created | Mock | `test_probe_reports_every_section_and_classifies_its_findings`, `test_probe_without_contingency_command_says_so_and_creates_nothing` |
-| Probe | real output from the target project | **PowerFactory – open** | Hadi runs `tools/probe_contingency.py` |
-| Test run tool | disabled, refuses a project whose name is not the configured copy, asks before writing, restores | Static + mock | `test_prepared_test_run_is_disabled_and_guarded`; **not run, needs a separate release** |
+| Probe 2.1 (strict privacy) | no artificial sensitive string or number in the output; every line an allowlisted label and token; only allowlisted reading methods called; no name, path or other attribute read; failures and crashes give error codes only; allowlist not bypassable | Mock | `test_no_sensitive_string_or_value_ever_reaches_the_output`, `test_every_output_line_is_an_allowlisted_label_with_an_allowlisted_token`, `test_only_allowlisted_methods_are_called_and_nothing_writes`, `test_no_name_path_or_other_attribute_is_read`, `test_failures_yield_only_error_codes_never_their_text`, `test_a_check_that_crashes_reports_its_category_only`, `test_a_label_or_token_outside_the_allowlist_cannot_be_printed` |
+| Probe 2.1 static analysis | imports only `sys`/`powerfactory`; no file, network, `print`, `repr`, `str()`, f-string or dynamic format; no forbidden attribute names; PowerFactory calls only through the gateway | Static | `test_static_*` (4) |
+| Probe 2.1 findings | time sweep, planned outages, results, equipment and grid attribute, ElmRes methods, sub-results, code 3, storage | Mock | `test_the_expected_findings_are_reported`, `test_without_code_three_no_sparse_indicator_is_claimed` |
+| Probe 2.1 in a real project | output free of project data | **PowerFactory – open** | Hadi runs `tools/probe_contingency.py`; check the copied text for PowerFactory's own messages |
+| Test run tool | disabled, refuses a project that is not the configured copy without naming it, asks before writing, restores; prints no names, values, study times or error texts | Static + mock | `test_prepared_test_run_is_disabled_guarded_and_prints_no_names`; **not run, needs a separate release** |
 | GUI | exactly two tabs, no results tab; problems on Case Manager; fixed background & rules under Settings | Local Tk | `test_tabs_status_line_and_problem_list`, `test_filters_stand_exactly_under_their_columns`, `test_fixed_tab_explains_*` |
 | GUI | n-0, n-1, (n-1)' shown; n-1 and (n-1)' disabled with the explanation; refused in a file | Local Tk + editor | `test_gui_14_to_16_*`, `test_gui_14_and_16_*` |
 | GUI | Settings: every setting shown with source and category; category B read only; QDS time base read only | Local Tk | `test_settings_tab_shows_every_setting_with_source_and_hover_text` |
@@ -162,3 +165,4 @@ Three levels of evidence, kept apart:
 | Classification | all ten statuses, the master-prompt examples, limit and equality boundaries, user tolerances, invalid and missing values, NOT_APPLICABLE, NOT_COMPARABLE per identity field and limit definition, same post-fault phase, precedence keeps reasons, MARGIN_REDUCED, coincident delta, pure function, n-0 statuses untouched | Test data | `test_classification.py` (34) |
 | Time base | no time optimisation left in the runtime; files with `mode` load | Test data | `test_no_time_optimisation_remains_in_the_runtime`, `test_c_kw10_and_kw40_run_over_the_complete_period_without_proposed_windows` |
 | Deliberately disabled | n-1, (n-1)', category B, post-fault voltage limits, native storage, `GL_<scenario>_CLASSIFICATION` | – | part 3 |
+| Network scope | every grid of the model listed (inactive labelled); assessed-equipment selection filters the n-0 assessment and takes precedence over `GRID_NAME_FILTER`; contingency selection stored, previewed via `ComOutage.GetObject`, never applied; warnings for missing or inactive grids; report row *Network scope* | Test data + local Tk | `test_network_scope.py` (7), `test_network_scope_lists_the_grids_of_the_model_for_selection`, `test_probe_follows_a_grid_selection_like_the_report` |

@@ -38,9 +38,13 @@ def test_defaults_are_the_values_of_the_existing_code():
 
     assert values["line_warning"] == values["transformer_warning"] == gl.LOADING_WARNING == 80.0
     assert values["line_limit"] == values["transformer_limit"] == gl.LOADING_MAX == 100.0
-    assert [(values["band{}_min".format(n)], values["band{}_max".format(n)]) for n in (1, 2, 3)] == \
-        [(minimum, maximum) for _, _, minimum, maximum in gl.VOLTAGE_LIMITS_KV]
+    assert not any(key.startswith("band") for key in values), "one voltage band in p.u. for every level"
     assert (values["voltage_min_pu"], values["voltage_max_pu"]) == (0.95, 1.05)
+    assert values["energized_min_pu"] == gl.ENERGIZED_MIN_PU and values["top_n"] == gl.TOP_N == 10
+    assert values["max_plot_points"] == gl.MAX_PLOT_POINTS and values["max_cases"] == gl.MAX_CASES
+    assert values["max_n1_times"] == gl.MAX_N1_TIMES and values["run_reference"] is gl.RUN_REFERENCE_CASE
+    assert (values["loading_appendix_delta"], values["voltage_appendix_delta"]) == (
+        gl.LOADING_APPENDIX_DELTA, gl.VOLTAGE_APPENDIX_DELTA)
     assert values["loading_change_tolerance"] == gl.LOADING_DELTA_TOLERANCE == 0.1
     assert values["voltage_change_tolerance"] == gl.VOLTAGE_DELTA_TOLERANCE == 0.001
     assert values["n1_limit_mode"] == gl.N1_LIMITS_POWERFACTORY
@@ -48,7 +52,7 @@ def test_defaults_are_the_values_of_the_existing_code():
 
 def test_voltage_proposal_and_sources_are_labelled():
     assert "proposal" in gl.SETTINGS_BY_KEY["voltage_min_pu"]["note"]
-    assert all("proposal" in gl.SETTINGS_BY_KEY["band{}_{}".format(n, side)]["note"] for n in (1, 2, 3) for side in ("min", "max"))
+    assert "proposal" in gl.SETTINGS_BY_KEY["voltage_max_pu"]["note"]
     assert gl.setting_source("line_limit") == gl.SOURCE_GRIDLENS
     assert gl.setting_source("line_limit", {"line_limit": 110.0}) == gl.SOURCE_USER
     assert gl.setting_source("contingency_set") == gl.SOURCE_POWERFACTORY
@@ -59,7 +63,8 @@ def test_calculation_parameters_are_category_b_and_read_only():
 
     assert {setting["key"] for setting in calculation} >= {"contingency_set", "post_fault_phases", "remedial_actions",
                                                             "islanding", "unsupplied_load", "calculation_method"}
-    assert not any(setting["editable"] for setting in calculation)
+    # Only the contingency grid selection can be edited: the n-1 run applies it via "Not analysed".
+    assert [setting["key"] for setting in calculation if setting["editable"]] == ["contingency_grids"]
     value, problem = gl.parse_setting("contingency_set", "all lines")
     assert value is None and "read only" in problem
     assert all(gl.setting_help(setting["key"]).count("Category B") == 1 for setting in calculation)
@@ -77,7 +82,8 @@ def test_valid_entries(key, text, expected):
 @pytest.mark.parametrize("key, text, fragment", [
     ("line_limit", "abc", "finite number"), ("line_limit", "nan", "finite number"), ("line_limit", "inf", "finite number"),
     ("line_limit", "", "finite number"), ("line_limit", True, "finite number"), ("line_limit", math.nan, "finite number"),
-    ("line_limit", "0", "greater than 0"), ("band1_min", "-1", "greater than 0"),
+    ("line_limit", "0", "greater than 0"), ("voltage_max_pu", "-1", "greater than 0"), ("top_n", "2.5", "whole number"),
+    ("max_cases", "99", "from 1 to 20"), ("run_reference", "yes", "choose one of on, off"),
     ("worsened_tolerance_loading", "-0.1", "must not be negative"), ("n1_limit_mode", "maybe", "choose one of"),
     ("unknown", "1", "unknown setting"),
 ])
@@ -88,10 +94,10 @@ def test_invalid_entries_explain_themselves(key, text, fragment):
 
 
 def test_cross_checks():
-    problems = dict(gl.validate_settings({"voltage_min_pu": 1.1, "band2_min": 250.0, "line_warning": 120.0}))
+    problems = dict(gl.validate_settings({"voltage_min_pu": 1.1, "line_warning": 120.0}))
 
     assert "must be below" in problems["voltage_min_pu"]
-    assert "must be below" in problems["band2_min"]
+    assert "must be below" in dict(gl.validate_settings({"energized_min_pu": 0.99}))["energized_min_pu"]
     assert "must not exceed" in problems["line_warning"]
     assert gl.validate_settings({}) == []
     assert gl.validate_settings("110") == [("settings", "settings must be an object of overrides")]
@@ -114,19 +120,23 @@ def test_snapshot_is_fixed_once_and_names_versions_and_sources():
     assert snapshot["values"]["line_limit"] == 110.0, "a later change does not reach the snapshot"
     assert snapshot["sources"]["line_limit"] == gl.SOURCE_USER and snapshot["sources"]["line_warning"] == gl.SOURCE_GRIDLENS
     assert snapshot["settings_version"] == gl.SETTINGS_VERSION and snapshot["classification_version"] == "1.0"
-    assert set(snapshot["calculation_parameters"].values()) == {gl.NOT_VERIFIED}
+    parameters = snapshot["calculation_parameters"]
+    assert parameters.pop("contingency_grids") == gl.SAME_AS_ASSESSMENT + " (stored, not applied yet)"
+    assert set(parameters.values()) == {gl.NOT_VERIFIED}
     assert snapshot["storage"].startswith("provisional")
 
 
 def test_activated_settings_drive_the_n0_limits_and_reset_restores_them():
-    gl.activate_settings({"line_limit": 120.0, "transformer_limit": 90.0, "band2_min": 190.0, "voltage_max_pu": 1.1})
+    gl.activate_settings({"line_limit": 120.0, "transformer_limit": 90.0, "voltage_min_pu": 0.9, "voltage_max_pu": 1.1,
+                          "top_n": 5, "run_reference": False})
 
     assert gl.loading_limit("line") == 120.0 and gl.loading_limit("transformer") == 90.0
     assert gl.excess({"category": "line"}, 125.0) == pytest.approx(5.0)
-    assert gl.voltage_band(220.0) == pytest.approx((190.0 / 220.0, 245.0 / 220.0))
-    assert gl.voltage_band(20.0) == (0.95, 1.1)
+    assert gl.voltage_band(220.0) == gl.voltage_band(20.0) == (0.9, 1.1), "the same band for every level"
+    assert gl.setting_value("top_n") == 5 and gl.setting_value("run_reference") is False
     gl.reset_settings()
     assert gl.loading_limit("line") == 100.0 and gl.voltage_band(20.0) == (0.95, 1.05)
+    assert gl.setting_value("top_n") == 10 and gl.setting_value("run_reference") is True
 
 
 def test_settings_are_stored_with_the_cases_and_do_not_touch_them(tmp_path, editor):
@@ -175,7 +185,7 @@ def test_editor_refuses_invalid_settings_and_restores_defaults(editor):
     assert rows["voltage_min_pu"][4] == gl.SOURCE_USER and rows["line_limit"][4] == gl.SOURCE_GRIDLENS
     assert rows["contingency_set"][3] == gl.NOT_VERIFIED and rows["contingency_set"][6] is False
     assert "Settings" in dict(editor.summary()[0])
-    assert "Settings: Minimum voltage, any other nominal voltage = 0.9 p.u." in editor.calculation_preview()
+    assert "Settings: Minimum voltage, every voltage level = 0.9 p.u." in editor.calculation_preview()
     editor.restore_default_settings()
     assert editor.settings_overrides() == {}
 
@@ -200,3 +210,25 @@ def test_qds_time_base_is_read_only_information():
 
     stepped = dict(gl.qds_time_info(Qds(), (1467331200.0, 1467417600.0)))
     assert "stepSize] = 2" in stepped["QDS time step"]
+
+
+def test_the_case_limit_follows_the_setting(editor):
+    assert gl.case_limit(editor.config) == gl.MAX_CASES == 5
+    assert editor.set_settings({"max_cases": "2"}) == []
+    assert gl.case_limit(editor.config) == 2
+    editor.add_case("A")
+    assert editor.limit_problem() is not None and "Settings" in editor.limit_problem()
+    too_many = dict(editor.config, cases=editor.config["cases"] + [{"id": "C9", "name": "x", "outages": []}])
+    assert any("at most 2 planning cases" in problem for problem in gl.validate_case_config(too_many))
+
+
+def test_the_results_choice_offers_the_kept_runs_and_reaches_the_request(editor):
+    editor.kept_stamps = ["261023-120000", "261022-080000"]
+    choices = editor.result_choices()
+    assert choices[0] == (gl.RESULTS_CALCULATE, None)
+    assert choices[1] == ("Re-evaluate the kept run of 2026-10-23 12:00:00", "261023-120000")
+    assert editor.set_evaluate_stamp("999999-000000") is not None and editor.evaluate_stamp is None
+    assert editor.set_evaluate_stamp("261023-120000") is None
+    assert editor.request()["evaluate_stamp"] == "261023-120000"
+    assert "Results: Re-evaluate the kept run of 2026-10-23 12:00:00 (no calculation)" in editor.calculation_preview()
+    assert "evaluate_stamp" not in editor.config, "the choice is never saved with the cases"

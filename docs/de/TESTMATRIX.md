@@ -10,7 +10,7 @@ Statuskategorien:
 - **Nicht verifiziert** – offen; braucht PowerFactory oder ist nicht umgesetzt
 
 Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
-454 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); die 33 aus `test_case_manager_dialog.py`
+494 Tests, alle in der Projekt-`.venv` (python.org-Python 3.11 mit Tk 8.6); die 34 aus `test_case_manager_dialog.py`
 öffnen das echte Tk-Fenster und werden nur übersprungen, wo `tkinter` fehlt. Die Testnamen sind englisch, wie der Code.
 
 ## Tests A–E der Vorgabe
@@ -84,6 +84,8 @@ Keine Zeile ist **in PowerFactory verifiziert**. Die automatische Testsuite:
 | beschädigte Konfiguration vor der Verwendung benannt (8 Varianten) | `test_damaged_configuration_is_named_before_anything_reads_it` |
 | Fenster endet vor seinem Beginn | `test_window_that_ends_before_it_starts_is_refused` |
 | unbekannte oder „Ignored“ feste FS gewarnt | `test_unknown_or_ignored_fixed_outages_are_warned_about` |
+| angewendete FS vor jedem Lauf zurückgelesen; Grund für ausgelassenes n-1 im Log | `test_applied_text_reads_the_option_and_the_flags_back`, `test_run_output_is_structured_in_steps_cases_and_tables`, `test_run_n1_marks_every_case_when_no_contingency_analysis_exists_and_reports_on_the_qa_page` |
+| Wirkung jeder FS gegen REF in ihrem Fenster geprüft (APPLIED, EFFECT SEEN, NO EFFECT, NOT CHECKABLE), QA-Zeile | `test_an_outaged_line_without_load_in_its_window_is_applied`, `test_an_unrecorded_component_counts_when_the_network_differs_in_the_window`, `test_a_case_equal_to_ref_in_the_window_shows_no_effect`, `test_the_effect_is_not_checkable_without_reference_or_window_rows`, `test_outage_quality_warns_about_an_outage_without_effect` |
 | Abdeckungstext passt zum Urteil | `test_coverage_text_never_says_complete_when_the_verdict_does_not` |
 | scheiternder Vergleich trifft nur seinen Fall, ElmRes bleibt | `test_a_failing_comparison_fails_only_its_own_case` |
 | Speicherbudget stoppt vor dem nächsten Lauf | `test_memory_budget_stops_before_the_next_run_and_restores` |
@@ -146,10 +148,11 @@ Drei Nachweisstufen, getrennt gehalten:
 
 | Bereich | Was | Stufe | Tests |
 |---|---|---|---|
-| Probe | ruft nie `Execute`, `CreateObject`, `SetAttribute`, `GetFromStudyCase` oder eine schreibende `ElmRes`-Methode; weist kein Attribut zu; kein `RUN_EXPERIMENT` | Statisch | `test_probe_never_calls_a_writing_method_or_assigns_an_attribute` |
-| Probe | alle sechs Abschnitte berichtet; Befunde als VERIFIED / PRESENT BUT UNTESTED / ABSENT / MISSING / OPEN eingeordnet; fehlendes ComSimoutage gemeldet, nicht angelegt | Mock | `test_probe_reports_every_section_and_classifies_its_findings`, `test_probe_without_contingency_command_says_so_and_creates_nothing` |
-| Probe | echte Ausgabe aus dem Zielprojekt | **PowerFactory – offen** | Hadi führt `tools/probe_contingency.py` aus |
-| Testlauf-Werkzeug | abgeschaltet, lehnt ein Projekt ab, das nicht die konfigurierte Kopie ist, fragt vor dem Schreiben, stellt wieder her | Statisch + Mock | `test_prepared_test_run_is_disabled_and_guarded`; **nicht ausgeführt, braucht eine eigene Freigabe** |
+| Probe 2.1 (strikte Privacy) | keine künstliche sensible Zeichenfolge oder Zahl in der Ausgabe; jede Zeile ein erlaubtes Label mit erlaubtem Token; nur erlaubte Lesemethoden aufgerufen; kein Name, Pfad oder anderes Attribut gelesen; Fehler und Abstürze ergeben nur Fehlercodes; Allowlist nicht umgehbar | Mock | `test_no_sensitive_string_or_value_ever_reaches_the_output`, `test_every_output_line_is_an_allowlisted_label_with_an_allowlisted_token`, `test_only_allowlisted_methods_are_called_and_nothing_writes`, `test_no_name_path_or_other_attribute_is_read`, `test_failures_yield_only_error_codes_never_their_text`, `test_a_check_that_crashes_reports_its_category_only`, `test_a_label_or_token_outside_the_allowlist_cannot_be_printed` |
+| Probe 2.1 statische Analyse | Importe nur `sys`/`powerfactory`; keine Datei, kein Netzwerk, kein `print`, `repr`, `str()`, f-String oder dynamisches Format; keine verbotenen Attributnamen; PowerFactory-Aufrufe nur über das Gateway | Statisch | `test_static_*` (4) |
+| Probe 2.1 Befunde | Time Sweep, Planned Outages, Ergebnisse, Betriebsmittel und Grid-Attribut, ElmRes-Methoden, Unterergebnisse, Code 3, Ablage | Mock | `test_the_expected_findings_are_reported`, `test_without_code_three_no_sparse_indicator_is_claimed` |
+| Probe 2.1 in einem echten Projekt | Ausgabe frei von Projektdaten | **PowerFactory – offen** | Hadi führt `tools/probe_contingency.py` aus; den kopierten Text auf eigene PowerFactory-Meldungen prüfen |
+| Testlauf-Werkzeug | abgeschaltet, lehnt ein Projekt ab, das nicht die konfigurierte Kopie ist, ohne es zu nennen, fragt vor dem Schreiben, stellt wieder her; gibt keine Namen, Werte, Zeitpunkte oder Fehlertexte aus | Statisch + Mock | `test_prepared_test_run_is_disabled_guarded_and_prints_no_names`; **nicht ausgeführt, braucht eine eigene Freigabe** |
 | GUI | genau zwei Reiter, kein Ergebnis-Reiter; Probleme im Case Manager; Fixed background & rules unter Settings | Lokales Tk | `test_tabs_status_line_and_problem_list`, `test_filters_stand_exactly_under_their_columns`, `test_fixed_tab_explains_*` |
 | GUI | n-0, n-1, (n-1)' sichtbar; n-1 und (n-1)' deaktiviert mit Erklärung; in einer Datei abgelehnt | Lokales Tk + Editor | `test_gui_14_to_16_*`, `test_gui_14_and_16_*` |
 | GUI | Settings: jede Einstellung mit Herkunft und Kategorie; Kategorie B schreibgeschützt; QDS-Zeitbasis schreibgeschützt | Lokales Tk | `test_settings_tab_shows_every_setting_with_source_and_hover_text` |
@@ -163,3 +166,4 @@ Drei Nachweisstufen, getrennt gehalten:
 | Klassifizierung | alle zehn Status, die Beispiele des Master-Prompts, Grenzwert- und Gleichheitsgrenzen, Benutzertoleranzen, ungültige und fehlende Werte, NOT_APPLICABLE, NOT_COMPARABLE je Identitätsfeld und Grenzwertdefinition, gleiche Post-Fault-Phase, Rangfolge behält Gründe, MARGIN_REDUCED, zeitgleiche Differenz, reine Funktion, n-0-Status unberührt | Testdaten | `test_classification.py` (34) |
 | Zeitbasis | keine Zeitoptimierung mehr in der Laufzeit; Dateien mit `mode` laden | Testdaten | `test_no_time_optimisation_remains_in_the_runtime`, `test_c_kw10_and_kw40_run_over_the_complete_period_without_proposed_windows` |
 | Bewusst deaktiviert | n-1, (n-1)', Kategorie B, Post-Fault-Spannungsgrenzen, native Ablage, `GL_<Szenario>_CLASSIFICATION` | – | Teil 3 |
+| Netzumfang | jedes Grid des Modells gelistet (inaktive gekennzeichnet); Auswahl der bewerteten Betriebsmittel filtert die n-0-Bewertung und hat Vorrang vor `GRID_NAME_FILTER`; Contingency-Auswahl gespeichert, per `ComOutage.GetObject` als Vorschau, nie angewendet; Warnungen für fehlende oder inaktive Grids; Berichtszeile *Network scope* | Testdaten + lokales Tk | `test_network_scope.py` (7), `test_network_scope_lists_the_grids_of_the_model_for_selection`, `test_probe_follows_a_grid_selection_like_the_report` |
