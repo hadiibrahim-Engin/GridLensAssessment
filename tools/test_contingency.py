@@ -14,13 +14,21 @@ to do anything unless all of these hold:
 
 Every value it writes is recorded first, restored in reverse order afterwards
 and read back to verify the restoration, also after an error. A failed
-restoration is printed as RESTORE FAILED with the attribute and both values.
+restoration is printed as RESTORE FAILED with the attribute name only.
+
+Privacy: the output names no project, study case, object, value, study time or
+error text; it prints PowerFactory attribute names, PASSED/FAILED and error
+types only. Two things are read locally and never printed, because the safety
+of a writing test needs them: the project name (compared with
+PROJECT_COPY_NAME) and the study times (compared with the QDS steps). Unlike
+tools/probe_contingency.py this tool is therefore not a strict-privacy tool.
 
 Tests:
 
 T1  Time sweep: write SWEEP_SETTINGS to the ComSimoutage, run it once for at
-    most MAX_TIME_STEPS steps of the ComStatsim period, and compare the time
-    stamps in its result object with the QDS time steps.
+    most MAX_TIME_STEPS steps of the ComStatsim period, and compare the study
+    times of its sub-results (p_rescnt, one ElmRes per study time) with the
+    QDS time steps; only the comparison is printed.
 T2  ElmRes round trip (prepared, not implemented): once the probe has shown
     the ElmRes write methods and their arguments, create one ElmRes named
     GridLens_TEST_<stamp> in the study case of the copy, write TEST_VALUES,
@@ -28,7 +36,7 @@ T2  ElmRes round trip (prepared, not implemented): once the probe has shown
 """
 
 ENABLED = False
-# The exact name of the project copy, e.g. 'Transmission System - GridLens TEST copy'.
+# The exact name of the project copy, e.g. '<project> - GridLens TEST copy'.
 PROJECT_COPY_NAME = ""
 COPY_MARKER = "copy"
 # Attribute -> value written to the ComSimoutage for T1, taken from the probe output.
@@ -38,6 +46,7 @@ MAX_TIME_STEPS = 3
 # ElmRes methods for T2, in call order, as the probe reported them (e.g. ("Init", "AddVariable", "Write")).
 ELMRES_WRITE = ()
 TEST_VALUES = (12.5, 100.0, 101.25)
+RESTORE_ERROR = object()
 
 
 def emit(app, message=""):
@@ -81,8 +90,9 @@ class Restorer:
         self.changes.append((obj, attribute, original))
         setattr(obj, attribute, value)
         if getattr(obj, attribute) != value:
-            raise RuntimeError("{}.{} did not accept {!r}".format(name_of(obj), attribute, value))
-        emit(self.app, "  wrote {}.{} = {!r} (was {!r})".format(name_of(obj), attribute, value, original))
+            raise RuntimeError("an attribute did not accept the value")
+        # Only the PowerFactory attribute name: no object name, no value (privacy).
+        emit(self.app, "  wrote attribute {}".format(attribute))
 
     def restore(self):
         failures = []
@@ -90,10 +100,10 @@ class Restorer:
             try:
                 setattr(obj, attribute, original)
                 now = getattr(obj, attribute)
-            except Exception as exc:
-                now = "error: {}".format(exc)
+            except Exception:
+                now = RESTORE_ERROR
             if now != original:
-                failures.append("{}.{}: expected {!r}, found {!r}".format(name_of(obj), attribute, original, now))
+                failures.append("attribute {}".format(attribute))
         self.changes = []
         for failure in failures:
             emit(self.app, "  RESTORE FAILED " + failure)
@@ -111,7 +121,8 @@ def preconditions(app):
     if not PROJECT_COPY_NAME or COPY_MARKER.lower() not in PROJECT_COPY_NAME.lower():
         return "PROJECT_COPY_NAME must name the project copy and contain {!r}".format(COPY_MARKER)
     if name != PROJECT_COPY_NAME:
-        return "the active project is {!r}, not the configured copy {!r}".format(name, PROJECT_COPY_NAME)
+        # The name is compared locally and never printed.
+        return "the active project is not the configured copy (PROJECT_COPY_NAME)"
     if app.GetActiveStudyCase() is None:
         return "no active study case"
     return None
@@ -140,10 +151,10 @@ def test_time_sweep(app, study_case):
         emit(app, "T1 skipped: SWEEP_SETTINGS is empty; fill it in from the probe output.")
         return None
     command = only(study_case, "ComSimoutage")
-    expected = qds_steps(only(study_case, "ComStatsim"))
-    if not confirm("T1 writes to ComSimoutage '{}':\n{}\nand runs it for {} time step(s). Continue?".format(
-            name_of(command), "\n".join("{} = {!r}".format(key, value) for key, value in SWEEP_SETTINGS.items()),
-            len(expected))):
+    steps = qds_steps(only(study_case, "ComStatsim"))
+    if not confirm("T1 writes to the ComSimoutage of the active study case:\n{}\nand runs it for {} time step(s). "
+                   "Continue?".format("\n".join("{} = {!r}".format(key, value) for key, value in SWEEP_SETTINGS.items()),
+                                      len(steps))):
         emit(app, "T1 not confirmed; nothing written.")
         return None
     restorer = Restorer(app)
@@ -152,20 +163,16 @@ def test_time_sweep(app, study_case):
             restorer.write(command, attribute, value)
         code = command.Execute()
         emit(app, "  ComSimoutage.Execute() returned {}".format(code))
-        result = getattr(command, "p_res", None) or getattr(command, "results", None)
+        # The probe found the AC results in p_rescnt, one sub-result ElmRes per study time.
+        result = getattr(command, "p_rescnt", None)
         if result is None:
-            emit(app, "  no result object bound to the command; time stamps cannot be compared")
+            emit(app, "  no AC result object bound to the command; the study times cannot be compared")
             return False
-        result.Load()
-        try:
-            stamps = sorted({result.GetValue(row, -1)[1] for row in range(result.GetNumberOfRows())})
-        finally:
-            result.Release()
-        emit(app, "  expected QDS steps: {}".format(expected))
-        emit(app, "  time stamps found : {}".format(stamps))
-        matches = stamps == expected
-        emit(app, "T1 {}: contingency time stamps {} the QDS steps".format("PASSED" if matches else "FAILED",
-                                                                          "equal" if matches else "differ from"))
+        found = [child.GetAttribute("cnttime") for child in result.GetContents("*.ElmRes") or []]
+        matches = sorted(found) == sorted(steps)
+        # Privacy: only the comparison is printed, never the study times themselves.
+        emit(app, "T1 {}: the study times of the time sweep {} the QDS steps".format(
+            "PASSED" if matches else "FAILED", "equal" if matches else "differ from"))
         return matches
     finally:
         if not restorer.restore():
@@ -197,7 +204,8 @@ def main():
             outcome = test(app, study_case)
         except Exception as exc:
             outcome = False
-            emit(app, "{} stopped: {}: {}".format(test.__name__, type(exc).__name__, exc))
+            # Only the type of the error: its text may contain names or paths.
+            emit(app, "{} stopped: {}".format(test.__name__, type(exc).__name__))
         emit(app, "{}: {}".format(test.__name__, {True: "passed", False: "failed", None: "not run"}[outcome]))
 
 

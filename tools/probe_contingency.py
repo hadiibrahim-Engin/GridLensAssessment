@@ -34,7 +34,7 @@ rules with artificial objects; that is no guarantee for an unknown real project
 
 import sys
 
-PROBE_VERSION = "2.1"
+PROBE_VERSION = "2.2"
 PRIVACY_MODE = "STRICT"
 
 # --- What may be called, checked and printed --------------------------------
@@ -42,12 +42,13 @@ PRIVACY_MODE = "STRICT"
 #   Application.GetActiveStudyCase / GetActiveProject / GetInterfaceVersion / GetCalcRelevantObjects,
 #   DataObject.GetClassName / GetContents / HasAttribute / GetAttributeType,
 #   ElmRes.Load / Release / GetNumberOfRows / GetNumberOfColumns / GetValue / GetVariable,
-#   ComOutage.GetObject ("get the element stored in line ...").
+#   ComOutage.GetObject ("get the element stored in line ..."),
+#   ElmRes.GetRelCase ("get the contingency object for the given case number"), called with fixed numbers only.
 ALLOWED_CALLS = frozenset((
     "GetActiveStudyCase", "GetActiveProject", "GetInterfaceVersion", "GetCalcRelevantObjects",
     "GetClassName", "GetContents", "HasAttribute", "GetAttributeType",
     "Load", "Release", "GetNumberOfRows", "GetNumberOfColumns", "GetValue", "GetVariable",
-    "GetObject",
+    "GetObject", "GetRelCase",
 ))
 # Attribute values that may be read: references to the result objects, used and never shown.
 REFERENCE_ATTRIBUTES = frozenset(("p_rescnt", "p_rescntDC"))
@@ -80,6 +81,12 @@ CONTINGENCY_VARIABLES = frozenset(("c:maxCntcy", "c:cntcy", "b:icntcy", "b:ifcas
 PHASE_VARIABLES = frozenset(("b:tphase", "c:tphase", "c:timephase"))
 LOADING_VARIABLES = frozenset(("c:loading", "c:maxLoading", "m:loading"))
 VOLTAGE_VARIABLES = frozenset(("m:u", "m:u1", "c:maxvolt", "c:minvolt"))
+# Every standard variable name of these lists is reported on its own: recorded or not.
+REPORTED_VARIABLES = tuple(sorted(CONTINGENCY_VARIABLES | PHASE_VARIABLES | LOADING_VARIABLES | VOLTAGE_VARIABLES))
+# GetRelCase is tried with these fixed case numbers only; no number is ever taken from a result cell.
+REL_CASE_NUMBERS = (0, 1, 2, 3)
+# Variable names (never values) are read for at most this many columns.
+VARIABLE_COLUMNS = 5000
 STORAGE_CLASSES = ("IntDplmap", "IntDplvec", "IntFolder")
 # Bounds of the GetValue status sample: rows x columns of one result object.
 SAMPLE_ROWS, SAMPLE_COLUMNS = 50, 40
@@ -91,10 +98,11 @@ TOKENS = frozenset((
     "TRUE", "FALSE", "NO", "PRESENT", "ABSENT", "AVAILABLE", "AVAILABLE_UNTESTED", "NOT_AVAILABLE",
     "DETECTED", "NOT_DETECTED", "NOT_VERIFIED", "NOT_VERIFIED_PRIVACY_RESTRICTION", "NOT_APPLICABLE", "STRICT",
     "INTEGER", "INTEGER64", "DOUBLE", "STRING", "OBJECT", "INTEGER_VEC", "DOUBLE_VEC", "STRING_VEC", "OBJECT_VEC",
-    "OTHER_TYPE",
+    "OTHER_TYPE", "INTEGER64_VEC", "DOUBLE_MAT", "INVALID", "CODE_0", "CODE_1", "CODE_2", "CODE_3", "CODE_OTHER",
 ))
+# The members of PowerFactory's AttributeType (Python reference, DataObject.GetAttributeType).
 ATTRIBUTE_TYPES = frozenset(("INTEGER", "INTEGER64", "DOUBLE", "STRING", "OBJECT", "INTEGER_VEC", "DOUBLE_VEC",
-                             "STRING_VEC", "OBJECT_VEC"))
+                             "STRING_VEC", "OBJECT_VEC", "INTEGER64_VEC", "DOUBLE_MAT", "INVALID"))
 # Labels whose value is a small integer (validated) instead of a token.
 INTEGER_LABELS = frozenset(("Interface version", "Python major", "Python minor"))
 SECTIONS = ("PowerFactory API", "Study case", "Contingency Analysis", "Contingency set", "Contingency Definition",
@@ -122,7 +130,10 @@ def _labels():
     labels |= {"AC result object", "Readable", "Rows present", "Columns present", "Sub-results per study time",
                "Sub-result readable", "Index column readable", "Sparse recording indicator",
                "Loading variables recorded", "Voltage variables recorded", "Contingency identification",
-               "Time phase identification", "Time identification"}
+               "Time phase identification", "Time identification", "Sub-result rows present",
+               "Sub-result columns present", "Index column status", "Index column status (column -1)",
+               "Row-to-contingency mapping (GetRelCase)"}
+    labels |= {"Variable {}".format(name) for name in REPORTED_VARIABLES}
     labels |= {"Grids readable", "Element grid attribute"}
     labels |= {"{} instances".format(name) for name in STORAGE_CLASSES}
     labels |= set(PRIVACY_LABELS)
@@ -211,8 +222,13 @@ class ReadOnlyApi:
             kind = self.call(obj, "GetAttributeType", attribute)
         except ProbeError:
             return "NOT_VERIFIED"
-        # Only a known type keyword is used; anything else is reported as OTHER_TYPE.
-        keyword = kind.split(",")[0].strip().upper() if isinstance(kind, str) else ""
+        # PowerFactory returns an AttributeType member; its name (INTEGER, DOUBLE, ...) is used. A text is
+        # reduced to its first keyword. Only a known keyword is reported; anything else is OTHER_TYPE.
+        member = getattr(kind, "name", None)
+        if isinstance(member, str):
+            keyword = member.upper()
+        else:
+            keyword = kind.split(",")[0].strip().upper() if isinstance(kind, str) else ""
         return keyword if keyword in ATTRIBUTE_TYPES else "OTHER_TYPE"
 
     def reference(self, obj, attribute):
@@ -357,10 +373,17 @@ def _status(returned):
     return None
 
 
+def _code_token(code):
+    if code in (0, 1, 2, 3):
+        return "CODE_{}".format(code)
+    return "CODE_OTHER" if code is not None else "NOT_VERIFIED"
+
+
 def _inspect(api, result):
-    """Structure of one result object as booleans; values are never kept or shown."""
+    """Structure of one result object as booleans and status codes; values are never kept or shown."""
     found = dict.fromkeys(("readable", "rows", "columns", "index", "sparse", "contingency", "phase", "loading",
-                           "voltage"), False)
+                           "voltage", "relcase"), False)
+    found.update(variables=set(), index_code=None, index_code_last=None)
     try:
         api.call(result, "Load")
     except ProbeError:
@@ -372,17 +395,29 @@ def _inspect(api, result):
         found["readable"] = True
         rows, columns = int(rows), int(columns)
         found["rows"], found["columns"] = rows > 0, columns > 0
-        for column in range(min(columns, SAMPLE_COLUMNS)):
+        for column in range(min(columns, VARIABLE_COLUMNS)):
             variable = api.call(result, "GetVariable", column)
-            if isinstance(variable, str):
-                found["contingency"] |= variable in CONTINGENCY_VARIABLES
-                found["phase"] |= variable in PHASE_VARIABLES
-                found["loading"] |= variable in LOADING_VARIABLES
-                found["voltage"] |= variable in VOLTAGE_VARIABLES
+            # Only names of the fixed list are kept; any other variable name is dropped at once.
+            if isinstance(variable, str) and variable in REPORTED_VARIABLES:
+                found["variables"].add(variable)
+        found["contingency"] = bool(found["variables"] & CONTINGENCY_VARIABLES)
+        found["phase"] = bool(found["variables"] & PHASE_VARIABLES)
+        found["loading"] = bool(found["variables"] & LOADING_VARIABLES)
+        found["voltage"] = bool(found["variables"] & VOLTAGE_VARIABLES)
         for row in range(min(rows, SAMPLE_ROWS)):
-            found["index"] |= _status(api.call(result, "GetValue", row)) == CODE_OK
+            code = _status(api.call(result, "GetValue", row))
+            found["index_code"] = code if found["index_code"] is None else found["index_code"]
+            found["index"] |= code == CODE_OK
+            last = _status(api.call(result, "GetValue", row, -1))
+            found["index_code_last"] = last if found["index_code_last"] is None else found["index_code_last"]
             for column in range(min(columns, SAMPLE_COLUMNS)):
                 found["sparse"] |= _status(api.call(result, "GetValue", row, column)) == CODE_SPARSE
+        for number in REL_CASE_NUMBERS:
+            try:
+                case = api.call(result, "GetRelCase", number)
+            except ProbeError:
+                continue
+            found["relcase"] |= case is not None and api.class_of(case) == "ComOutage"
     except ProbeError:
         found["readable"] = False
     finally:
@@ -408,7 +443,16 @@ def check_result_structure(api, report, state):
     if children:
         sample = _inspect(api, children[0])
         report.add("Sub-result readable", flag(sample["readable"]))
+        report.add("Sub-result rows present", flag(sample["rows"]))
+        report.add("Sub-result columns present", flag(sample["columns"]))
     report.add("Index column readable", flag(sample["index"]))
+    # The first status code of the index column, with the column omitted and with column -1; never the value.
+    report.add("Index column status", _code_token(sample["index_code"]))
+    report.add("Index column status (column -1)", _code_token(sample["index_code_last"]))
+    relcase = sample["relcase"] or top["relcase"]
+    report.add("Row-to-contingency mapping (GetRelCase)", flag(relcase, "DETECTED", "NOT_DETECTED"))
+    for name in REPORTED_VARIABLES:
+        report.add("Variable {}".format(name), flag(name in sample["variables"], "DETECTED", "NOT_DETECTED"))
     report.add("Sparse recording indicator", flag(sample["sparse"], "DETECTED", "NOT_DETECTED"))
     report.add("Loading variables recorded", flag(sample["loading"], "DETECTED", "NOT_DETECTED"))
     report.add("Voltage variables recorded", flag(sample["voltage"], "DETECTED", "NOT_DETECTED"))
