@@ -441,24 +441,49 @@ def is_dc_terminal(obj):
     """ElmTerm.systype 1 marks a DC terminal; its voltage is no AC magnitude."""
     return class_name(obj) == 'ElmTerm' and finite_number(safe_attr(obj, 'systype')) == 1.0
 
-def read_column(elmres, column, rows):
-    reader = getattr(elmres, 'GetColumnValues', None)
-    if reader is not None:
+# An IntVec that ElmRes.GetColumnValues(vector, column) fills with a whole column in one call; without it
+# every value is one GetValue call. Created in the running ComPython for the run and deleted afterwards.
+COLUMN_BUFFER = None
+COLUMN_BUFFER_NAME = 'GridLens_column_buffer'
+
+
+def open_column_buffer(app):
+    """Create the IntVec for column reads in the running script; None (cell by cell) when that is not possible."""
+    global COLUMN_BUFFER
+    try:
+        script = app.GetCurrentScript()
+        vector = script.CreateObject('IntVec', COLUMN_BUFFER_NAME) if script is not None else None
+    except Exception:
+        vector = None
+    COLUMN_BUFFER = vector if class_name(vector) == 'IntVec' else None
+    return COLUMN_BUFFER
+
+
+def close_column_buffer():
+    global COLUMN_BUFFER
+    vector, COLUMN_BUFFER = COLUMN_BUFFER, None
+    if vector is not None:
         try:
-            raw = reader(column)
+            vector.Delete()
         except Exception:
-            raw = None
-        if raw is not None:
-            if isinstance(raw, tuple) and len(raw) == 2 and _is_sequence(raw[1]):
-                code = finite_number(raw[0])
-                raw = raw[1] if code == 0.0 else None
-        if raw is not None:
-            if not _is_sequence(raw):
-                raw = None
-            elif len(raw) != rows:
-                raise RuntimeError('ElmRes column {} returned {} values instead of {}.'.format(column, len(raw), rows))
-            else:
-                return [finite_number(value) for value in raw]
+            pass
+
+
+def read_column(elmres, column, rows, buffer=None):
+    """All `rows` values of one column: one GetColumnValues call into the IntVec, else one GetValue per cell."""
+    vector = buffer if buffer is not None else COLUMN_BUFFER
+    if vector is not None:
+        try:
+            code = finite_number(elmres.GetColumnValues(vector, column))
+            values = safe_attr(vector, 'V')
+        except Exception:
+            code, values = None, None
+        if code == 0.0 and _is_sequence(values):
+            if len(values) != rows:
+                raise RuntimeError('ElmRes column {} returned {} values instead of {}.'.format(column, len(values), rows))
+            RUN_STATS.count('columns_bulk')
+            return [finite_number(value) for value in values]
+    RUN_STATS.count('values_cellwise', rows)
     return [result_value(elmres, row, column) for row in range(rows)]
 
 def _is_sequence(value):
@@ -502,6 +527,8 @@ def collect_series(elmres, counters=None):
     grids = {}
     dc_nodes = set()
     recorded = {}  # what the result object records that GridLens does not assess, for the error message
+    # Without a grid selection every element is assessed, so its grid is not read at all.
+    filtered = bool(current_setting('monitoring_grids') or GRID_NAME_FILTER)
     for column in range(columns):
         try:
             obj = elmres.GetObject(column)
@@ -515,17 +542,19 @@ def collect_series(elmres, counters=None):
                 recorded[name] = recorded.get(name, 0) + 1
             continue
         # Before the full path is fetched and before any value is read.
-        grid_name = element_grid_name(obj)
-        in_scope = grid_in_scope(grid_name)
-        counted = grids.setdefault(grid_name or '(no grid)', [0, in_scope])
-        counted[0] += 1
-        if not in_scope:
-            out_of_scope += 1
-            continue
+        if filtered:
+            grid_name = element_grid_name(obj)
+            in_scope = grid_in_scope(grid_name)
+            counted = grids.setdefault(grid_name or '(no grid)', [0, in_scope])
+            counted[0] += 1
+            if not in_scope:
+                out_of_scope += 1
+                continue
+        identity = object_key(obj)
         if category == 'voltage' and is_dc_terminal(obj):
-            dc_nodes.add(object_key(obj))
+            dc_nodes.add(identity)
             continue
-        key = (category, object_key(obj))
+        key = (category, identity)
         priority = VARIABLES[category].index(variable)
         if key not in chosen or priority < chosen[key][0]:
             chosen[key] = (priority, column, obj, variable)
@@ -1271,6 +1300,8 @@ def classify_comparison(reference, scenario, parameters=None):
 # ComOutage.outserv ("Not analysed") removes a contingency.
 # ---------------------------------------------------------------------------
 N1_COMMAND_CLASS = 'ComSimoutage'
+# ComOutage.GetObject(line) is read for at most this many lines per contingency.
+MAX_CONTINGENCY_ELEMENTS = 200
 N1_PLANNED_OPTION = 'isPlannedOutages'
 N1_TIMES_ATTRIBUTE, N1_IGNORE_ATTRIBUTE = 'studyTime', 'bIgnoreTime'
 N1_RESULT_ATTRIBUTE = 'p_rescnt'
@@ -1332,7 +1363,7 @@ def _recording_limits(command):
     return found
 
 
-def read_n1_results(command, in_scope=element_in_scope):
+def read_n1_results(source, in_scope=element_in_scope, recording_limits=None):
     """{study time: {(contingency key, element key, quantity): value or None}} plus the element and contingency names.
 
     None marks code 3, a value inside the recording limits. Only the
@@ -1340,7 +1371,8 @@ def read_n1_results(command, in_scope=element_in_scope):
     neither written nor marked code 3 is left out (no artificial zero).
     """
     found = {'times': {}, 'elements': {}, 'contingencies': {}, 'categories': {}, 'nominal_kv': {}}
-    result = safe_attr(command, N1_RESULT_ATTRIBUTE)
+    from_command = class_name(source) == N1_COMMAND_CLASS
+    result = safe_attr(source, N1_RESULT_ATTRIBUTE) if from_command else source
     subs = [item for item in (_contents(result, '*.ElmRes') if result is not None else []) if class_name(item) == 'ElmRes']
     wanted = {variable: quantity for quantity, variables in N1_VARIABLES.items() for variable in variables}
     for sub in subs:
@@ -1363,24 +1395,59 @@ def read_n1_results(command, in_scope=element_in_scope):
                 if quantity == 'voltage':
                     found['nominal_kv'][key] = finite_number(safe_attr(obj, 'uknom'))
                 columns.append((column, key, quantity))
-            for row in range(int(sub.GetNumberOfRows())):
+            rows = int(sub.GetNumberOfRows())
+            contingencies = []
+            for row in range(rows):
                 code, outage = _status_pair(sub.GetObjectValue(row))
-                if code != 0 or outage is None:
-                    continue
-                contingency = object_key(outage)
-                found['contingencies'][contingency] = object_name(outage)
-                for column, key, quantity in columns:
-                    code, value = _status_pair(sub.GetValue(row, column))
-                    if code == 0 and finite_number(value) is not None:
-                        values[(contingency, key, quantity)] = finite_number(value)
-                    elif code == CODE_NOT_RECORDED:
-                        values[(contingency, key, quantity)] = None
+                contingency = object_key(outage) if code == 0 and outage is not None else None
+                if contingency is not None:
+                    found['contingencies'].setdefault(contingency, object_name(outage))
+                contingencies.append(contingency)
+            for column, key, quantity in columns:
+                for row, value in enumerate(_n1_column(sub, column, rows, quantity)):
+                    contingency = contingencies[row]
+                    if contingency is None or value is _ABSENT:
+                        continue
+                    values[(contingency, key, quantity)] = value
         finally:
             try:
                 sub.Release()
             except Exception:
                 pass
-    found['recording_limits'] = _recording_limits(command)
+    found['recording_limits'] = _recording_limits(source) if from_command else (recording_limits or {})
+    return found
+
+
+_ABSENT = object()
+
+
+def _n1_column(sub, column, rows, quantity='loading'):
+    """One column of an n-1 sub-result: a value, None for code 3 (inside the recording limits) or _ABSENT.
+
+    The whole column comes in one GetColumnValues call when it holds a value
+    in every row; otherwise each cell is read to tell code 3 from a missing
+    value. What the bulk read puts into a code-3 cell is not verified: 0 % is
+    harmless for loading (inside the recording limit anyway), but a voltage
+    column with a 0 is read cell by cell.
+    """
+    vector = COLUMN_BUFFER
+    if vector is not None:
+        try:
+            code = finite_number(sub.GetColumnValues(vector, column))
+            bulk = safe_attr(vector, 'V')
+        except Exception:
+            code, bulk = None, None
+        if code == 0.0 and _is_sequence(bulk) and len(bulk) == rows:
+            numbers = [finite_number(value) for value in bulk]
+            if all(number is not None and (quantity == 'loading' or number > 0.0) for number in numbers):
+                RUN_STATS.count('columns_bulk')
+                return numbers
+    RUN_STATS.count('values_cellwise', rows)
+    found = []
+    for row in range(rows):
+        code, value = _status_pair(sub.GetValue(row, column))
+        found.append(finite_number(value) if code == 0 and finite_number(value) is not None
+                     else None if code == CODE_NOT_RECORDED else _ABSENT)
     return found
 
 
@@ -2967,7 +3034,8 @@ class RunStats:
     COUNT_LABELS = (
         ('qds_runs', 'QDS runs (ComStatsim.Execute)'), ('qds_steps', 'QDS time steps calculated'),
         ('reused_cases', 'cases reused without a QDS run'), ('series', 'result series read'),
-        ('values', 'result values read'), ('n1_created', 'contingency analyses created'),
+        ('values', 'result values read'), ('columns_bulk', 'result columns read in one call (GetColumnValues)'),
+        ('values_cellwise', 'result values read one by one (GetValue, slow)'), ('n1_created', 'contingency analyses created'),
         ('n1_sweeps', 'contingency analysis runs (ComSimoutage.Execute)'), ('n1_times', 'n-1 study times calculated'),
         ('n1_loadflows', 'contingency load flows (study time x contingency)'),
         ('n1_classified', 'n-1 results classified'), ('report_rows', 'report table rows built'))
@@ -3139,11 +3207,8 @@ def _first_attribute(obj, names):
     return None
 
 
-def _outage_details(outage):
-    """Collect display-only outage context without exposing full PF paths."""
-    related = []
-    for attribute in OUTAGE_EQUIPMENT_ATTRIBUTES:
-        related.extend(_as_objects(safe_attr(outage, attribute)))
+def _outage_parts(outage):
+    """(actions, {key: object}) of an outage, read once: its children and the equipment that it and they name."""
     try:
         children = outage.GetContents("*", 1) or []
     except TypeError:
@@ -3154,23 +3219,23 @@ def _outage_details(outage):
     except Exception:
         children = []
     actions = []
-    for child in children:
-        child_class = class_name(child)
-        child_name = object_name(child)
-        if child_class.startswith(("Evt", "Sta", "Int")):
-            actions.append("{} {}".format(child_class, child_name).strip())
+    related = {}
+    for holder in [outage] + list(children):
+        if holder is not outage:
+            holder_class = class_name(holder)
+            if holder_class.startswith(("Evt", "Sta", "Int")):
+                actions.append("{} {}".format(holder_class, object_name(holder)).strip())
         for attribute in OUTAGE_EQUIPMENT_ATTRIBUTES:
-            related.extend(_as_objects(safe_attr(child, attribute)))
-    equipment = []
-    seen = set()
-    for item in related:
-        if isinstance(item, (str, int, float, bool)):
-            continue
-        key = object_key(item)
-        if key in seen or item is outage:
-            continue
-        seen.add(key)
-        equipment.append((class_name(item), object_name(item)))
+            for item in _as_objects(safe_attr(holder, attribute)):
+                if not isinstance(item, (str, int, float, bool)) and item is not outage:
+                    related.setdefault(object_key(item), item)
+    return actions, related
+
+
+def _outage_details(outage, parts=None):
+    """Collect display-only outage context without exposing full PF paths."""
+    actions, related = parts or _outage_parts(outage)
+    equipment = [(class_name(item), object_name(item)) for item in related.values()]
     equipment.sort(key=lambda entry: (entry[1].casefold(), entry[0]))
     equipment_names = ", ".join(name for _, name in equipment)
     equipment_types = ", ".join(sorted({kind for kind, _ in equipment if kind}))
@@ -3183,37 +3248,28 @@ def _outage_details(outage):
 
 
 def _find_project_outages(app):
-    """Return unique planned outages from the operational-library folder."""
-    roots = []
+    """Return unique planned outages from the operational-library folder.
+
+    The whole active project is searched only when the outage folder yields
+    none, because a recursive search of a large project is expensive.
+    """
+    folders = []
     getter = getattr(app, "GetProjectFolder", None)
     if callable(getter):
         for key in ("outage", "outages"):
             try:
-                roots.extend(_as_objects(getter(key)))
+                folders.extend(_as_objects(getter(key)))
             except Exception:
                 pass
-    try:
-        roots.extend(_as_objects(app.GetActiveProject()))
-    except Exception:
-        pass
-    found = []
-    successful_queries = 0
-    for root in roots:
-        for outage_class in OUTAGE_CLASSES:
-            pattern = "*.{}".format(outage_class)
-            try:
-                values = root.GetContents(pattern, 1) or []
-                successful_queries += 1
-            except TypeError:
-                try:
-                    values = root.GetContents(pattern) or []
-                    successful_queries += 1
-                except Exception:
-                    values = []
-            except Exception:
-                values = []
-            found.extend(values)
-    if successful_queries == 0:
+    found, queries = _outages_below(folders)
+    if not found:
+        try:
+            project = _as_objects(app.GetActiveProject())
+        except Exception:
+            project = []
+        more, more_queries = _outages_below(project)
+        found, queries = found + more, queries + more_queries
+    if queries == 0:
         raise GridLensError(
             "Planned-outage discovery could not query the operational library "
             "or active project. No calculation was started.")
@@ -3225,50 +3281,51 @@ def _find_project_outages(app):
         object_name(item).casefold(), class_name(item), object_key(item)))
 
 
+def _outages_below(roots):
+    """(outages, successful queries) of a recursive search below each root."""
+    found, queries = [], 0
+    for root in roots:
+        for outage_class in OUTAGE_CLASSES:
+            pattern = "*.{}".format(outage_class)
+            try:
+                values = root.GetContents(pattern, 1) or []
+                queries += 1
+            except TypeError:
+                try:
+                    values = root.GetContents(pattern) or []
+                    queries += 1
+                except Exception:
+                    values = []
+            except Exception:
+                values = []
+            found.extend(values)
+    return found, queries
+
+
 BRANCH_CLASSES = ("ElmLne", "ElmTr2", "ElmTr3", "ElmCoup")
 
 
-def outage_branches(outage):
+def outage_branches(outage, parts=None):
     """Branches an outage switches off, from its components and its actions."""
-    related = []
-    holders = [outage]
-    try:
-        holders += list(outage.GetContents("*", 1) or [])
-    except Exception:
-        pass
-    for holder in holders:
-        for attribute in OUTAGE_EQUIPMENT_ATTRIBUTES:
-            related.extend(_as_objects(safe_attr(holder, attribute)))
-    unique = {}
-    for item in related:
-        if class_name(item) in BRANCH_CLASSES:
-            unique[object_key(item)] = item
-    return list(unique.values())
+    _, related = parts or _outage_parts(outage)
+    return [item for item in related.values() if class_name(item) in BRANCH_CLASSES]
 
 
-def outage_component_keys(outage):
+def outage_component_keys(outage, parts=None):
     """Keys of every object the outage or its actions name as components."""
-    holders = [outage]
-    try:
-        holders += list(outage.GetContents("*", 1) or [])
-    except Exception:
-        pass
-    keys = set()
-    for holder in holders:
-        for attribute in OUTAGE_EQUIPMENT_ATTRIBUTES:
-            for item in _as_objects(safe_attr(holder, attribute)):
-                if not isinstance(item, (str, int, float, bool)) and item is not outage:
-                    keys.add(object_key(item))
-    return sorted(keys)
+    _, related = parts or _outage_parts(outage)
+    return sorted(related)
 
 
 def _outage_record(outage):
-    equipment, equipment_type, actions, start, end = _outage_details(outage)
-    branches = outage_branches(outage)
+    parts = _outage_parts(outage)
+    equipment, equipment_type, actions, start, end = _outage_details(outage, parts)
+    _, related = parts
+    branches = [item for key, item in related.items() if class_name(item) in BRANCH_CLASSES]
     return {
         "branches": branches,
-        "equipment_keys": [object_key(item) for item in branches],
-        "component_keys": outage_component_keys(outage),
+        "equipment_keys": [key for key, item in related.items() if class_name(item) in BRANCH_CLASSES],
+        "component_keys": sorted(related),
         "key": object_key(outage),
         "originally_ignored": finite_number(safe_attr(outage, "outserv", 0)) == 1.0,
         "id": object_name(outage),
@@ -3965,6 +4022,10 @@ HELP_TEXTS = {
     'qds': "The time step is taken from PowerFactory. With a QDS time step of two hours, n-1 and (n-1)' are assessed "
            "at the same points in time. Every run covers the complete ComStatsim period; GridLens changes neither "
            "the period nor the time step.",
+    'results': "Calculate now: every case is calculated into a new kept result object GridLens_<stamp>_<case>, then "
+               "evaluated.\nRe-evaluate a kept run: nothing is calculated and PowerFactory is not changed; the result "
+               "objects of that run are read again and assessed with the current settings (limits, tolerances, grids). "
+               "A case whose outages or windows changed since that run is reported as NOT EVALUATED.",
     'status_line': "Click to open the Case Manager tab: what will be calculated and every problem or warning.",
     'preview': "Shows or hides the calculation preview: which cases are calculated, with which reference, settings and "
                "planned outages. It never calculates anything.",
@@ -4183,8 +4244,13 @@ class CaseEditor:
     reaches the caller only through "Start calculation".
     """
 
-    def __init__(self, records, config, period, qds_text='', qds_info=None, grids=None, contingencies=CONTINGENCIES_NOT_READ):
+    def __init__(self, records, config, period, qds_text='', qds_info=None, grids=None, contingencies=CONTINGENCIES_NOT_READ,
+                 kept=()):
         self.records = list(records)
+        # Stamps of earlier runs whose result objects are kept in the study case (kept_stamps), newest first,
+        # and the one chosen for a re-evaluation without calculation (None: calculate now).
+        self.kept_stamps = list(kept or ())
+        self.evaluate_stamp = None
         # Names of the active grids (None: not read) and the contingencies of the study case
         # (read_contingencies; None: there is no ComSimoutage), both read before the window opened.
         # A grid is a name or (name, active); a bare name counts as active.
@@ -4604,7 +4670,21 @@ class CaseEditor:
         return None
 
     def request(self):
-        return resolve_request(self.config, self.records, self.period, 'gui')
+        request = resolve_request(self.config, self.records, self.period, 'gui')
+        request['evaluate_stamp'] = self.evaluate_stamp
+        return request
+
+    def result_choices(self):
+        """(label, stamp) of the Results choice: calculate now, or re-evaluate a kept run."""
+        return [(RESULTS_CALCULATE, None)] + [('Re-evaluate the kept run of ' + stamp_text(stamp), stamp)
+                                              for stamp in self.kept_stamps]
+
+    def set_evaluate_stamp(self, stamp):
+        """Choose a kept run to re-evaluate (None: calculate now); a problem as text, else None."""
+        if stamp is not None and stamp not in self.kept_stamps:
+            return 'No kept run {} in this study case.'.format(stamp)
+        self.evaluate_stamp = stamp
+        return None
 
     def checked(self):
         """(problems, request or None) of the configuration as it is now; resolved once per change.
@@ -4670,7 +4750,9 @@ class CaseEditor:
             return ' to '.join(_format_pf_time(value) if value is not None else '?' for value in window)
         background = request['background']
         fixed = ', '.join(record['name'] for record in background) or 'none'
-        lines = ['Assessment: ' + assessments_text(self.config.get('assessments')),
+        lines = ['Results: ' + (RESULTS_CALCULATE if not self.evaluate_stamp else
+                                'Re-evaluate the kept run of {} (no calculation)'.format(stamp_text(self.evaluate_stamp))),
+                 'Assessment: ' + assessments_text(self.config.get('assessments')),
                  'QDS period: ' + self.qds_text,
                  'Reference: ' + (('Rfix' if background else 'R0') if setting_value('run_reference', self.settings_overrides())
                                   else 'off'),
@@ -5459,6 +5541,16 @@ class CaseManagerDialog:
                          style='Muted.TLabel')
         note.grid(row=4, column=0, sticky='w', padx=(22, 0))
         self.tip(note, N1_NOTE)
+        results = ttk.Frame(options, style='Card.TFrame')
+        results.grid(row=6, column=0, sticky='ew', pady=(6, 0))
+        ttk.Label(results, text='Results:').grid(row=0, column=0, sticky='w', padx=(0, 6))
+        choices = self.editor.result_choices()
+        self.results_var = tk.StringVar(value=choices[0][0])
+        self.results_box = ttk.Combobox(results, textvariable=self.results_var, values=[label for label, _ in choices],
+                                        state='readonly' if len(choices) > 1 else 'disabled', width=46)
+        self.results_box.grid(row=0, column=1, sticky='w')
+        self.results_box.bind('<<ComboboxSelected>>', lambda _event: self.apply_results_choice())
+        self.tip(self.results_box, HELP_TEXTS['results'])
         footer = ttk.Frame(options, style='Card.TFrame')
         footer.grid(row=5, column=0, sticky='ew', pady=(6, 0))
         footer.columnconfigure(0, weight=1)
@@ -6256,6 +6348,10 @@ class CaseManagerDialog:
         window.bind('<Escape>', lambda _event: window.destroy())
 
     # --- calculation -----------------------------------------------------------
+    def apply_results_choice(self):
+        self.editor.set_evaluate_stamp(dict(self.editor.result_choices()).get(self.results_var.get()))
+        self.refresh_overview()
+
     def apply_assessments(self):
         if self.n1_prime_var.get() and not self.n1_var.get():
             # (n-1)' is compared with n-1: ticking (n-1)' ticks n-1, unticking n-1 unticks (n-1)'.
@@ -6338,7 +6434,10 @@ class CaseManagerDialog:
                                              for plan in blocked[:5])),
                 parent=self.root):
             return
-        self.outcome = self.editor.config
+        self.outcome = dict(self.editor.config)
+        if self.editor.evaluate_stamp:
+            # Only for this run, never saved: re-evaluate a kept run instead of calculating.
+            self.outcome['evaluate_stamp'] = self.editor.evaluate_stamp
         self.root.destroy()
 
     def cancel(self):
@@ -6347,7 +6446,7 @@ class CaseManagerDialog:
 
 
 def run_case_manager(records, config, period, config_path, user='', qds_text='', qds_info=None, grids=None,
-                     contingencies=CONTINGENCIES_NOT_READ):
+                     contingencies=CONTINGENCIES_NOT_READ, kept=()):
     """Show the case manager; the edited configuration on "Start calculation", None on Cancel."""
     try:
         import tkinter as tk
@@ -6356,7 +6455,7 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
         root = tk.Tk()
     except Exception as exc:
         raise CaseManagerUnavailable('The case manager cannot open a window: {}'.format(_friendly_exception(exc))) from None
-    dialog = CaseManagerDialog(root, CaseEditor(records, config, period, qds_text, qds_info, grids, contingencies),
+    dialog = CaseManagerDialog(root, CaseEditor(records, config, period, qds_text, qds_info, grids, contingencies, kept),
                                config_path, user,
                                (tk, ttk, messagebox, simpledialog))
     root.report_callback_exception = dialog.report_error
@@ -6398,7 +6497,7 @@ def _restore_planned_outage_option(qds, original, logger):
                 .format(PLANNED_OUTAGE_OPTION, _format_setting_value(original))]
     logger.write(
         "RESTORE", "Restored the 'Planned Outages' option [{}] to {}.".format(
-            PLANNED_OUTAGE_OPTION, _format_setting_value(original)), 6)
+            PLANNED_OUTAGE_OPTION, _format_setting_value(original)), 5)
     return []
 
 
@@ -6481,9 +6580,9 @@ def _case_result_object(study_case, template, case_id, name=None):
     return snapshot
 
 
-def _run_calculation(app, study_case, qds, case_id, name, description,
-                     original_result, logger, result_objects, plan=None,
-                     announce=True):
+def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger, result_objects,
+                   fingerprint='', announce=True):
+    """Phase 1 for one run: the QDS into its own kept ElmRes. Nothing is read; returns the run."""
     if announce:
         logger.case("Case {} \u00b7 {}".format(case_id, name))
     snapshot = _case_result_object(study_case, original_result, case_id, result_objects.name_for(case_id))
@@ -6528,7 +6627,29 @@ def _run_calculation(app, study_case, qds, case_id, name, description,
     logger.write(
         "CALCULATION", "{} completed successfully in {:.1f}s.".format(
             case_id, elapsed), 4)
-    logger.write("EXTRACTION", "Reading and validating {} results.".format(case_id), 5)
+    mark_result_object(snapshot, case_id, fingerprint)
+    return {"id": case_id, "name": name, "snapshot": snapshot, "elapsed": elapsed,
+            "result_object": object_name(snapshot)}
+
+
+def mark_result_object(obj, case_id, fingerprint=''):
+    """Write case and fingerprint into the description of a kept result object, for a later re-evaluation."""
+    try:
+        obj.desc = ["GridLens {}; case {}; fingerprint {}".format(PUBLISHER_VERSION, case_id, fingerprint or '-')]
+    except Exception:
+        pass
+
+
+def result_fingerprint(obj):
+    """The fingerprint mark_result_object() wrote, or None."""
+    match = re.search(r'fingerprint (\S+)', object_description(obj))
+    return match.group(1) if match and match.group(1) != '-' else None
+
+
+def evaluate_qds(run, description, plan, logger):
+    """Phase 2 for one run: read and validate its kept ElmRes into a case result."""
+    case_id, name, snapshot, elapsed = run["id"], run["name"], run["snapshot"], run.get("elapsed", 0.0)
+    logger.write("EXTRACTION", "Reading and validating {} results from '{}'.".format(case_id, object_name(snapshot)), 6)
     try:
         reading = time.monotonic()
         snapshot.Load()
@@ -6544,17 +6665,17 @@ def _run_calculation(app, study_case, qds, case_id, name, description,
                 "EXTRACTION",
                 "Grid scope ({}): {} series assessed, {} out of scope and "
                 "not read.".format(grid_scope_text(), len(series),
-                                   counters.get('out_of_scope', 0)), 5)
+                                   counters.get('out_of_scope', 0)), 6)
         logger.write(
             "EXTRACTION",
             "Validated {} supported series across {} time point(s); time unit '{}'."
-            .format(len(series), len(labels), unit), 5)
+            .format(len(series), len(labels), unit), 6)
         logger.write(
             "EXTRACTION",
             "Time axis: {} scale, unit '{}'; first {}; last {}; span {}."
             .format("absolute" if absolute else "relative",
                     unit, labels[0], labels[-1],
-                    '{:g} h'.format(plot_times[-1] - plot_times[0])), 5)
+                    '{:g} h'.format(plot_times[-1] - plot_times[0])), 6)
         _log_extraction_detail(logger, series, counters)
     except Exception as exc:
         raise GridLensError(
@@ -6572,7 +6693,7 @@ def _run_calculation(app, study_case, qds, case_id, name, description,
         "description": description,
         "status": CONVERGED,
         "error_code": 0,
-        "message": "Completed in {:.1f}s.".format(elapsed),
+        "message": "Completed in {:.1f}s.".format(elapsed) if elapsed else "Evaluated from the kept result object.",
         "counters": counters,
         "plan": plan,
         "result_object": object_name(snapshot),
@@ -6589,7 +6710,7 @@ def _run_calculation(app, study_case, qds, case_id, name, description,
 def _log_kept_results(results_store, logger):
     """The result objects stay in PowerFactory; name each one."""
     for obj in results_store:
-        logger.write("RESULTS", "Kept result object '{}' in the study case.".format(object_name(obj)), 6)
+        logger.write("RESULTS", "Kept result object '{}' in the study case.".format(object_name(obj)), 5)
 
 
 def _restore_results_binding(qds, original_result):
@@ -6685,7 +6806,7 @@ def _set_scalar_attribute(obj, attribute, value):
     return restored == value
 
 
-def _restore_study_time(state, logger, stage="RESTORE", step=6):
+def _restore_study_time(state, logger, stage="RESTORE", step=5):
     errors = []
     study_time = state["object"]
     if not _set_scalar_attribute(study_time, "cDate", state["date"]):
@@ -6872,9 +6993,9 @@ def _active_text(plan, background):
     return text + "; every other planned outage Ignored"
 
 
-def _run_reference(app, study_case, qds, request, records, original_result, logger,
-                   result_objects, study_time_state):
-    """R0 without planned outages, or Rfix with exactly the fixed outages."""
+def _calculate_reference(app, study_case, qds, request, records, original_result, logger,
+                         result_objects, study_time_state):
+    """Phase 1 for REF: R0 without planned outages, or Rfix with exactly the fixed outages."""
     background = request["background"]
     name = REFERENCE_NAME if not background else "Reference (fixed outages)"
     if not background:
@@ -6882,9 +7003,9 @@ def _run_reference(app, study_case, qds, request, records, original_result, logg
             raise GridLensError(
                 "The 'Planned Outages' option [{}] could not be switched off, so a reference free of planned "
                 "outages could not be guaranteed. No calculation was started.".format(PLANNED_OUTAGE_OPTION))
-        result = _run_calculation(app, study_case, qds, REFERENCE_CASE_ID, name, "Network state without planned outages.",
-                                  original_result, logger, result_objects)
-        result["run_note"] = "iopt_maint=0: no planned outage applied"
+        result = _calculate_qds(app, study_case, qds, REFERENCE_CASE_ID, name, original_result, logger, result_objects,
+                                reference_fingerprint(request))
+        result.update(description="Network state without planned outages.", run_note="iopt_maint=0: no planned outage applied")
     else:
         if not _set_scalar_attribute(qds, PLANNED_OUTAGE_OPTION, 1):
             raise GridLensError("The 'Planned Outages' option [{}] could not be switched on for the reference with "
@@ -6894,9 +7015,10 @@ def _run_reference(app, study_case, qds, request, records, original_result, logg
             ", ".join(record["name"] for record in background)))
         with StateGuard() as guard:
             _isolate_outages(guard, {record["key"] for record in background}, records, "the reference")
-            result = _run_calculation(app, study_case, qds, REFERENCE_CASE_ID, name, "Network state with the fixed planned outages.",
-                                      original_result, logger, result_objects, announce=False)
-        result["run_note"] = "iopt_maint=1; " + _active_text(None, background)
+            result = _calculate_qds(app, study_case, qds, REFERENCE_CASE_ID, name, original_result, logger,
+                                    result_objects, reference_fingerprint(request), announce=False)
+        result.update(description="Network state with the fixed planned outages.",
+                      run_note="iopt_maint=1; " + _active_text(None, background))
     clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
     if clock_errors:
         raise GridLensError("The initial Study Case time could not be restored after REF: {}. The case runs were "
@@ -6904,13 +7026,25 @@ def _run_reference(app, study_case, qds, request, records, original_result, logg
     return result
 
 
-def _run_planning_case(app, study_case, qds, plan, request, records, reference,
-                       original_result, logger, result_objects, study_time_state):
-    """One planning case with all its outages; a failure becomes a failed case, a restore failure stops the run."""
-    background = request["background"]
-    case = {"id": plan["id"], "name": plan["name"], "kind": "planning_case",
+def reference_fingerprint(request):
+    """What decides REF: the fixed background outages."""
+    return hashlib.sha1("|".join(sorted(record["key"] for record in request["background"])).encode("utf-8")).hexdigest()[:12]
+
+
+def _case_info(plan):
+    return {"id": plan["id"], "name": plan["name"], "kind": "planning_case", "plan": plan,
             "description": plan.get("description") or "Planned outages: {}.".format(
-                ", ".join(record["name"] for record in plan["members"])), "plan": plan}
+                ", ".join(record["name"] for record in plan["members"]))}
+
+
+def _calculate_case(app, study_case, qds, plan, request, records, original_result, logger, result_objects,
+                    study_time_state):
+    """Phase 1 for one planning case with all its outages: the run, or a failed run with its reason.
+
+    A state that cannot be restored stops the whole run.
+    """
+    background = request["background"]
+    info = _case_info(plan)
     logger.case("Case {} · {}".format(plan["id"], plan["name"]))
     logger.detail("Outages: {}".format("; ".join("{} ({})".format(
         record["name"], period_text(*(_format_pf_time(value) for value in plan["windows"][record["key"]])) or "unknown window")
@@ -6918,13 +7052,39 @@ def _run_planning_case(app, study_case, qds, plan, request, records, reference,
     if plan.get("states"):
         logger.detail("Network states: {}".format(clip_text(states_text(plan), 300)))
     active = {record["key"] for record in plan["members"]} | {record["key"] for record in background}
+    note = "iopt_maint=1; " + _active_text(plan, background)
     try:
         with StateGuard() as guard:
             _isolate_outages(guard, active, records, "case " + plan["id"])
             _apply_overrides(guard, plan)
-            result = _run_calculation(app, study_case, qds, plan["id"], plan["name"], case["description"],
-                                      original_result, logger, result_objects, plan, announce=False)
-        result["run_note"] = "iopt_maint=1; " + _active_text(plan, background)
+            run = _calculate_qds(app, study_case, qds, plan["id"], plan["name"], original_result, logger,
+                                 result_objects, plan["fingerprint"], announce=False)
+        run.update(info, run_note=note)
+    except StateRestoreError:
+        raise
+    except GridLensError as exc:
+        logger.write("CALCULATION", "{} could not be calculated: {}".format(plan["id"], exc), 4, "ERROR")
+        run = dict(info, failed=str(exc), run_note=note, result_object=result_objects.by_case.get(plan["id"], ""))
+    clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
+    if clock_errors:
+        raise GridLensError(
+            "The initial Study Case time could not be restored after {}: {}. "
+            "The next case was not started.".format(plan["id"], "; ".join(clock_errors)))
+    return run
+
+
+def evaluate_case(run, reference, logger):
+    """Phase 2 for one planning case: read its kept ElmRes and compare it with REF; a failure becomes a failed case."""
+    plan = run["plan"]
+    info = _case_info(plan)
+    logger.case("Evaluation · Case {} · {}".format(plan["id"], plan["name"]))
+    if run.get("failed"):
+        result = failed_case(info, run["failed"])
+        result.update(result_object=run.get("result_object", ""), run_note=run.get("run_note", ""))
+        return result
+    try:
+        result = evaluate_qds(run, info["description"], plan, logger)
+        result["run_note"] = run.get("run_note", "")
         out_of_service = {key for record in plan["members"] for key in record.get("component_keys") or ()}
         started = time.monotonic()
         try:
@@ -6944,19 +7104,12 @@ def _run_planning_case(app, study_case, qds, plan, request, records, reference,
                       "differs) in {:.1f}s.".format(REFERENCE_ID if reference else "no reference", assessment.get("rows", 0),
                                                     assessment.get("window_rows", 0), assessment.get("spill_rows", 0),
                                                     time.monotonic() - started))
-    except StateRestoreError:
-        raise
+        return result
     except GridLensError as exc:
-        logger.write("CALCULATION", "{} could not be evaluated: {}".format(plan["id"], exc), 4, "ERROR")
-        result = failed_case(case, str(exc))
-        result["result_object"] = result_objects.by_case.get(plan["id"], "")
-        result["run_note"] = "iopt_maint=1; " + _active_text(plan, background)
-    clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
-    if clock_errors:
-        raise GridLensError(
-            "The initial Study Case time could not be restored after {}: {}. "
-            "The next case was not started.".format(plan["id"], "; ".join(clock_errors)))
-    return result
+        logger.write("EXTRACTION", "{} could not be evaluated: {}".format(plan["id"], exc), 6, "ERROR")
+        result = failed_case(info, str(exc))
+        result.update(result_object=run.get("result_object", ""), run_note=run.get("run_note", ""))
+        return result
 
 
 def _reused_result(source, plan, request):
@@ -7085,14 +7238,16 @@ def _same_times(found, wanted, tolerance=1.0):
     return len(found) == len(wanted) and all(abs(a - b) <= tolerance for a, b in zip(sorted(found), sorted(wanted)))
 
 
-def run_n1_sweep(command, times, active_keys, records, excluded, label):
-    """One contingency analysis over `times` with exactly `active_keys` applied; the results, read before restoring.
+def run_n1_sweep(command, times, active_keys, records, excluded, label, keep=None):
+    """Phase 1: one contingency analysis over `times` with exactly `active_keys` applied.
 
     Written temporarily and restored verified (StateGuard): studyTime and
     bIgnoreTime, isPlannedOutages (0 without any active outage, else 1),
     the 'Ignored' flag of every planned outage, and 'Not analysed' of the
-    contingencies outside the contingency grids. A failed calculation, or
-    study times that differ from the written ones, raise GridLensError.
+    contingencies outside the contingency grids. With `keep` = (study case,
+    name, mark) the result object is kept as a copy for phase 2; without it,
+    or when the copy fails, the results are read at once, before restoring.
+    A failed calculation raises GridLensError.
     """
     with StateGuard() as guard:
         if not guard.set(command, N1_PLANNED_OPTION, 1 if active_keys else 0,
@@ -7124,14 +7279,71 @@ def run_n1_sweep(command, times, active_keys, records, excluded, label):
         RUN_STATS.count("n1_sweeps")
         if finite_number(code) != 0:
             raise GridLensError("The contingency analysis for {} ended with error code {}.".format(label, code))
+        limits = _recording_limits(command)
+        kept = None
+        if keep is not None:
+            study_case, name, mark = keep
+            kept = keep_copy(study_case, safe_attr(command, N1_RESULT_ATTRIBUTE), name, mark + recording_text(limits))
+        if kept is not None:
+            found = {'kept': kept, 'recording_limits': limits}
+        else:
+            with RUN_STATS.measure("read n-1 results"):
+                found = read_n1_results(command)
+    return dict(found, written_times=list(times))
+
+
+def keep_copy(study_case, obj, name, mark):
+    """A copy of `obj` named `name` in the study case, kept after the run; None when PowerFactory refuses it."""
+    if obj is None:
+        return None
+    try:
+        copies = _as_objects(study_case.AddCopy(obj))
+        copy = copies[0] if copies else None
+    except Exception:
+        copy = None
+    if copy is None:
+        return None
+    try:
+        copy.loc_name = name
+    except Exception:
+        pass
+    try:
+        copy.desc = [mark]
+    except Exception:
+        pass
+    return copy
+
+
+def recording_text(limits):
+    values = [value for quantity in ('loading', 'voltage') for value in (limits.get(quantity) or ())]
+    return '; recording ' + ','.join('{:g}'.format(value) for value in values) if len(values) == 3 else ''
+
+
+def recording_limits_of(obj):
+    """The recording limits a kept n-1 copy names in its description, {} when it names none."""
+    match = re.search(r'recording ([0-9.eE+-]+),([0-9.eE+-]+),([0-9.eE+-]+)', object_description(obj))
+    if not match:
+        return {}
+    loading, low, high = (float(value) for value in match.groups())
+    return {'loading': (loading,), 'voltage': (low, high)}
+
+
+def load_n1(found):
+    """Phase 2: the n-1 results of a sweep, read from its kept copy (or as read at once); checks the study times."""
+    if 'times' in found:
+        data = found
+    else:
         with RUN_STATS.measure("read n-1 results"):
-            found = read_n1_results(command)
-        RUN_STATS.count("n1_times", len(found['times']))
-        RUN_STATS.count("n1_loadflows", len({(moment, key[0]) for moment, values in found['times'].items() for key in values}))
-    if not _same_times(list(found['times']), times):
-        raise GridLensError("The contingency analysis for {} calculated {} study time(s) instead of the {} written "
-                            "ones.".format(label, len(found['times']), len(times)))
-    return found
+            data = read_n1_results(found['kept'], recording_limits=found.get('recording_limits'))
+    written = found.get('written_times')
+    if written is not None and not _same_times(list(data['times']), written):
+        raise GridLensError("the contingency analysis calculated {} study time(s) instead of the {} written ones".format(
+            len(data['times']), len(written)))
+    if not data['times']:
+        raise GridLensError("the kept n-1 result holds no study time")
+    RUN_STATS.count("n1_times", len(data['times']))
+    RUN_STATS.count("n1_loadflows", len({(moment, key[0]) for moment, values in data['times'].items() for key in values}))
+    return data
 
 
 def _n1_reference_text(comparison):
@@ -7140,39 +7352,64 @@ def _n1_reference_text(comparison):
     return '{} element(s) with a post-fault violation'.format(violated)
 
 
-def run_n1_case(command, plan, request, records, grid, excluded, elements_of, prime, references, label=None):
-    """n-1 (fixed outages only) and, when `prime`, (n-1)' (with the case's outages) for one planning case.
+def calculate_n1_case(command, plan, request, records, grid, excluded, prime, references, keep=None, label=None):
+    """Phase 1 for one planning case: n-1 (fixed outages only) and, when `prime`, (n-1)' (with the case's outages).
 
     Both use the QDS steps inside the case's outage windows. `references`
-    caches the n-1 results per set of study times, so cases with the same
-    times share one reference sweep. Returns the case's n-1 entry.
+    caches the n-1 sweep per set of study times, so cases with the same times
+    share one reference calculation. `keep` = (study case, name prefix, stamp
+    text) keeps every result as a copy named <prefix>_N1 and <prefix>_N1P.
     """
     label = label or 'case ' + plan['id']
     times = n1_study_times([plan['windows'][record['key']] for record in plan['members']], grid)
     if not times:
         return {'status': 'NOT EVALUATED', 'reason': 'no QDS time step lies inside the outage windows', 'times': 0}
+    mark = 'GridLens {}; case {} {{}}; fingerprint {}'.format(PUBLISHER_VERSION, plan['id'], plan['fingerprint'])
     background = {record['key'] for record in request['background']}
     key = tuple(times)
     reference = references.get(key)
     if reference is None:
-        reference = references[key] = run_n1_sweep(command, times, background, records, excluded, 'the n-1 reference of ' + label)
-    entry = {'status': 'EVALUATED', 'times': len(times), 'contingencies': len(reference['contingencies'])}
-    if not prime:
-        entry.update(kind='n-1', comparison=compare_n1(reference, reference))
-        entry['summary'] = 'n-1 reference: ' + _n1_reference_text(entry['comparison'])
-        return entry
-    active = background | {record['key'] for record in plan['members']}
-    scenario = run_n1_sweep(command, times, active, records, excluded, "the (n-1)' scenario of " + label)
-    switched_off = {component for record in plan['members'] for component in record.get('component_keys') or ()}
-    with RUN_STATS.measure("classify (n-1)' against n-1"):
-        entry.update(kind="(n-1)'", comparison=compare_n1(reference, scenario, switched_off, elements_of))
-    RUN_STATS.count("n1_classified", sum(entry['comparison']['counts'].values()))
-    entry['summary'] = "(n-1)' against n-1: " + n1_summary(entry['comparison'])
+        reference = references[key] = run_n1_sweep(
+            command, times, background, records, excluded, 'the n-1 reference of ' + label,
+            (keep[0], keep[1] + '_N1', mark.format('n-1')) if keep else None)
+    elif keep and reference.get('kept') is not None:
+        copied = keep_copy(keep[0], reference['kept'], keep[1] + '_N1', mark.format('n-1') + recording_text(
+            reference.get('recording_limits') or {}))
+        reference = dict(reference, kept=copied) if copied is not None else reference
+    entry = {'status': 'CALCULATED', 'times': len(times), 'reference': reference, 'scenario': None,
+             'kind': N1_PRIME if prime else N1_REFERENCE}
+    if prime:
+        active = background | {record['key'] for record in plan['members']}
+        entry['scenario'] = run_n1_sweep(
+            command, times, active, records, excluded, "the (n-1)' scenario of " + label,
+            (keep[0], keep[1] + '_N1P', mark.format("(n-1)'")) if keep else None)
     return entry
 
 
-# ComOutage.GetObject(line) is read for at most this many lines per contingency.
-MAX_CONTINGENCY_ELEMENTS = 200
+def evaluate_n1_case(entry, plan, elements_of):
+    """Phase 2 for one planning case: read the kept n-1 results and classify (n-1)' against n-1."""
+    if entry.get('status') != 'CALCULATED':
+        return entry
+    reference = load_n1(entry['reference'])
+    result = {'status': 'EVALUATED', 'times': len(reference['times']), 'contingencies': len(reference['contingencies']),
+              'kind': entry['kind']}
+    if entry['kind'] != N1_PRIME or entry.get('scenario') is None:
+        result.update(kind=N1_REFERENCE, comparison=compare_n1(reference, reference))
+        result['summary'] = 'n-1 reference: ' + _n1_reference_text(result['comparison'])
+        return result
+    scenario = load_n1(entry['scenario'])
+    switched_off = {component for record in plan['members'] for component in record.get('component_keys') or ()}
+    with RUN_STATS.measure("classify (n-1)' against n-1"):
+        result['comparison'] = compare_n1(reference, scenario, switched_off, elements_of)
+    RUN_STATS.count("n1_classified", sum(result['comparison']['counts'].values()))
+    result['summary'] = "(n-1)' against n-1: " + n1_summary(result['comparison'])
+    return result
+
+
+def run_n1_case(command, plan, request, records, grid, excluded, elements_of, prime, references, label=None):
+    """Both phases at once for one case (no kept copies): used where nothing has to be kept."""
+    return evaluate_n1_case(calculate_n1_case(command, plan, request, records, grid, excluded, prime, references,
+                                              label=label), plan, elements_of)
 
 
 def project_grids(app):
@@ -7308,7 +7545,7 @@ def qds_period_text(period):
 
 
 def obtain_case_request(app, records, candidates, period, logger, qds_info=None, grids=None,
-                        contingencies=CONTINGENCIES_NOT_READ):
+                        contingencies=CONTINGENCIES_NOT_READ, kept=()):
     """The planning cases of this run: from the case manager, the saved configuration or one per outage."""
     try:
         project_key = object_key(app.GetActiveProject())
@@ -7331,7 +7568,7 @@ def obtain_case_request(app, records, candidates, period, logger, qds_info=None,
     try:
         config = run_case_manager(records, saved or empty_case_config(project_key), period, path, _generated_by(),
                                   qds_text=qds_period_text(period), qds_info=qds_info, grids=grids,
-                                  contingencies=contingencies)
+                                  contingencies=contingencies, kept=kept)
     except CaseManagerUnavailable as exc:
         if saved is not None:
             logger.write("CASES", "{} Using the saved configuration revision {} instead.".format(exc, saved.get("revision")), 3, "WARNING")
@@ -7350,8 +7587,12 @@ def obtain_case_request(app, records, candidates, period, logger, qds_info=None,
         latest = None
     unsaved = latest is None or any(latest.get(name) != config.get(name)
                                     for name in ("cases", "background", "rules", "settings"))
-    return resolve_request(config, records, period, "gui", "case manager, configuration revision {}{}".format(
+    config = dict(config)
+    stamp = config.pop("evaluate_stamp", None)
+    request = resolve_request(config, records, period, "gui", "case manager, configuration revision {}{}".format(
         config.get("revision") or 0, " with unsaved changes" if unsaved else ""))
+    request["evaluate_stamp"] = stamp
+    return request
 
 
 def _log_plan(logger, request):
@@ -7482,18 +7723,9 @@ def contingency_grid_selection():
     return tuple(current_setting('monitoring_grids') if grids is None else grids)
 
 
-def run_n1(app, study_case, qds, request, records, ready, results, logger, study_time_state):
-    """n-1 and, if requested, (n-1)' for every ready planning case; the entry goes to result['n1'].
-
-    A case that cannot be evaluated gets status NOT EVALUATED with the reason
-    and the others continue; a state that cannot be restored stops the run.
-    Cases with the same outages and windows share one evaluation.
-    """
-    prime = N1_PRIME in (request.get('assessments') or ())
-    by_id = {result['id']: result for result in results}
+def _n1_command(app, study_case, grid, logger):
+    """(contingency analysis, reason): the one of the study case, else one GridLens defines and keeps."""
     command = contingency_analysis(study_case)
-    grid = qds_grid(qds)
-    reason = None
     if command is None and not _contents(study_case, '*.' + N1_COMMAND_CLASS) and grid is not None:
         # No contingency analysis here (e.g. the QDS study case): GridLens defines one and keeps it.
         name = "{}{}_N1".format(SNAPSHOT_PREFIX, datetime.now().strftime("%y%m%d-%H%M%S"))
@@ -7507,34 +7739,54 @@ def run_n1(app, study_case, qds, request, records, ready, results, logger, study
                              name, made, ', '.join(contingency_grid_selection()) or 'every grid',
                              '; {} element(s) refused'.format(refused) if refused else ''), 4)
         except GridLensError as exc:
-            command, reason = None, str(exc)
-    if reason is None:
-        reason = ('the active study case holds more than one contingency analysis (ComSimoutage)' if command is None
-                  else 'the ComStatsim time step is not readable' if grid is None else None)
+            return None, str(exc)
+    if command is None:
+        return None, 'the active study case holds more than one contingency analysis (ComSimoutage)'
+    if grid is None:
+        return None, 'the ComStatsim time step is not readable'
+    return command, None
+
+
+def _equipment_map(commands):
+    """Contingency key -> keys of its equipment, over every given contingency analysis."""
+    found = {}
+    for command in commands:
+        for outage, elements in contingency_equipment(command):
+            found[object_key(outage)] = {object_key(element) for element in elements}
+    return found
+
+
+def calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state, result_objects):
+    """Phase 1 of n-1 and, if requested, (n-1)' for every ready planning case: {case id: entry}.
+
+    Every sweep is kept as a copy (GridLens_<stamp>_<case>_N1 and _N1P) and
+    read in phase 2. A case that cannot be calculated gets status NOT
+    EVALUATED with the reason and the others continue; a state that cannot be
+    restored stops the run. Cases with the same outages and windows share one
+    calculation.
+    """
+    prime = N1_PRIME in (request.get('assessments') or ())
+    grid = qds_grid(qds)
+    command, reason = _n1_command(app, study_case, grid, logger)
     if reason:
         logger.write("CALCULATION", "n-1 is not evaluated: {}.".format(reason), 4, "WARNING")
-        for plan in ready:
-            if plan['id'] in by_id:
-                by_id[plan['id']]['n1'] = {'status': 'NOT EVALUATED', 'reason': reason, 'times': 0}
-        return
+        return {plan['id']: {'status': 'NOT EVALUATED', 'reason': reason, 'times': 0} for plan in ready}
     equipment = contingency_equipment(command)
     excluded = contingencies_outside(equipment, contingency_grid_selection())
     elements_of = {object_key(outage): {object_key(element) for element in elements} for outage, elements in equipment}
     logger.write("CALCULATION", "{} with contingency analysis '{}': {} contingencies, {} set to 'Not analysed' for the "
                  "contingency grids.".format(N1_PRIME + " against n-1" if prime else N1_REFERENCE, object_name(command),
                                              len(equipment), len(excluded)), 4)
-    references, done = {}, {}
+    entries, references, done = {}, {}, {}
     for plan in ready:
-        result = by_id.get(plan['id'])
-        if result is None:
-            continue
         if plan['fingerprint'] in done:
-            result['n1'] = dict(done[plan['fingerprint']])
+            entries[plan['id']] = done[plan['fingerprint']]
             continue
         logger.case("n-1 · Case {} · {}".format(plan['id'], plan['name']))
         started = time.monotonic()
         try:
-            entry = run_n1_case(command, plan, request, records, grid, excluded, elements_of, prime, references)
+            entry = calculate_n1_case(command, plan, request, records, grid, excluded, prime, references,
+                                      (study_case, result_objects.name_for(plan['id'])))
         except StateRestoreError:
             raise
         except GridLensError as exc:
@@ -7543,12 +7795,147 @@ def run_n1(app, study_case, qds, request, records, ready, results, logger, study
         if clock_errors:
             raise GridLensError("The initial Study Case time could not be restored after the n-1 run of {}: {}.".format(
                 plan['id'], "; ".join(clock_errors)))
-        if entry['status'] == 'EVALUATED':
-            logger.detail("{} at {} study time(s) in {:.1f}s.".format(entry['summary'], entry['times'],
-                                                                     time.monotonic() - started))
+        if entry['status'] == 'CALCULATED':
+            entry['elements_of'] = elements_of
+            logger.detail("Calculated at {} study time(s) in {:.1f}s.".format(entry['times'], time.monotonic() - started))
         else:
             logger.detail("n-1 not evaluated: {}".format(entry['reason']), "WARNING")
-        result['n1'] = done[plan['fingerprint']] = entry
+        entries[plan['id']] = done[plan['fingerprint']] = entry
+    return entries
+
+
+def evaluate_n1(entries, request, ready, results, logger):
+    """Phase 2 of n-1: read every kept n-1 result and classify; the entry goes to result['n1']."""
+    by_id = {result['id']: result for result in results}
+    done = {}
+    for plan in ready:
+        entry = entries.get(plan['id'])
+        result = by_id.get(plan['id'])
+        if entry is None or result is None:
+            continue
+        if id(entry) not in done:
+            if entry.get('status') == 'CALCULATED':
+                logger.case("n-1 evaluation · Case {} · {}".format(plan['id'], plan['name']))
+            try:
+                done[id(entry)] = evaluate_n1_case(entry, plan, entry.get('elements_of') or {})
+            except GridLensError as exc:
+                done[id(entry)] = {'status': 'NOT EVALUATED', 'reason': str(exc), 'times': 0}
+            evaluated = done[id(entry)]
+            if evaluated['status'] == 'EVALUATED':
+                logger.detail("{} at {} study time(s).".format(evaluated['summary'], evaluated['times']))
+            elif entry.get('status') == 'CALCULATED':
+                logger.detail("n-1 not evaluated: {}".format(evaluated['reason']), "WARNING")
+        result['n1'] = dict(done[id(entry)])
+
+
+def evaluate_runs(runs, request, logger):
+    """Phase 2 of the QDS: REF first, then every case from its kept result object, compared with REF."""
+    results, by_id, reference = [], {}, None
+    for run in runs:
+        if run['id'] == REFERENCE_CASE_ID:
+            logger.case("Evaluation · {} · {}".format(REFERENCE_CASE_ID, run.get('name', REFERENCE_NAME)))
+            if run.get('failed'):
+                raise GridLensError(run['failed'])
+            reference = evaluate_qds(run, run.get('description', ''), None, logger)
+            reference['run_note'] = run.get('run_note', '')
+            results.append(reference)
+            check_run_budget(results)
+            continue
+        if run.get('reuse_of'):
+            source = by_id.get(run['reuse_of'])
+            if source is not None and source['status'] == CONVERGED:
+                logger.case("Evaluation · Case {} · {}".format(run['id'], run['plan']['name']))
+                logger.detail("Same outages and windows as {}; its result is reused.".format(source['id']))
+                results.append(_reused_result(source, run['plan'], request))
+                continue
+            run = dict(run, failed='the case it shares its result with ({}) could not be evaluated'.format(run['reuse_of']))
+        result = evaluate_case(run, reference, logger)
+        by_id[run['id']] = result
+        results.append(result)
+        check_run_budget(results)
+    return results
+
+
+RESULTS_CALCULATE = 'Calculate now'
+
+
+def stamp_text(stamp):
+    """'261023-120000' as '2026-10-23 12:00:00'."""
+    try:
+        return datetime.strptime(stamp, "%y%m%d-%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return str(stamp)
+
+
+KEPT_STAMP = re.compile(r'^' + re.escape(SNAPSHOT_PREFIX) + r'(\d{6}-\d{6})_')
+
+
+def kept_stamps(study_case):
+    """The stamps of earlier GridLens runs whose result objects are kept in the study case, newest first."""
+    stamps = set()
+    for obj in _contents(study_case, '*.ElmRes'):
+        match = KEPT_STAMP.match(object_name(obj))
+        if match:
+            stamps.add(match.group(1))
+    return sorted(stamps, reverse=True)
+
+
+def kept_runs(study_case, stamp, request, ready, logger):
+    """Phase 1 without a calculation: the runs and n-1 entries from the result objects of an earlier run.
+
+    Every object is found by its name GridLens_<stamp>_<case>; a case whose
+    outages or windows changed since (another fingerprint) or whose object is
+    missing is not evaluated, with the reason. A changed REF stops the run.
+    """
+    objects = {object_name(obj): obj for obj in _contents(study_case, '*.ElmRes')}
+    prefix = "{}{}_".format(SNAPSHOT_PREFIX, stamp)
+    logger.write("CALCULATION", "Re-evaluating the kept results of the run {}: no calculation, PowerFactory is not "
+                 "changed.".format(stamp), 4)
+    runs = []
+    if setting_value('run_reference'):
+        obj = objects.get(prefix + REFERENCE_CASE_ID)
+        if obj is None:
+            raise GridLensError("The run {} kept no reference result object '{}'.".format(stamp, prefix + REFERENCE_CASE_ID))
+        if result_fingerprint(obj) not in (None, reference_fingerprint(request)):
+            raise GridLensError("The fixed background outages changed since the run {}, so its reference does not fit "
+                                "the cases any more. Calculate again.".format(stamp))
+        runs.append({'id': REFERENCE_CASE_ID, 'name': REFERENCE_NAME, 'snapshot': obj, 'elapsed': 0.0,
+                     'result_object': object_name(obj), 'description': 'Kept reference of the run {}.'.format(stamp),
+                     'run_note': 'evaluated from the kept result object'})
+    found_by_fingerprint = {}
+    n1 = {}
+    prime = N1_PRIME in (request.get('assessments') or ())
+    elements_of = _equipment_map(_contents(study_case, '*.' + N1_COMMAND_CLASS))
+    for plan in ready:
+        info = _case_info(plan)
+        obj = objects.get(prefix + plan['id'])
+        if obj is None and plan['fingerprint'] in found_by_fingerprint:
+            runs.append({'id': plan['id'], 'plan': plan, 'reuse_of': found_by_fingerprint[plan['fingerprint']]})
+            n1[plan['id']] = n1.get(found_by_fingerprint[plan['fingerprint']], {'status': 'NOT EVALUATED',
+                                                                                'reason': 'no kept n-1 result', 'times': 0})
+            continue
+        if obj is None:
+            runs.append(dict(info, failed="the run {} kept no result object '{}'".format(stamp, prefix + plan['id'])))
+        elif result_fingerprint(obj) not in (None, plan['fingerprint']):
+            runs.append(dict(info, failed="its outages or windows changed since the run {}; calculate again".format(stamp),
+                             result_object=object_name(obj)))
+        else:
+            found_by_fingerprint[plan['fingerprint']] = plan['id']
+            runs.append(dict(info, snapshot=obj, elapsed=0.0, result_object=object_name(obj),
+                             run_note='evaluated from the kept result object of the run {}'.format(stamp)))
+        if N1_REFERENCE in (request.get('assessments') or ()):
+            reference, scenario = objects.get(prefix + plan['id'] + '_N1'), objects.get(prefix + plan['id'] + '_N1P')
+            if reference is None or (prime and scenario is None):
+                n1[plan['id']] = {'status': 'NOT EVALUATED', 'times': 0,
+                                  'reason': "the run {} kept no {} result for this case".format(
+                                      stamp, N1_REFERENCE if reference is None else N1_PRIME)}
+            else:
+                n1[plan['id']] = {'status': 'CALCULATED', 'times': 0, 'elements_of': elements_of,
+                                  'kind': N1_PRIME if prime else N1_REFERENCE,
+                                  'reference': {'kept': reference, 'recording_limits': recording_limits_of(reference)},
+                                  'scenario': {'kept': scenario, 'recording_limits': recording_limits_of(scenario)}
+                                  if prime else None}
+    return runs, n1
 
 
 def n1_quality(payload, results):
@@ -7651,9 +8038,10 @@ def execute_gridlens(app):
     with RUN_STATS.measure("read grids and contingencies"):
         grids = project_grids(app)
         contingencies = read_contingencies(study_case)
+        kept = kept_stamps(study_case)
     case_manager = time.monotonic()
     request = obtain_case_request(app, records, candidates, period, logger, qds_time_info(qds, period), grids,
-                                  contingencies)
+                                  contingencies, kept)
     RUN_STATS.add("case manager (window open, incl. your time)", time.monotonic() - case_manager)
     # The settings are fixed here, after the case manager has closed, and apply to the whole run.
     request["settings_snapshot"] = activate_settings(request.get("settings"))
@@ -7665,50 +8053,52 @@ def execute_gridlens(app):
         grid_scope_text(), request["contingency_scope"]), 3)
     _log_plan(logger, request)
     ready = [plan for plan in request["cases"] if plan["status"] == PLAN_READY]
-    logger.step(4, "Calculation and extraction (log steps 4 and 5)")
+    logger.step(4, "Calculation (phase 1): every run into its kept result object")
+    runs = []
+    n1_runs = {}
+    evaluate_stamp = request.get("evaluate_stamp")
     try:
-        reference = None
-        if setting_value('run_reference'):
-            reference = _run_reference(app, study_case, qds, request, records, original_result, logger,
-                                       result_objects, study_time_state)
-            results.append(reference)
-            check_run_budget(results)
-        if ready:
-            if not _set_scalar_attribute(qds, PLANNED_OUTAGE_OPTION, 1):
-                raise GridLensError(
-                    "The 'Planned Outages' option [{}] could not be switched "
-                    "on, so no case run was started.".format(
-                        PLANNED_OUTAGE_OPTION))
-            logger.write(
-                "CALCULATION",
-                "Switched the 'Planned Outages' option [{}] on; every planning "
-                "case is calculated with exactly its own planned outages, one "
-                "after the other.".format(PLANNED_OUTAGE_OPTION), 4)
-            calculated = {}
-            for plan in ready:
-                source = calculated.get(plan["fingerprint"])
-                if source is not None and source["status"] == CONVERGED:
-                    logger.case("Case {} · {}".format(plan["id"], plan["name"]))
-                    logger.detail("Same outages and windows as {}; its result is reused, no QDS run.".format(source["id"]))
-                    results.append(_reused_result(source, plan, request))
-                    RUN_STATS.count("reused_cases")
-                    continue
-                result = _run_planning_case(app, study_case, qds, plan, request, records, reference,
-                                            original_result, logger, result_objects, study_time_state)
-                calculated.setdefault(plan["fingerprint"], result)
-                results.append(result)
-                # Stop before the next run rather than after the last one.
-                check_run_budget(results)
+        if evaluate_stamp:
+            runs, n1_runs = kept_runs(study_case, evaluate_stamp, request, ready, logger)
         else:
-            logger.write(
-                "CALCULATION",
-                "No planning case can be calculated; the case runs were skipped.", 4, "WARNING")
-        if ready and N1_REFERENCE in (request.get("assessments") or ()):
-            run_n1(app, study_case, qds, request, records, ready, results, logger, study_time_state)
+            if setting_value('run_reference'):
+                runs.append(_calculate_reference(app, study_case, qds, request, records, original_result, logger,
+                                                 result_objects, study_time_state))
+            if ready:
+                if not _set_scalar_attribute(qds, PLANNED_OUTAGE_OPTION, 1):
+                    raise GridLensError(
+                        "The 'Planned Outages' option [{}] could not be switched "
+                        "on, so no case run was started.".format(
+                            PLANNED_OUTAGE_OPTION))
+                logger.write(
+                    "CALCULATION",
+                    "Switched the 'Planned Outages' option [{}] on; every planning "
+                    "case is calculated with exactly its own planned outages, one "
+                    "after the other.".format(PLANNED_OUTAGE_OPTION), 4)
+                calculated = {}
+                for plan in ready:
+                    source = calculated.get(plan["fingerprint"])
+                    if source is not None and not source.get("failed"):
+                        logger.case("Case {} · {}".format(plan["id"], plan["name"]))
+                        logger.detail("Same outages and windows as {}; its result is reused, no QDS run.".format(source["id"]))
+                        runs.append({"id": plan["id"], "plan": plan, "reuse_of": source["id"]})
+                        RUN_STATS.count("reused_cases")
+                        continue
+                    run = _calculate_case(app, study_case, qds, plan, request, records, original_result, logger,
+                                          result_objects, study_time_state)
+                    calculated.setdefault(plan["fingerprint"], run)
+                    runs.append(run)
+            else:
+                logger.write(
+                    "CALCULATION",
+                    "No planning case can be calculated; the case runs were skipped.", 4, "WARNING")
+            if ready and N1_REFERENCE in (request.get("assessments") or ()):
+                n1_runs = calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state,
+                                       result_objects)
     finally:
-        logger.step(6, "Restore and clean-up")
+        logger.step(5, "Restore and clean-up")
         restoring = time.monotonic()
-        logger.write("RESTORE", "Restoring the original PowerFactory state.", 6)
+        logger.write("RESTORE", "Restoring the original PowerFactory state.", 5)
         state_errors.extend(_restore_study_time(study_time_state, logger))
         state_errors.extend(
             _restore_planned_outage_option(qds, original_option, logger))
@@ -7720,7 +8110,17 @@ def execute_gridlens(app):
             "GridLens could not fully restore PowerFactory state: {}. Stop and "
             "verify the study case manually before continuing.".format(
                 "; ".join(state_errors)))
-    logger.write("RESTORE", "Original PowerFactory state restored and verified.", 6)
+    logger.write("RESTORE", "Original PowerFactory state restored and verified.", 5)
+    logger.step(6, "Evaluation (phase 2): reading and comparing the kept result objects")
+    if open_column_buffer(app) is None:
+        logger.write("EXTRACTION", "No IntVec could be created in this ComPython, so results are read value by value "
+                     "(slow). The run summary counts these reads.", 6, "WARNING")
+    try:
+        results = evaluate_runs(runs, request, logger)
+        if n1_runs:
+            evaluate_n1(n1_runs, request, ready, results, logger)
+    finally:
+        close_column_buffer()
     for result in results:
         release_values(result)
     check_run_budget(results)
