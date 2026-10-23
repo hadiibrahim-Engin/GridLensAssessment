@@ -59,8 +59,9 @@ CASE_CONFIG_SCHEMA_VERSION = 2
 # Assessments a configuration may ask for. Only the quasi-dynamic n-0
 # assessment exists in the calculation pipeline; n-1 is named so that the
 # case manager can show it as unavailable instead of hiding the question.
-ASSESSMENTS = ('n-0', 'n-1')
-AVAILABLE_ASSESSMENTS = ('n-0',)
+N1_REFERENCE, N1_PRIME = 'n-1', "(n-1)'"
+ASSESSMENTS = ('n-0', N1_REFERENCE, N1_PRIME)
+AVAILABLE_ASSESSMENTS = ASSESSMENTS
 # The time base is the active ComStatsim: every run covers its complete period
 # with its own time step. GridLens shortens no window, adds no time step and
 # never changes the time step (there is no time optimisation).
@@ -71,7 +72,8 @@ ALLOW_OUTAGE_TIME_OVERRIDE = False
 # Optional. An empty string (the default) assesses every element. With a text,
 # only elements whose grid (PowerFactory attribute "Grid", cpGrid) has a name
 # containing it are assessed and every other element is ignored as foreign
-# network, e.g. 'D7' for the Europe model.
+# network, e.g. 'D7' for the Europe model. Grids chosen in the case manager
+# (Settings -> Network scope) take precedence over this text.
 GRID_NAME_FILTER = ''
 VARIABLES = {'line': ('c:loading', 'm:loading'), 'transformer': ('c:loading', 'm:loading'), 'voltage': ('m:u', 'm:u1')}
 CLASS_CATEGORIES = {'ElmLne': ('line',), 'ElmTr2': ('transformer',), 'ElmTr3': ('transformer',), 'ElmTerm': ('voltage',)}
@@ -264,7 +266,21 @@ def element_grid_name(obj):
     return ''
 
 def grid_in_scope(grid_name):
+    """Whether equipment of this grid is assessed: the grids chosen in Settings, else GRID_NAME_FILTER."""
+    grids = current_setting('monitoring_grids')
+    if grids:
+        return grid_name in grids
     return not GRID_NAME_FILTER or GRID_NAME_FILTER in grid_name
+
+
+def grid_scope_text():
+    """How the assessed equipment is chosen, for log and report."""
+    grids = current_setting('monitoring_grids')
+    if grids:
+        return 'elements in the grid{} {}'.format('s' if len(grids) > 1 else '', ', '.join(grids))
+    if GRID_NAME_FILTER:
+        return 'elements in grids named *{}*'.format(GRID_NAME_FILTER)
+    return 'all elements'
 
 def element_in_scope(obj):
     return grid_in_scope(element_grid_name(obj))
@@ -523,11 +539,9 @@ def collect_series(elmres, counters=None):
         counters['dark_keys'] = set()
     if not chosen and out_of_scope:
         raise RuntimeError(
-            'No result series belongs to an element whose grid name contains '
-            '{!r} ({} series were out of scope). Grids in the result: {}. Set '
-            'GRID_NAME_FILTER at the top of gridlens_report.py to part of one of '
-            'these names, or to an empty string to assess every element.'.format(
-                GRID_NAME_FILTER, out_of_scope, _grid_listing(grids)))
+            'No result series belongs to the assessed equipment ({}; {} series were out of scope). Grids in the '
+            'result: {}. Choose one of these grids in Settings -> Network scope, or clear the selection (and '
+            'GRID_NAME_FILTER) to assess every element.'.format(grid_scope_text(), out_of_scope, _grid_listing(grids)))
     cells = rows * len(chosen)
     if cells > MAX_RESULT_CELLS:
         raise RuntimeError('ElmRes contains {} evaluated cells ({} rows x {} series) and exceeds the limit of {} (MAX_RESULT_CELLS).'.format(cells, rows, len(chosen), MAX_RESULT_CELLS))
@@ -780,8 +794,8 @@ CATEGORY_EVALUATION, CATEGORY_CALCULATION = 'A', 'B'
 N1_LIMITS_POWERFACTORY, N1_LIMITS_GLOBAL = 'powerfactory', 'global'
 N1_LIMIT_CHOICES = ((N1_LIMITS_POWERFACTORY, 'use PowerFactory limits'), (N1_LIMITS_GLOBAL, 'global assessment limit'))
 NOT_VERIFIED = 'not verified yet'
-PART3_NOTE = ('Read only until the PowerFactory contingency interface is verified '
-              '(tools/probe_contingency.py, then part 3).')
+PART3_NOTE = ('Read only: set in the contingency analysis (ComSimoutage) of the study case; GridLens reads it '
+              'and does not change it.')
 # A floating-point result that lies this close to a limit is treated as on the limit: PowerFactory writes
 # results in single or double precision, and 1e-9 is far below any meaningful %-point or p.u. difference.
 NUMERIC_TOLERANCE = 1e-9
@@ -810,6 +824,11 @@ def _contingency_setting(key, label):
 
 
 SETTINGS = (
+    _setting('monitoring_grids', 'Network scope', 'Assessed equipment: grids', '', (), 'grids', applies="n-0, n-1, (n-1)'",
+             note='no grid selected: every grid (or GRID_NAME_FILTER in the script)'),
+    _setting('contingency_grids', 'Network scope', 'Contingencies: grids of the outaged equipment', '', None, 'grids',
+             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_GRIDLENS,
+             note='applied to the n-1 run by setting ComOutage "Not analysed" (outserv) for the run and restoring it'),
     _setting('line_warning', 'Thermal limits', 'Warning threshold, lines', '%', LOADING_WARNING, 'limit'),
     _setting('transformer_warning', 'Thermal limits', 'Warning threshold, transformers', '%', LOADING_WARNING, 'limit'),
     _setting('line_limit', 'Thermal limits', 'Maximum loading for n-0, lines', '%', LOADING_MAX, 'limit'),
@@ -856,7 +875,8 @@ SETTINGS = (
     _contingency_setting('remedial_actions', 'Remedial actions'),
 )
 SETTINGS_BY_KEY = {setting['key']: setting for setting in SETTINGS}
-SETTING_SECTIONS = ('Thermal limits', 'Voltage limits', 'Classification', 'Contingency analysis')
+SETTING_SECTIONS = ('Network scope', 'Thermal limits', 'Voltage limits', 'Classification', 'Contingency analysis')
+SAME_AS_ASSESSMENT = 'same grids as the assessed equipment'
 # (lower, upper) pairs that must keep lower < upper; (warning, limit) pairs that must keep warning <= limit.
 _ORDERED_PAIRS = tuple(('band{}_min'.format(number), 'band{}_max'.format(number)) for number in range(1, len(VOLTAGE_LIMITS_KV) + 1)) + (
     ('voltage_min_pu', 'voltage_max_pu'),)
@@ -875,6 +895,8 @@ def parse_setting(key, text):
         return None, 'unknown setting {!r}'.format(key)
     if not setting['editable']:
         return None, '{} is read only: {}'.format(setting['label'], setting['note'] or NOT_VERIFIED)
+    if setting['kind'] == 'grids':
+        return parse_grids(key, text)
     if setting['kind'] == 'choice':
         return (text, None) if text in dict(N1_LIMIT_CHOICES) else (None, '{}: choose one of {}'.format(
             setting['label'], ', '.join(label for _, label in N1_LIMIT_CHOICES)))
@@ -889,6 +911,18 @@ def parse_setting(key, text):
     if setting['kind'] == 'tolerance' and value < 0:
         return None, '{} must not be negative'.format(setting['label'])
     return value, None
+
+
+def parse_grids(key, value):
+    """A grid selection: a list of distinct grid names; None for the contingencies means 'as the assessment'."""
+    if value is None and key == 'contingency_grids':
+        return None, None
+    if not isinstance(value, (list, tuple)) or not all(isinstance(name, str) and name.strip() for name in value):
+        return None, '{}: a list of grid names is needed'.format(SETTINGS_BY_KEY[key]['label'])
+    names = tuple(name.strip() for name in value)
+    if len(set(names)) != len(names):
+        return None, '{}: a grid is selected twice'.format(SETTINGS_BY_KEY[key]['label'])
+    return tuple(sorted(names, key=str.casefold)), None
 
 
 def validate_settings(overrides):
@@ -942,6 +976,10 @@ def setting_source(key, overrides=None):
 
 def setting_text(key, value):
     setting = SETTINGS_BY_KEY[key]
+    if setting['kind'] == 'grids':
+        if value is None:
+            return SAME_AS_ASSESSMENT
+        return ', '.join(value) if value else 'every grid'
     if value is None:
         return NOT_VERIFIED
     if setting['kind'] == 'choice':
@@ -970,8 +1008,9 @@ def settings_snapshot(overrides=None):
     return {'settings_version': SETTINGS_VERSION, 'classification_version': CLASSIFICATION_VERSION,
             'values': values, 'sources': {key: setting_source(key, overrides) for key in values},
             'overrides': clean_overrides(dict((key, values[key]) for key in overrides)),
-            'calculation_parameters': {setting['key']: NOT_VERIFIED for setting in SETTINGS
-                                       if setting['category'] == CATEGORY_CALCULATION},
+            'calculation_parameters': {setting['key']: NOT_VERIFIED if not setting['editable'] else
+                                       setting_text(setting['key'], values[setting['key']]) + ' (stored, not applied yet)'
+                                       for setting in SETTINGS if setting['category'] == CATEGORY_CALCULATION},
             'storage': 'provisional: case configuration file (JSON); native PowerFactory storage not verified yet'}
 
 
@@ -1197,6 +1236,272 @@ def classify_comparison(reference, scenario, parameters=None):
         if shrink > tolerance['worsened'] + numeric and high:
             result['indicators'].append(INDICATOR_MARGIN_REDUCED)
     return dict(result, status=status, code=CLASSIFICATION_CODES[status])
+
+
+# ---------------------------------------------------------------------------
+# n-1 and (n-1)' with the native contingency analysis (part 3)
+#
+# Verified on a project copy (tools/test_contingency.py, 23 October 2026):
+# ComSimoutage.Execute() runs the time sweep; the written studyTime vector
+# (bIgnoreTime 0) decides the study times, also non-contiguous ones;
+# p_rescnt holds one ElmRes per study time (cnttime) with one row per
+# contingency (GetObjectValue -> ComOutage) and one column per element and
+# variable; GetValue code 3 means "not written, inside the recording limits".
+# isPlannedOutages applies every planned outage that is not Ignored and whose
+# window contains the study time, per study time; a contingency whose
+# equipment such an outage already switches off has no row (NOT_APPLICABLE).
+# ComOutage.outserv ("Not analysed") removes a contingency.
+# ---------------------------------------------------------------------------
+N1_COMMAND_CLASS = 'ComSimoutage'
+N1_PLANNED_OPTION = 'isPlannedOutages'
+N1_TIMES_ATTRIBUTE, N1_IGNORE_ATTRIBUTE = 'studyTime', 'bIgnoreTime'
+N1_RESULT_ATTRIBUTE = 'p_rescnt'
+N1_VARIABLES = {'loading': ('c:loading',), 'voltage': ('m:u',)}
+# Recording limits of the ComSimoutage: below loadmax, and inside vlmin..vlmax, nothing is written (code 3).
+N1_RECORDING_LIMITS = {'loading': ('loadmax',), 'voltage': ('vlmin', 'vlmax')}
+CODE_NOT_RECORDED = 3
+STATE_NOT_RECORDED = 'not_recorded'
+# ComStatsim stepUnit: 0 seconds, 1 minutes, 2 hours, 3 days.
+STEP_UNIT_SECONDS = {0: 1.0, 1: 60.0, 2: 3600.0, 3: 86400.0}
+# Upper bound of study times per sweep: every study time calculates every contingency.
+MAX_N1_TIMES = 2000
+# Severity of the n-1 statuses for the worst status of an element; the codes stay those of the classification.
+N1_SEVERITY = ('NEW', 'WORSENED', 'FAILED', 'NOT_EVALUATED', 'NOT_COMPARABLE', 'PRE_EXISTING', 'IMPROVED',
+               'RESOLVED', 'NOT_APPLICABLE', 'OK')
+
+
+def qds_grid(qds):
+    """(start, end, step) of the ComStatsim time grid in epoch seconds, or None when it is not readable."""
+    start, end = qds_period(qds)
+    size = finite_number(safe_attr(qds, 'stepSize'))
+    unit = finite_number(safe_attr(qds, 'stepUnit'))
+    if start is None or size is None or unit is None or int(unit) not in STEP_UNIT_SECONDS:
+        return None
+    step = size * STEP_UNIT_SECONDS[int(unit)]
+    return (start, end, step) if step > 0 else None
+
+
+def n1_study_times(windows, grid, limit=MAX_N1_TIMES):
+    """The QDS steps that lie in at least one window [begin, end), inside the QDS period; sorted.
+
+    A window that is not known (None) covers the whole QDS period, as for the
+    n-0 assessment. More than `limit` study times raise GridLensError: the
+    sweep would calculate every contingency at every one of them.
+    """
+    start, end, step = grid
+    times = set()
+    for begin, finish in windows:
+        begin = start if begin is None else max(begin, start)
+        finish = end + step if finish is None else finish
+        index = max(0, math.ceil((begin - start) / step - 1e-9))
+        moment = start + index * step
+        while moment < finish and moment <= end + 1e-6:
+            times.add(moment)
+            if len(times) > limit:
+                raise GridLensError(
+                    "The n-1 time sweep would need more than {} study times; every one calculates every "
+                    "contingency. Shorten the outage windows or the QDS period.".format(limit))
+            index += 1
+            moment = start + index * step
+    return sorted(times)
+
+
+def _recording_limits(command):
+    """The recording limits of the contingency analysis, None where not readable."""
+    found = {}
+    for quantity, attributes in N1_RECORDING_LIMITS.items():
+        values = [finite_number(safe_attr(command, attribute)) for attribute in attributes]
+        found[quantity] = None if any(value is None for value in values) else tuple(values)
+    return found
+
+
+def read_n1_results(command, in_scope=element_in_scope):
+    """{study time: {(contingency key, element key, quantity): value or None}} plus the element and contingency names.
+
+    None marks code 3, a value inside the recording limits. Only the
+    variables of N1_VARIABLES of elements in scope are read; a value that is
+    neither written nor marked code 3 is left out (no artificial zero).
+    """
+    found = {'times': {}, 'elements': {}, 'contingencies': {}, 'categories': {}, 'nominal_kv': {}}
+    result = safe_attr(command, N1_RESULT_ATTRIBUTE)
+    subs = [item for item in (_contents(result, '*.ElmRes') if result is not None else []) if class_name(item) == 'ElmRes']
+    wanted = {variable: quantity for quantity, variables in N1_VARIABLES.items() for variable in variables}
+    for sub in subs:
+        moment = finite_number(safe_attr(sub, 'cnttime'))
+        if moment is None:
+            continue
+        values = found['times'].setdefault(moment, {})
+        try:
+            sub.Load()
+            columns = []
+            for column in range(int(sub.GetNumberOfColumns())):
+                obj = sub.GetObject(column)
+                quantity = wanted.get(str(sub.GetVariable(column)))
+                if obj is None or quantity is None or not in_scope(obj):
+                    continue
+                key = object_key(obj)
+                category = 'voltage' if quantity == 'voltage' else (CLASS_CATEGORIES.get(class_name(obj)) or ('line',))[0]
+                found['elements'][key] = object_name(obj)
+                found['categories'][key] = category
+                if quantity == 'voltage':
+                    found['nominal_kv'][key] = finite_number(safe_attr(obj, 'uknom'))
+                columns.append((column, key, quantity))
+            for row in range(int(sub.GetNumberOfRows())):
+                code, outage = _status_pair(sub.GetObjectValue(row))
+                if code != 0 or outage is None:
+                    continue
+                contingency = object_key(outage)
+                found['contingencies'][contingency] = object_name(outage)
+                for column, key, quantity in columns:
+                    code, value = _status_pair(sub.GetValue(row, column))
+                    if code == 0 and finite_number(value) is not None:
+                        values[(contingency, key, quantity)] = finite_number(value)
+                    elif code == CODE_NOT_RECORDED:
+                        values[(contingency, key, quantity)] = None
+        finally:
+            try:
+                sub.Release()
+            except Exception:
+                pass
+    found['recording_limits'] = _recording_limits(command)
+    return found
+
+
+def _contents(obj, pattern):
+    try:
+        return list(obj.GetContents(pattern) or [])
+    except Exception:
+        return []
+
+
+def _status_pair(returned):
+    """(code, value) of a PowerFactory [error, value] return, else (None, None)."""
+    if isinstance(returned, (list, tuple)) and len(returned) >= 2:
+        code = finite_number(returned[0])
+        return (None if code is None else int(code)), returned[1]
+    return None, None
+
+
+def n1_limit(quantity, category, nominal_kv=None):
+    """The limit definition of an element for the n-1 comparison."""
+    if quantity == 'loading':
+        return comparison_limit('loading', category)
+    lower, upper = voltage_band(nominal_kv)
+    return comparison_limit('voltage', minimum=lower, maximum=upper)
+
+
+def _proves_within(quantity, bound, limit, parameters):
+    """Whether a value inside the recording limits is certainly no violation of `limit`."""
+    if bound is None or not isinstance(limit, dict):
+        return False
+    margin = parameters[quantity]['limit'] + parameters['numeric']
+    if quantity == 'loading':
+        return bound[0] <= limit['max'] + margin
+    return bound[0] >= limit['min'] - margin and bound[1] <= limit['max'] + margin
+
+
+def classify_n1(reference, scenario, parameters=None, recording=None):
+    """classify_comparison() for n-1 results, where a side may hold no value because it lay inside the recording limits.
+
+    A side with state STATE_NOT_RECORDED is no violation when the recording
+    limit proves it (recording limit not above the assessment limit); then
+    NEW, RESOLVED or OK follow without a delta. When the recording limit does
+    not prove it, the result is NOT_EVALUATED: the value is unknown.
+    """
+    parameters = parameters or classification_parameters()
+    reference, scenario = dict(reference or {}), dict(scenario or {})
+    unrecorded = [side for side in (reference, scenario) if side.get('state') == STATE_NOT_RECORDED]
+    if not unrecorded:
+        return classify_comparison(reference, scenario, parameters)
+    quantity, limit = scenario.get('quantity'), scenario.get('limit')
+    bound = (recording or {}).get(quantity)
+    base = {'classification_version': CLASSIFICATION_VERSION, 'indicators': [], 'delta': None,
+            'identity': {field: scenario.get(field) for field in COMPARISON_IDENTITY}, 'limit': limit,
+            'reference_violation': None, 'scenario_violation': None}
+    probe = [dict(side, state=STATE_OK, value=0.0 if quantity == 'loading' else 1.0) if side.get('state') == STATE_NOT_RECORDED
+             else side for side in (reference, scenario)]
+    checked = classify_comparison(probe[0], probe[1], parameters)
+    if checked['status'] in ('FAILED', 'NOT_APPLICABLE', 'NOT_COMPARABLE'):
+        return checked
+    if not _proves_within(quantity, bound, limit, parameters):
+        return dict(base, status='NOT_EVALUATED', code=CLASSIFICATION_CODES['NOT_EVALUATED'],
+                    reasons=['inside the recording limits of the contingency analysis, which do not prove the value '
+                             'within the assessment limit'])
+    sizes = []
+    for side in (reference, scenario):
+        if side.get('state') == STATE_NOT_RECORDED:
+            sizes.append(0.0)
+        else:
+            size = violation_size(quantity, side.get('value'), side.get('limit'))
+            if size is None:
+                return dict(base, status='NOT_EVALUATED', code=CLASSIFICATION_CODES['NOT_EVALUATED'],
+                            reasons=['no valid value ({!r})'.format(side.get('value'))])
+            sizes.append(size)
+    threshold = parameters[quantity]['limit'] + parameters['numeric']
+    in_reference, in_scenario = sizes[0] > threshold, sizes[1] > threshold
+    status = 'NEW' if in_scenario and not in_reference else 'RESOLVED' if in_reference and not in_scenario else (
+        'PRE_EXISTING' if in_scenario else 'OK')
+    return dict(base, status=status, code=CLASSIFICATION_CODES[status], reference_violation=sizes[0],
+                scenario_violation=sizes[1], reasons=['a value inside the recording limits has no exact delta'])
+
+
+def _n1_side(values, moment, contingency, element, quantity, limit, applicable=True):
+    identity = {'time': moment, 'contingency': contingency, 'element': element, 'quantity': quantity, 'phase': 'post-fault'}
+    if not applicable:
+        return dict(identity, state=STATE_NOT_APPLICABLE, limit=limit,
+                    reason='the planned outages of the case already switch off its equipment')
+    key = (contingency, element, quantity)
+    if key not in values:
+        return dict(identity, state=STATE_FAILED, limit=limit, reason='no result row for this contingency')
+    if values[key] is None:
+        return dict(identity, state=STATE_NOT_RECORDED, limit=limit)
+    return dict(identity, state=STATE_OK, value=values[key], limit=limit)
+
+
+def compare_n1(reference, scenario, switched_off=(), contingency_elements=None, parameters=None):
+    """Classify (n-1)' against n-1 for every study time, contingency, element and quantity of the reference.
+
+    `contingency_elements` maps a contingency key to the keys of its
+    equipment; a contingency missing in the scenario whose equipment lies in
+    `switched_off` (the components of the case's planned outages) is
+    NOT_APPLICABLE, any other missing one FAILED. Elements the case switches
+    off are left out. Returns the per-element worst result and counts.
+    """
+    parameters = parameters or classification_parameters()
+    switched_off = set(switched_off)
+    contingency_elements = contingency_elements or {}
+    elements = {}
+    counts = {}
+    for moment, ref_values in sorted(reference['times'].items()):
+        case_values = scenario['times'].get(moment)
+        present = {key[0] for key in (case_values or {})}
+        for (contingency, element, quantity) in ref_values:
+            if element in switched_off:
+                continue
+            category = reference['categories'].get(element, 'line')
+            limit = n1_limit(quantity, category, reference['nominal_kv'].get(element))
+            ref_side = _n1_side(ref_values, moment, contingency, element, quantity, limit)
+            if case_values is None:
+                case_side = dict(ref_side, state=STATE_FAILED, reason='the study time was not calculated')
+            else:
+                applicable = contingency in present or not (contingency_elements.get(contingency, set()) & switched_off)
+                case_side = _n1_side(case_values, moment, contingency, element, quantity, limit, applicable)
+            outcome = classify_n1(ref_side, case_side, parameters, scenario.get('recording_limits'))
+            counts[outcome['status']] = counts.get(outcome['status'], 0) + 1
+            entry = elements.setdefault((element, quantity), {'element': element, 'quantity': quantity,
+                                                              'name': reference['elements'].get(element, element),
+                                                              'worst': None})
+            worst = entry['worst']
+            if worst is None or N1_SEVERITY.index(outcome['status']) < N1_SEVERITY.index(worst['status']) or (
+                    outcome['status'] == worst['status'] and (outcome['delta'] or 0.0) > (worst['delta'] or 0.0)):
+                entry['worst'] = dict(outcome, contingency_name=reference['contingencies'].get(contingency, contingency))
+    return {'elements': elements, 'counts': counts}
+
+
+def n1_summary(comparison):
+    """'NEW 2, WORSENED 1, OK 140' style text of the classification counts, most severe first."""
+    counts = comparison['counts']
+    return ', '.join('{} {}'.format(status, counts[status]) for status in N1_SEVERITY if counts.get(status)) or 'nothing compared'
 
 
 REFERENCE_ID = 'REF'
@@ -1939,15 +2244,26 @@ def _model_quality(payload, results, request=None):
              'Every case is compared with Reference at the same time step; deltas compare each element with itself.' if reference is not None
              else 'No converged reference case; violations cannot be split into new and pre-existing.')
     _quality(payload, 'qds_mode', 'Calculation period', 'INFO', qds_mode_text(request))
-    _quality(payload, 'security_scope', 'Assessment scope', 'WARNING',
-             'N-0 assessment of the planned network states. N-1 security, security of supply, protection coordination and safe isolation are not assessed.')
+    n1_kinds = {result['n1'].get('kind') for result in results if result.get('n1', {}).get('status') == 'EVALUATED'}
+    if n1_kinds:
+        _quality(payload, 'security_scope', 'Assessment scope', 'WARNING',
+                 'N-0 assessment of the planned network states and {} with the contingency analysis of the study case at '
+                 'the QDS time steps inside the outage windows (rows n-1 below). This is no proof of n-1 security; security '
+                 'of supply, protection coordination and safe isolation are not assessed.'.format(
+                     "(n-1)' against n-1" if N1_PRIME in n1_kinds else 'the n-1 reference'))
+    else:
+        _quality(payload, 'security_scope', 'Assessment scope', 'WARNING',
+                 'N-0 assessment of the planned network states. N-1 security, security of supply, protection coordination and safe isolation are not assessed.')
     _quality(payload, 'limit_loading', 'Loading limit', 'INFO', loading_limits_text())
     _quality(payload, 'limit_voltage', 'Voltage limits', 'INFO', voltage_limits_text())
     # The settings the assessment actually used, i.e. the active ones.
     snapshot = settings_snapshot(active_overrides())
+    _quality(payload, 'network_scope', 'Network scope', 'INFO', 'Assessed equipment: {}. Contingencies: {}'.format(
+        grid_scope_text(), (request or {}).get('contingency_scope') or 'not read in this run.'))
     _quality(payload, 'settings', 'Settings', 'INFO' if not snapshot['overrides'] else 'WARNING',
              'Settings {}, classification rules {}: {}. Stored provisionally in the case configuration file.'.format(
                  snapshot['settings_version'], snapshot['classification_version'], overrides_text(snapshot['overrides'])))
+    n1_quality(payload, results)
 
 QDS_TIME_BASE_TEXT = ('Complete ComStatsim period: every run covers the whole simulated period with the ComStatsim time step; '
                       'GridLens shortens no window, adds no time step and changes no time step.')
@@ -2297,7 +2613,7 @@ def build_cases_payload(study_case, results, project_name, result_name, request,
         'simulation_time_step': time_step or 'ElmRes row interval', 'generation_date': datetime.now().astimezone().strftime('%Y-%m-%d %H:%M'),
         'generated_by': generated_by, 'run_mode': run_mode, 'template_name': TEMPLATE_NAME, 'template_version': TEMPLATE_VERSION,
         'data_contract_version': DATA_CONTRACT_VERSION, 'result_name': result_name,
-        'assessment_scope': '{} planning case(s); reference: {}; {}'.format(len(request.get('cases') or ()), reference['name'] if reference else 'none', 'elements in grids named *{}*'.format(GRID_NAME_FILTER) if GRID_NAME_FILTER else 'all elements'),
+        'assessment_scope': '{} planning case(s); reference: {}; {}'.format(len(request.get('cases') or ()), reference['name'] if reference else 'none', grid_scope_text()),
         'assessment_status': 'PRE-ASSESSMENT - NOT AN OPERATIONAL RELEASE', 'voltage_limits': voltage_limits_text(),
         'has_cases': '1' if cases else '0', 'chart_cases': str(1 + min(len(cases), CASE_SLOTS) if reference is not None else min(len(cases), CASE_SLOTS)),
         'radar_note': radar_note, 'case_source_text': request.get('source_text') or 'not stated', 'reference_text': _reference_text(request),
@@ -3173,9 +3489,10 @@ def validate_case_config(config, max_cases=MAX_CASES):
     assessments = config.get('assessments', ['n-0'])
     if not _is_text_list(assessments) or not assessments or set(assessments) - set(ASSESSMENTS):
         problems.append('assessments must name at least one of {}'.format(', '.join(ASSESSMENTS)))
-    elif set(assessments) - set(AVAILABLE_ASSESSMENTS):
-        problems.append('the n-1 contingency analysis is not part of this GridLens version; only the n-0 quasi-dynamic '
-                        'assessment can be calculated')
+    elif 'n-0' not in assessments:
+        problems.append('the n-0 quasi-dynamic assessment is always calculated: the report is built on it')
+    elif N1_PRIME in assessments and N1_REFERENCE not in assessments:
+        problems.append("(n-1)' is compared with n-1, so it needs n-1")
     if not _is_text_list(config.get('background', [])):
         problems.append('background must be a list of planned outage paths')
     problems += ['settings: ' + problem for _, problem in validate_settings(config.get('settings', {}))]
@@ -3496,8 +3813,10 @@ SETTINGS_INTRO = ('Limits and classification parameters (category A) only interp
                   'change a load flow, a rating or the network model. Calculation parameters (category B) stay read '
                   'only until the PowerFactory contingency interface is verified. Settings are stored provisionally '
                   'in the case configuration file of this project, not yet inside the PowerFactory project.')
-N1_UNAVAILABLE = ("Not available yet: the native PowerFactory contingency analysis will be enabled once the interface "
-                  "verification is complete. Nothing of n-1 is calculated or reported.")
+CONTINGENCIES_NOT_READ = 'not read'
+N1_NOTE = ("Calculated with the contingency analysis (ComSimoutage) of the active study case, at the QDS time steps "
+           "inside the outage windows of each case. Until the report chapters for n-1 exist (part 4), the result "
+           "appears in the log and on the Model Quality Assurance page.")
 # Hover texts of the case manager. They explain what a control does to the
 # calculation; the operating guide (docs/CASE_MANAGER.md) says the same.
 HELP_TEXTS = {
@@ -3537,10 +3856,10 @@ HELP_TEXTS = {
     'n0': "n-0 - reference QDS\nCalculates the time-dependent base state of the network without planned outages and "
           "without additional contingencies. Loads and infeeds change as in the quasi-dynamic simulation.",
     'n1': "n-1 - reference contingency analysis\nAssesses the security of the base network without planned outages. "
-          "Every defined unplanned single contingency is assessed at the chosen points in time.\n" + N1_UNAVAILABLE,
+          "Every defined unplanned single contingency is assessed at the chosen points in time.\n" + N1_NOTE,
     'n1_prime': "(n-1)' - contingency analysis with planned-outage scenarios\nAssesses a planned-outage scenario with "
                 "the planned outages valid at each point in time and one additional unplanned contingency. The results "
-                "are compared with n-1.\n" + N1_UNAVAILABLE,
+                "are compared with n-1. Needs n-1.\n" + N1_NOTE,
     'planned_outages': "Planned outages from the PowerFactory Outage Management library. Their validity in time and "
                        "their switching effect are taken into account in the assigned scenarios.",
     'qds': "The time step is taken from PowerFactory. With a QDS time step of two hours, n-1 and (n-1)' are assessed "
@@ -3620,6 +3939,17 @@ SETTING_HELP = {
     'save_settings': "Checks the entries and saves the settings for later use. Provisional: they are written into the "
                      "case configuration file of this project (JSON), not yet into the PowerFactory project; the "
                      "project itself is not touched.",
+    'monitoring_grids': "Only lines, transformers and terminals in the selected grids are assessed: their QDS results "
+                        "and the monitored elements of n-1 and (n-1)'. Every other element is ignored as "
+                        "foreign network. No grid selected: every grid. The selection only filters the assessment; "
+                        "PowerFactory still calculates the whole network.",
+    'contingency_grids': "Only contingencies whose outaged equipment lies in the selected grids are analysed. 'Same "
+                         "grids as the assessed equipment' follows the left selection. This changes what PowerFactory "
+                         "calculates (category B): the other contingencies are set to 'Not analysed' for the n-1 run "
+                         "and restored afterwards.",
+    'contingency_preview': "How many contingencies of the study case's contingency analysis the selection would keep. "
+                           "Their equipment is read with ComOutage.GetObject; nothing is changed.",
+    'grid_buttons': "Selects every grid, or clears the selection so that every grid is assessed. Takes effect at once.",
     'source': "Origin of the value: GridLens (GridLens default), PowerFactory (read from the model or the calculation "
               "configuration) or user (changed by you). 'edited, not applied' means the entry differs from the applied "
               "value until you apply or save the settings.",
@@ -3744,8 +4074,15 @@ class CaseEditor:
     reaches the caller only through "Start calculation".
     """
 
-    def __init__(self, records, config, period, qds_text='', qds_info=None):
+    def __init__(self, records, config, period, qds_text='', qds_info=None, grids=None, contingencies=CONTINGENCIES_NOT_READ):
         self.records = list(records)
+        # Names of the active grids (None: not read) and the contingencies of the study case
+        # (read_contingencies; None: there is no ComSimoutage), both read before the window opened.
+        # A grid is a name or (name, active); a bare name counts as active.
+        pairs = None if grids is None else [(grid, True) if isinstance(grid, str) else (grid[0], bool(grid[1])) for grid in grids]
+        self.grids = None if pairs is None else [name for name, _ in pairs]
+        self.inactive_grids = {name for name, active in pairs or () if not active}
+        self.contingencies = contingencies
         self.by_key = {record['key']: record for record in self.records}
         self.period = period
         self.qds_text = qds_text or qds_period_text(period)
@@ -4069,6 +4406,10 @@ class CaseEditor:
     def set_settings(self, values):
         """Take the edited values of the Settings tab; [(key, problem)] and nothing changes when one is invalid."""
         parsed, problems = {}, []
+        try:
+            current = effective_settings(self.settings_overrides())
+        except GridLensError:
+            current = default_settings()
         for key, value in values.items():
             number, problem = parse_setting(key, value)
             if problem:
@@ -4077,7 +4418,7 @@ class CaseEditor:
                 parsed[key] = number
         if problems:
             return problems
-        overrides = clean_overrides(dict(default_settings(), **parsed))
+        overrides = clean_overrides(dict(current, **parsed))
         problems = validate_settings(overrides)
         if not problems:
             self.config['settings'] = overrides
@@ -4087,15 +4428,68 @@ class CaseEditor:
         """Remove every user override; the GridLens defaults apply again."""
         self.config['settings'] = {}
 
+    # --- network scope ---------------------------------------------------------------
+    def selected_grids(self, key):
+        """The grid selection of 'monitoring_grids' or 'contingency_grids'; None: as the assessed equipment."""
+        value = self.settings_overrides().get(key, SETTINGS_BY_KEY[key]['default'])
+        return None if value is None else tuple(value)
+
+    def grid_choices(self):
+        """The grids to choose from: every grid of the model, plus selected ones the project no longer has."""
+        chosen = set(self.selected_grids('monitoring_grids')) | set(self.selected_grids('contingency_grids') or ())
+        return sorted(set(self.grids or ()) | chosen, key=str.casefold)
+
+    def set_grids(self, key, names):
+        """Select grids at once (no Apply needed); None for the contingencies means 'as assessed'. A problem or None."""
+        value, problem = parse_grids(key, None if names is None else list(names))
+        if problem:
+            return problem
+        try:
+            current = effective_settings(self.settings_overrides())
+        except GridLensError:
+            current = default_settings()
+        current[key] = value
+        self.config['settings'] = clean_overrides(current)
+        return None
+
+    def grid_problems(self):
+        """(where, warning) for selected grids that are missing or inactive in the project."""
+        if self.grids is None:
+            return []
+        known = set(self.grids)
+        rows = []
+        for key, what in (('monitoring_grids', 'assessed equipment'), ('contingency_grids', 'contingencies')):
+            for name in self.selected_grids(key) or ():
+                if name not in known:
+                    rows.append(('network scope', 'Warning: grid {!r} of the {} no longer exists in the project; '
+                                                  'it selects nothing'.format(name, what)))
+                elif name in self.inactive_grids:
+                    rows.append(('network scope', 'Warning: grid {!r} of the {} is not active in this study case; '
+                                                  'its equipment is not calculated'.format(name, what)))
+        return rows
+
+    def contingency_preview(self):
+        if self.contingencies == CONTINGENCIES_NOT_READ:
+            return 'contingencies not read in this window'
+        return contingency_scope_text(self.contingencies, self.selected_grids('contingency_grids'),
+                                      self.selected_grids('monitoring_grids'))
+
+    def monitoring_text(self):
+        grids = self.selected_grids('monitoring_grids')
+        if grids:
+            return ', '.join(grids)
+        return 'every grid' + (' named *{}*'.format(GRID_NAME_FILTER) if GRID_NAME_FILTER else '')
+
     # --- assessment and preview ------------------------------------------------
     def set_assessments(self, n0, n1=False, n1_prime=False):
         """The requested assessments; a problem as text, else None."""
         if not n0 and not n1 and not n1_prime:
             return 'Select at least one assessment.'
-        if n1 or n1_prime:
-            return ("n-1 and (n-1)' are not available yet: the native PowerFactory contingency analysis is enabled once "
-                    "its interface is verified.")
-        self.config['assessments'] = ['n-0']
+        if not n0:
+            return 'n-0 is always calculated: the report is built on it.'
+        if n1_prime and not n1:
+            return "(n-1)' is compared with n-1, so it needs n-1."
+        self.config['assessments'] = ['n-0'] + ([N1_REFERENCE] if n1 else []) + ([N1_PRIME] if n1_prime else [])
         return None
 
     def request(self):
@@ -4132,6 +4526,7 @@ class CaseEditor:
         rows += [(self.case_label(plan['id']), 'Warning: ' + warning) for plan in request['cases'] for warning in plan['warnings']]
         rows += [('configuration' if warning == self.config.get('migration_note') else 'fixed outages', warning)
                  for warning in request['warnings']]
+        rows += self.grid_problems()
         return rows
 
     def fixed_rows(self):
@@ -4168,6 +4563,8 @@ class CaseEditor:
                  'QDS period: ' + self.qds_text,
                  'Reference: ' + (('Rfix' if background else 'R0') if RUN_REFERENCE_CASE else 'off'),
                  'Shared background: ' + fixed,
+                 'Assessed equipment: ' + self.monitoring_text(),
+                 'Contingencies: ' + self.contingency_preview(),
                  'Settings: ' + overrides_text(self.settings_overrides())]
         for record in background:
             lines.append('  {}: {}'.format(record['name'], window_text(record['window'])))
@@ -4215,6 +4612,7 @@ class CaseEditor:
             ('Reference', 'Rfix - with the fixed background outages' if background else 'R0 - no planned outage'),
             ('QDS period', self.qds_text + ' (from the active ComStatsim)'),
             ('Assessment', 'n-0 quasi-dynamic simulation'),
+            ('Assessed equipment', self.monitoring_text()),
             ('Settings', overrides_text(self.settings_overrides())),
             ('Calculation runs', '{} reference + {} case run(s){}'.format(
                 1 if RUN_REFERENCE_CASE else 0, len(ready) - reused,
@@ -4523,7 +4921,8 @@ class CaseManagerDialog:
     MASTHEAD, MASTHEAD_MUTED, INSET = '#18384c', '#c7d8e4', '#f0f6fa'
     FIXED, OVERLAP, GAP = '#8a94a3', '#dbe6f5', '#eceff3'
     TAB_CASES, TAB_SETTINGS = 'Case Manager', 'Settings'
-    SETTINGS_PAGES = (('Limits', ('Thermal limits', 'Voltage limits')), ('Classification', ('Classification',)),
+    SETTINGS_PAGES = (('Network scope', ('Network scope',)), ('Limits', ('Thermal limits', 'Voltage limits')),
+                      ('Classification', ('Classification',)),
                       ('Contingency analysis', ('Contingency analysis',)))
     PAGE_TIME, PAGE_FIXED = 'QDS time base', 'Fixed background & rules'
 
@@ -4930,21 +5329,23 @@ class CaseManagerDialog:
         options = self._card(strip, row=0, column=0, sticky='nsew', padx=(0, 4))
         ttk.Label(options, text='Calculation', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 4))
         self.n0_var = tk.BooleanVar(value='n-0' in self.editor.config['assessments'])
-        self.n1_var, self.n1_prime_var = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
+        self.n1_var = tk.BooleanVar(value=N1_REFERENCE in self.editor.config['assessments'])
+        self.n1_prime_var = tk.BooleanVar(value=N1_PRIME in self.editor.config['assessments'])
         n0 = ttk.Checkbutton(options, text='n-0 - reference QDS', variable=self.n0_var, command=self.apply_assessments)
         n0.grid(row=1, column=0, sticky='w')
         self.tip(n0, HELP_TEXTS['n0'])
-        n1 = ttk.Checkbutton(options, text='n-1 - reference contingency analysis', variable=self.n1_var, state='disabled')
+        n1 = ttk.Checkbutton(options, text='n-1 - reference contingency analysis', variable=self.n1_var,
+                             command=self.apply_assessments)
         n1.grid(row=2, column=0, sticky='w')
         self.tip(n1, HELP_TEXTS['n1'])
         prime = ttk.Checkbutton(options, text="(n-1)' - contingency analysis with planned-outage scenarios",
-                                variable=self.n1_prime_var, state='disabled')
+                                variable=self.n1_prime_var, command=self.apply_assessments)
         prime.grid(row=3, column=0, sticky='w')
         self.tip(prime, HELP_TEXTS['n1_prime'])
-        note = ttk.Label(options, text="n-1 and (n-1)': enabled once the PowerFactory contingency interface is verified",
+        note = ttk.Label(options, text="n-1 and (n-1)': results in the log and on the QA page until part 4",
                          style='Muted.TLabel')
         note.grid(row=4, column=0, sticky='w', padx=(22, 0))
-        self.tip(note, N1_UNAVAILABLE)
+        self.tip(note, N1_NOTE)
         footer = ttk.Frame(options, style='Card.TFrame')
         footer.grid(row=5, column=0, sticky='ew', pady=(6, 0))
         footer.columnconfigure(0, weight=1)
@@ -5042,6 +5443,9 @@ class CaseManagerDialog:
         for row, section in enumerate(sections, 1):
             frame = ttk.Labelframe(inner, text=section, padding=10)
             frame.grid(row=row, column=0, sticky='ew', pady=(0, 8), padx=(0, 4))
+            if section == 'Network scope':
+                self._build_scope_section(frame)
+                continue
             frame.columnconfigure(5, weight=1)
             for column, text in enumerate(('Setting', 'Value', 'Unit', 'Source', 'Category')):
                 header = ttk.Label(frame, text=text, style='Muted.TLabel')
@@ -5091,6 +5495,117 @@ class CaseManagerDialog:
             variable.trace_add('write', lambda *_args, name=key: self.on_setting_edit(name))
         else:
             widget.state(['disabled'])
+
+    def _build_scope_section(self, frame):
+        """Grid selections: assessed equipment (applies now) and contingencies (stored and previewed only)."""
+        tk, ttk = self.tk, self.ttk
+        frame.columnconfigure(0, weight=1, uniform='scope')
+        frame.columnconfigure(1, weight=1, uniform='scope')
+        self.grid_lists = {}
+        left = ttk.Frame(frame, style='Card.TFrame')
+        left.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
+        right = ttk.Frame(frame, style='Card.TFrame')
+        right.grid(row=0, column=1, sticky='nsew')
+        for parent in (left, right):
+            parent.columnconfigure(0, weight=1)
+        title = ttk.Label(left, text="Assessed equipment (n-0 now, n-1 and (n-1)' later)", style='Section.TLabel')
+        title.grid(row=0, column=0, columnspan=2, sticky='w')
+        self.tip(title, setting_help('monitoring_grids'))
+        self._grid_listbox(left, 'monitoring_grids', row=1)
+        self.monitoring_note = ttk.Label(left, text='', style='Muted.TLabel', wraplength=340)
+        self.monitoring_note.grid(row=2, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        buttons = ttk.Frame(left, style='Card.TFrame')
+        buttons.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        for column, (text, command) in enumerate((('Select all grids', lambda: self.select_grids('monitoring_grids', True)),
+                                                  ('Clear selection', lambda: self.select_grids('monitoring_grids', False)))):
+            button = ttk.Button(buttons, text=text, command=command)
+            button.grid(row=0, column=column, padx=(0, 6))
+            self.tip(button, SETTING_HELP['grid_buttons'])
+        title = ttk.Label(right, text='Contingencies: grids of the outaged equipment (category B)', style='Section.TLabel')
+        title.grid(row=0, column=0, columnspan=2, sticky='w')
+        self.tip(title, setting_help('contingency_grids'))
+        self.contingency_mode = tk.StringVar(value='same')
+        choices = ttk.Frame(right, style='Card.TFrame')
+        choices.grid(row=1, column=0, columnspan=2, sticky='w')
+        for column, (value, text) in enumerate((('same', 'Same grids as the assessed equipment'), ('own', 'Own selection'))):
+            radio = ttk.Radiobutton(choices, text=text, value=value, variable=self.contingency_mode,
+                                    command=self.on_contingency_mode)
+            radio.grid(row=0, column=column, padx=(0, 10), sticky='w')
+            self.tip(radio, setting_help('contingency_grids'))
+        self._grid_listbox(right, 'contingency_grids', row=2)
+        self.contingency_note = ttk.Label(right, text='', style='Muted.TLabel', wraplength=340)
+        self.contingency_note.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        self.tip(self.contingency_note, SETTING_HELP['contingency_preview'])
+        self.refresh_scope()
+
+    def _grid_listbox(self, parent, key, row):
+        tk, ttk = self.tk, self.ttk
+        box = tk.Listbox(parent, selectmode='multiple', exportselection=False, height=7, activestyle='none',
+                         background=self.CARD, foreground=self.TEXT, selectbackground=self.SELECTED,
+                         selectforeground=self.TEXT, highlightthickness=1, highlightcolor=self.ACCENT,
+                         highlightbackground=self.BORDER, relief='flat', font=self.body_font)
+        box.grid(row=row, column=0, sticky='nsew', pady=(4, 0))
+        scroll = ttk.Scrollbar(parent, orient='vertical', command=box.yview)
+        scroll.grid(row=row, column=1, sticky='ns', pady=(4, 0))
+        box.configure(yscrollcommand=scroll.set)
+        box.bind('<<ListboxSelect>>', lambda _event, name=key: self.on_grid_select(name), add='+')
+        self.tip(box, setting_help(key))
+        self.grid_lists[key] = box
+
+    def refresh_scope(self):
+        """Show the grid selections of the editor; nothing is applied to PowerFactory."""
+        if not getattr(self, 'grid_lists', None):
+            return
+        choices = self.editor.grid_choices()
+        contingency = self.editor.selected_grids('contingency_grids')
+        self.contingency_mode.set('same' if contingency is None else 'own')
+        for key, box in self.grid_lists.items():
+            selected = set(self.editor.selected_grids(key) or ())
+            box.configure(state='normal')
+            box.delete(0, 'end')
+            for name in choices:
+                missing = self.editor.grids is not None and name not in self.editor.grids
+                box.insert('end', name + ('  (not in the project)' if missing else
+                                          '  (inactive)' if name in self.editor.inactive_grids else ''))
+                if name in selected or (key == 'contingency_grids' and contingency is None
+                                        and name in set(self.editor.selected_grids('monitoring_grids'))):
+                    box.selection_set('end')
+            if key == 'contingency_grids' and contingency is None:
+                box.configure(state='disabled')
+        if not choices:
+            self.monitoring_note.configure(text='No grid could be read from the model; every element is assessed.')
+        else:
+            self.monitoring_note.configure(text='Assessed: ' + self.editor.monitoring_text() +
+                                           '. No grid selected: every grid is assessed.')
+        self.contingency_note.configure(text=self.editor.contingency_preview())
+
+    def on_grid_select(self, key):
+        box = self.grid_lists[key]
+        if str(box.cget('state')) == 'disabled':
+            return
+        choices = self.editor.grid_choices()
+        problem = self.editor.set_grids(key, [choices[index] for index in box.curselection()])
+        if problem:
+            self.messagebox.showerror('Network scope', problem, parent=self.root)
+        self.after_scope_change()
+
+    def select_grids(self, key, everything):
+        problem = self.editor.set_grids(key, self.editor.grid_choices() if everything else [])
+        if problem:
+            self.messagebox.showerror('Network scope', problem, parent=self.root)
+        self.after_scope_change()
+
+    def on_contingency_mode(self):
+        if self.contingency_mode.get() == 'same':
+            self.editor.set_grids('contingency_grids', None)
+        else:
+            self.editor.set_grids('contingency_grids', self.editor.selected_grids('monitoring_grids'))
+        self.after_scope_change()
+
+    def after_scope_change(self):
+        self.refresh_scope()
+        self.refresh_cases(self.selected)
+        self.refresh_overview()
 
     def _build_time_page(self, page):
         ttk = self.ttk
@@ -5198,6 +5713,7 @@ class CaseManagerDialog:
         self.editor.restore_default_settings()
         for key in self.setting_vars:
             self.fill_setting(key)
+        self.refresh_scope()
         self.refresh_cases(self.selected)
         self.refresh_overview()
 
@@ -5625,10 +6141,15 @@ class CaseManagerDialog:
     # --- calculation -----------------------------------------------------------
     def apply_assessments(self):
         if not self.n0_var.get():
-            # n-1 and (n-1)' are not available, so n-0 is the only assessment that can be chosen.
+            # The report is built on the n-0 QDS, so it is always calculated.
             self.n0_var.set(True)
-            self.messagebox.showinfo('Assessment', "At least one assessment is needed, and n-0 is the only one available "
-                                     "until n-1 and (n-1)' are enabled.", parent=self.root)
+            self.messagebox.showinfo('Assessment', 'n-0 is always calculated: the report is built on it.', parent=self.root)
+        if self.n1_prime_var.get() and not self.n1_var.get():
+            # (n-1)' is compared with n-1: ticking (n-1)' ticks n-1, unticking n-1 unticks (n-1)'.
+            if self.n1_prime_var.get() and self.editor.config['assessments'].count(N1_PRIME):
+                self.n1_prime_var.set(False)
+            else:
+                self.n1_var.set(True)
         self.editor.set_assessments(self.n0_var.get(), self.n1_var.get(), self.n1_prime_var.get())
         self.refresh_overview()
 
@@ -5673,8 +6194,11 @@ class CaseManagerDialog:
             return
         self.editor.load(saved)
         self.n0_var.set('n-0' in self.editor.config['assessments'])
+        self.n1_var.set(N1_REFERENCE in self.editor.config['assessments'])
+        self.n1_prime_var.set(N1_PRIME in self.editor.config['assessments'])
         for key in self.setting_vars:
             self.fill_setting(key)
+        self.refresh_scope()
         for table in (self.case_table, self.member_table, self.available_table, self.fixed_table, self.rule_table, self.problem_table):
             table.clear_filters()
         ids = self.editor.case_ids()
@@ -5710,7 +6234,8 @@ class CaseManagerDialog:
         self.root.destroy()
 
 
-def run_case_manager(records, config, period, config_path, user='', qds_text='', qds_info=None):
+def run_case_manager(records, config, period, config_path, user='', qds_text='', qds_info=None, grids=None,
+                     contingencies=CONTINGENCIES_NOT_READ):
     """Show the case manager; the edited configuration on "Start calculation", None on Cancel."""
     try:
         import tkinter as tk
@@ -5719,7 +6244,8 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
         root = tk.Tk()
     except Exception as exc:
         raise CaseManagerUnavailable('The case manager cannot open a window: {}'.format(_friendly_exception(exc))) from None
-    dialog = CaseManagerDialog(root, CaseEditor(records, config, period, qds_text, qds_info), config_path, user,
+    dialog = CaseManagerDialog(root, CaseEditor(records, config, period, qds_text, qds_info, grids, contingencies),
+                               config_path, user,
                                (tk, ttk, messagebox, simpledialog))
     root.report_callback_exception = dialog.report_error
     try:
@@ -5893,11 +6419,11 @@ def _run_calculation(app, study_case, qds, case_id, name, description,
         counters = {}
         series, labels, plot_times, unit, absolute, origin = collect_series(
             snapshot, counters)
-        if GRID_NAME_FILTER:
+        if current_setting("monitoring_grids") or GRID_NAME_FILTER:
             logger.write(
                 "EXTRACTION",
-                "Grid scope {!r}: {} series assessed, {} out of scope and "
-                "not read.".format(GRID_NAME_FILTER, len(series),
+                "Grid scope ({}): {} series assessed, {} out of scope and "
+                "not read.".format(grid_scope_text(), len(series),
                                    counters.get('out_of_scope', 0)), 5)
         logger.write(
             "EXTRACTION",
@@ -6317,6 +6843,235 @@ def _reused_result(source, plan, request):
     return result
 
 
+def contingency_analysis(study_case):
+    """The ComSimoutage of the study case, read with GetContents (never created); None if there is not exactly one."""
+    commands = [item for item in _contents(study_case, '*.' + N1_COMMAND_CLASS) if class_name(item) == N1_COMMAND_CLASS]
+    return commands[0] if len(commands) == 1 else None
+
+
+def contingency_equipment(command):
+    """[(ComOutage, [equipment])] of the contingency analysis, read with ComOutage.GetObject(line)."""
+    found = []
+    for outage in _contents(command, '*.ComOutage'):
+        if class_name(outage) != 'ComOutage':
+            continue
+        elements = []
+        getter = getattr(outage, 'GetObject', None)
+        for line in range(MAX_CONTINGENCY_ELEMENTS if callable(getter) else 0):
+            try:
+                element = getter(line)
+            except Exception:
+                break
+            if element is None:
+                break
+            elements.append(element)
+        found.append((outage, elements))
+    return found
+
+
+def contingencies_outside(equipment, grids):
+    """The analysed contingencies none of whose equipment lies in `grids`; they are set to 'Not analysed' for the run.
+
+    No grid selected keeps every contingency. A contingency partly in the
+    grids, or without readable equipment, stays analysed.
+    """
+    if not grids:
+        return []
+    return [outage for outage, elements in equipment
+            if safe_attr(outage, 'outserv', 0) in (0, False) and elements
+            and not any(element_grid_name(element) in grids for element in elements)]
+
+
+def _same_times(found, wanted, tolerance=1.0):
+    return len(found) == len(wanted) and all(abs(a - b) <= tolerance for a, b in zip(sorted(found), sorted(wanted)))
+
+
+def run_n1_sweep(command, times, active_keys, records, excluded, label):
+    """One contingency analysis over `times` with exactly `active_keys` applied; the results, read before restoring.
+
+    Written temporarily and restored verified (StateGuard): studyTime and
+    bIgnoreTime, isPlannedOutages (0 without any active outage, else 1),
+    the 'Ignored' flag of every planned outage, and 'Not analysed' of the
+    contingencies outside the contingency grids. A failed calculation, or
+    study times that differ from the written ones, raise GridLensError.
+    """
+    with StateGuard() as guard:
+        if not guard.set(command, N1_PLANNED_OPTION, 1 if active_keys else 0,
+                         "'Planned outages' option of the contingency analysis"):
+            raise GridLensError("The 'Planned outages' option [{}] of the contingency analysis could not be set for "
+                                "{}.".format(N1_PLANNED_OPTION, label))
+        if active_keys:
+            _isolate_outages(guard, active_keys, records, label)
+        for outage in excluded:
+            if not guard.set(outage, 'outserv', 1, "'Not analysed' flag of contingency '{}'".format(object_name(outage))):
+                raise GridLensError("Contingency '{}' could not be set to 'Not analysed' for the contingency grid "
+                                    "selection.".format(object_name(outage)))
+        if not guard.set(command, N1_TIMES_ATTRIBUTE, [float(moment) for moment in times], 'study times of the contingency analysis'):
+            raise GridLensError("The study times [{}] of the contingency analysis could not be written for {}.".format(
+                N1_TIMES_ATTRIBUTE, label))
+        known, ignore = _read_setting(command, N1_IGNORE_ATTRIBUTE)
+        if known and isinstance(ignore, (list, tuple)) and not guard.set(
+                command, N1_IGNORE_ATTRIBUTE, [0.0] * len(times), 'ignored study times of the contingency analysis'):
+            raise GridLensError("The ignored study times [{}] of the contingency analysis could not be cleared for "
+                                "{}.".format(N1_IGNORE_ATTRIBUTE, label))
+        try:
+            code = command.Execute()
+        except Exception as exc:
+            raise GridLensError("The contingency analysis for {} stopped: {}".format(label, _friendly_exception(exc))) from None
+        if finite_number(code) != 0:
+            raise GridLensError("The contingency analysis for {} ended with error code {}.".format(label, code))
+        found = read_n1_results(command)
+    if not _same_times(list(found['times']), times):
+        raise GridLensError("The contingency analysis for {} calculated {} study time(s) instead of the {} written "
+                            "ones.".format(label, len(found['times']), len(times)))
+    return found
+
+
+def _n1_reference_text(comparison):
+    """Elements with a violation in the n-1 reference (PRE_EXISTING when compared with itself)."""
+    violated = sum(1 for entry in comparison['elements'].values() if entry['worst']['status'] == 'PRE_EXISTING')
+    return '{} element(s) with a post-fault violation'.format(violated)
+
+
+def run_n1_case(command, plan, request, records, grid, excluded, elements_of, prime, references, label=None):
+    """n-1 (fixed outages only) and, when `prime`, (n-1)' (with the case's outages) for one planning case.
+
+    Both use the QDS steps inside the case's outage windows. `references`
+    caches the n-1 results per set of study times, so cases with the same
+    times share one reference sweep. Returns the case's n-1 entry.
+    """
+    label = label or 'case ' + plan['id']
+    times = n1_study_times([plan['windows'][record['key']] for record in plan['members']], grid)
+    if not times:
+        return {'status': 'NOT EVALUATED', 'reason': 'no QDS time step lies inside the outage windows', 'times': 0}
+    background = {record['key'] for record in request['background']}
+    key = tuple(times)
+    reference = references.get(key)
+    if reference is None:
+        reference = references[key] = run_n1_sweep(command, times, background, records, excluded, 'the n-1 reference of ' + label)
+    entry = {'status': 'EVALUATED', 'times': len(times), 'contingencies': len(reference['contingencies'])}
+    if not prime:
+        entry.update(kind='n-1', comparison=compare_n1(reference, reference))
+        entry['summary'] = 'n-1 reference: ' + _n1_reference_text(entry['comparison'])
+        return entry
+    active = background | {record['key'] for record in plan['members']}
+    scenario = run_n1_sweep(command, times, active, records, excluded, "the (n-1)' scenario of " + label)
+    switched_off = {component for record in plan['members'] for component in record.get('component_keys') or ()}
+    entry.update(kind="(n-1)'", comparison=compare_n1(reference, scenario, switched_off, elements_of))
+    entry['summary'] = "(n-1)' against n-1: " + n1_summary(entry['comparison'])
+    return entry
+
+
+# ComOutage.GetObject(line) is read for at most this many lines per contingency.
+MAX_CONTINGENCY_ELEMENTS = 200
+
+
+def project_grids(app):
+    """Every grid (ElmNet) of the model as (name, active), sorted by name; read only, [] when none can be read.
+
+    Active grids come from GetCalcRelevantObjects, the others from the project's
+    network data, so that every grid of the model can be chosen; equipment of
+    an inactive grid is not calculated and is labelled so. The summary grid of
+    a study case is no grid of the model and is left out.
+    """
+    found = {}
+    try:
+        for grid in app.GetCalcRelevantObjects('*.ElmNet') or []:
+            if class_name(grid) == 'ElmNet' and object_name(grid) and not is_summary_grid(grid):
+                found[object_name(grid)] = True
+    except Exception:
+        pass
+    try:
+        folder = app.GetProjectFolder('netdat') or app.GetActiveProject()
+        for grid in folder.GetContents('*.ElmNet', 1) or []:
+            if class_name(grid) == 'ElmNet' and object_name(grid) and not is_summary_grid(grid):
+                found.setdefault(object_name(grid), False)
+    except Exception:
+        pass
+    return sorted(found.items(), key=lambda item: item[0].casefold())
+
+
+def is_summary_grid(grid):
+    """The "Summary Grid" every study case carries (an ElmNet stored in the IntCase); it holds no equipment."""
+    try:
+        return class_name(grid.GetParent()) == 'IntCase'
+    except Exception:
+        return False
+
+
+def read_contingencies(study_case):
+    """The contingencies of the study case's ComSimoutage with their equipment and grids, read only.
+
+    None when the study case has no contingency analysis. The equipment of a
+    contingency is read with ComOutage.GetObject(line), line 0, 1, ... until
+    None ("interrupted components"); nothing is executed or changed.
+    """
+    try:
+        commands = [item for item in study_case.GetContents('*.ComSimoutage') or [] if class_name(item) == 'ComSimoutage']
+    except Exception:
+        commands = []
+    if not commands:
+        return None
+    command = commands[0]
+    try:
+        outages = [item for item in command.GetContents('*.ComOutage') or [] if class_name(item) == 'ComOutage']
+    except Exception:
+        outages = []
+    found = []
+    for outage in outages:
+        elements = []
+        getter = getattr(outage, 'GetObject', None)
+        for line in range(MAX_CONTINGENCY_ELEMENTS if callable(getter) else 0):
+            try:
+                element = getter(line)
+            except Exception:
+                break
+            if element is None:
+                break
+            elements.append(element)
+        found.append({'name': object_name(outage), 'number': safe_attr(outage, 'number'),
+                      'analysed': safe_attr(outage, 'outserv', 0) in (0, False),
+                      'elements': [object_name(element) for element in elements],
+                      'grids': sorted({element_grid_name(element) or '(no grid)' for element in elements}, key=str.casefold)})
+    return {'command': object_name(command), 'contingencies': found}
+
+
+def contingency_scope(info, contingency_grids, monitoring_grids=()):
+    """Which contingencies the selection keeps. None for the contingency grids means the assessed grids.
+
+    A contingency is in scope when all of its equipment lies in the selected
+    grids, partly in scope when only some does, outside when none does; with
+    no grid selected every contingency is in scope. The n-1 run sets the contingencies outside to 'Not analysed'.
+    """
+    grids = tuple(monitoring_grids if contingency_grids is None else contingency_grids)
+    scope = {'grids': grids, 'in': [], 'partly': [], 'outside': [], 'unknown': [], 'not_analysed': []}
+    for contingency in (info or {}).get('contingencies') or ():
+        if not contingency['analysed']:
+            scope['not_analysed'].append(contingency['name'])
+            continue
+        if not contingency['grids']:
+            scope['unknown'].append(contingency['name'])
+            continue
+        inside = [grid in grids for grid in contingency['grids']] if grids else [True]
+        scope['in' if all(inside) else 'partly' if any(inside) else 'outside'].append(contingency['name'])
+    return scope
+
+
+def contingency_scope_text(info, contingency_grids, monitoring_grids=()):
+    """One line for preview, log and report."""
+    if info is None:
+        return 'no contingency analysis (ComSimoutage) in the active study case'
+    scope = contingency_scope(info, contingency_grids, monitoring_grids)
+    total = len(info['contingencies'])
+    parts = ['{} of {} contingencies of {!r} in scope ({})'.format(
+        len(scope['in']), total, info['command'], ', '.join(scope['grids']) if scope['grids'] else 'every grid')]
+    for key, label in (('partly', 'partly outside'), ('outside', 'outside'), ('unknown', 'equipment not readable'),
+                       ('not_analysed', 'already "Not analysed"')):
+        if scope[key]:
+            parts.append('{} {}'.format(len(scope[key]), label))
+    return '; '.join(parts) + ". Applied to the n-1 run: the contingencies outside are 'Not analysed' for the run."
+
+
 def qds_time_info(qds, period):
     """(label, value) lines of the ComStatsim time base for the Settings tab; read only, nothing is written."""
     start, end = period
@@ -6343,7 +7098,8 @@ def qds_period_text(period):
     return '{} - {}'.format(_format_pf_time(start), _format_pf_time(end))
 
 
-def obtain_case_request(app, records, candidates, period, logger, qds_info=None):
+def obtain_case_request(app, records, candidates, period, logger, qds_info=None, grids=None,
+                        contingencies=CONTINGENCIES_NOT_READ):
     """The planning cases of this run: from the case manager, the saved configuration or one per outage."""
     try:
         project_key = object_key(app.GetActiveProject())
@@ -6365,7 +7121,8 @@ def obtain_case_request(app, records, candidates, period, logger, qds_info=None)
                  "changed or calculated yet.", 3)
     try:
         config = run_case_manager(records, saved or empty_case_config(project_key), period, path, _generated_by(),
-                                  qds_text=qds_period_text(period), qds_info=qds_info)
+                                  qds_text=qds_period_text(period), qds_info=qds_info, grids=grids,
+                                  contingencies=contingencies)
     except CaseManagerUnavailable as exc:
         if saved is not None:
             logger.write("CASES", "{} Using the saved configuration revision {} instead.".format(exc, saved.get("revision")), 3, "WARNING")
@@ -6415,9 +7172,9 @@ def _log_context(app, study_case, qds, original_result, logger):
         project, object_name(study_case), object_name(qds)))
     logger.detail("Result object: {} ({})".format(
         object_name(original_result), class_name(original_result) or "ElmRes"))
-    logger.detail("Grid scope: {}".format(
+    logger.detail("Grid scope of the script: {}".format(
         "grids whose name contains {!r}".format(GRID_NAME_FILTER)
-        if GRID_NAME_FILTER else "every element"))
+        if GRID_NAME_FILTER else "every element (a grid selection in Settings takes precedence)"))
     logger.detail("Reference case: {} | case source: {} | time base: complete ComStatsim period".format(
         "on" if RUN_REFERENCE_CASE else "off", CASE_SOURCE))
 
@@ -6510,6 +7267,93 @@ def _log_findings(logger, payload):
                      "WARNING" if any(row["status"] == "FAIL" for row in checks) else "INFO")
 
 
+def contingency_grid_selection():
+    """The grids whose contingencies are analysed: the contingency grids, else the assessed grids (empty: every grid)."""
+    grids = current_setting('contingency_grids')
+    return tuple(current_setting('monitoring_grids') if grids is None else grids)
+
+
+def run_n1(study_case, qds, request, records, ready, results, logger, study_time_state):
+    """n-1 and, if requested, (n-1)' for every ready planning case; the entry goes to result['n1'].
+
+    A case that cannot be evaluated gets status NOT EVALUATED with the reason
+    and the others continue; a state that cannot be restored stops the run.
+    Cases with the same outages and windows share one evaluation.
+    """
+    prime = N1_PRIME in (request.get('assessments') or ())
+    by_id = {result['id']: result for result in results}
+    command = contingency_analysis(study_case)
+    grid = qds_grid(qds)
+    reason = ('the active study case does not hold exactly one contingency analysis (ComSimoutage)' if command is None
+              else 'the ComStatsim time step is not readable' if grid is None else None)
+    if reason:
+        logger.write("CALCULATION", "n-1 is not evaluated: {}.".format(reason), 4, "WARNING")
+        for plan in ready:
+            if plan['id'] in by_id:
+                by_id[plan['id']]['n1'] = {'status': 'NOT EVALUATED', 'reason': reason, 'times': 0}
+        return
+    equipment = contingency_equipment(command)
+    excluded = contingencies_outside(equipment, contingency_grid_selection())
+    elements_of = {object_key(outage): {object_key(element) for element in elements} for outage, elements in equipment}
+    logger.write("CALCULATION", "{} with contingency analysis '{}': {} contingencies, {} set to 'Not analysed' for the "
+                 "contingency grids.".format(N1_PRIME + " against n-1" if prime else N1_REFERENCE, object_name(command),
+                                             len(equipment), len(excluded)), 4)
+    references, done = {}, {}
+    for plan in ready:
+        result = by_id.get(plan['id'])
+        if result is None:
+            continue
+        if plan['fingerprint'] in done:
+            result['n1'] = dict(done[plan['fingerprint']])
+            continue
+        logger.case("n-1 · Case {} · {}".format(plan['id'], plan['name']))
+        started = time.monotonic()
+        try:
+            entry = run_n1_case(command, plan, request, records, grid, excluded, elements_of, prime, references)
+        except StateRestoreError:
+            raise
+        except GridLensError as exc:
+            entry = {'status': 'NOT EVALUATED', 'reason': str(exc), 'times': 0}
+        clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
+        if clock_errors:
+            raise GridLensError("The initial Study Case time could not be restored after the n-1 run of {}: {}.".format(
+                plan['id'], "; ".join(clock_errors)))
+        if entry['status'] == 'EVALUATED':
+            logger.detail("{} at {} study time(s) in {:.1f}s.".format(entry['summary'], entry['times'],
+                                                                     time.monotonic() - started))
+        else:
+            logger.detail("n-1 not evaluated: {}".format(entry['reason']), "WARNING")
+        result['n1'] = done[plan['fingerprint']] = entry
+
+
+def n1_quality(payload, results):
+    """One Model Quality row per case with an n-1 entry, until the report has n-1 chapters (part 4)."""
+    for result in results:
+        entry = result.get('n1')
+        if not entry:
+            continue
+        if entry['status'] != 'EVALUATED':
+            _quality(payload, 'n1_' + result['id'], 'n-1 ' + result['id'], 'WARNING',
+                     'Not evaluated: {}'.format(entry['reason']), result['id'])
+            continue
+        counts = entry['comparison']['counts']
+        worst = sorted((item['worst'] for item in entry['comparison']['elements'].values()),
+                       key=lambda item: N1_SEVERITY.index(item['status']))
+        caused = [item for item in worst if item['status'] in ('NEW', 'WORSENED')] if entry['kind'] == N1_PRIME else []
+        status = 'FAIL' if caused else 'WARNING' if any(counts.get(key) for key in ('FAILED', 'NOT_EVALUATED', 'NOT_COMPARABLE')) else 'PASS'
+        detail = '; '.join('{} {} ({}, contingency {})'.format(item['status'], clip_text(_element_name(item, entry), 40),
+                                                                 item['identity']['quantity'], clip_text(item['contingency_name'], 40))
+                           for item in caused[:3])
+        _quality(payload, 'n1_' + result['id'], 'n-1 ' + result['id'], status,
+                 '{} at {} study time(s), {} contingencies.{}'.format(entry['summary'], entry['times'], entry['contingencies'],
+                                                                     ' Caused: ' + detail + '.' if detail else ''), result['id'])
+
+
+def _element_name(item, entry):
+    element = item['identity']['element']
+    return entry['comparison']['elements'].get((element, item['identity']['quantity']), {}).get('name', element)
+
+
 def execute_gridlens(app):
     logger = RunLogger(app)
     logger.step(1, "Startup and context")
@@ -6571,11 +7415,19 @@ def execute_gridlens(app):
     logger.step(3, "Planned outages and planning cases")
     records, candidates = classify_planned_outages(app, logger, period)
     assign_definitions(records)
-    request = obtain_case_request(app, records, candidates, period, logger, qds_time_info(qds, period))
+    # Read only, for the network scope of the case manager.
+    grids = project_grids(app)
+    contingencies = read_contingencies(study_case)
+    request = obtain_case_request(app, records, candidates, period, logger, qds_time_info(qds, period), grids,
+                                  contingencies)
     # The settings are fixed here, after the case manager has closed, and apply to the whole run.
     request["settings_snapshot"] = activate_settings(request.get("settings"))
     logger.write("SETTINGS", "Settings {} with classification rules {}: {}.".format(
         SETTINGS_VERSION, CLASSIFICATION_VERSION, overrides_text(request["settings_snapshot"]["overrides"])), 3)
+    request["contingency_scope"] = contingency_scope_text(contingencies, current_setting("contingency_grids"),
+                                                          current_setting("monitoring_grids"))
+    logger.write("SETTINGS", "Assessed equipment: {}. Contingencies: {}".format(
+        grid_scope_text(), request["contingency_scope"]), 3)
     _log_plan(logger, request)
     ready = [plan for plan in request["cases"] if plan["status"] == PLAN_READY]
     logger.step(4, "Calculation and extraction (log steps 4 and 5)")
@@ -6615,6 +7467,8 @@ def execute_gridlens(app):
             logger.write(
                 "CALCULATION",
                 "No planning case can be calculated; the case runs were skipped.", 4, "WARNING")
+        if ready and N1_REFERENCE in (request.get("assessments") or ()):
+            run_n1(study_case, qds, request, records, ready, results, logger, study_time_state)
     finally:
         logger.step(6, "Restore and clean-up")
         logger.write("RESTORE", "Restoring the original PowerFactory state.", 6)
