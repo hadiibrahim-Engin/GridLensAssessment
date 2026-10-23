@@ -4905,7 +4905,7 @@ class Tooltip:
     """A short explanation that appears while the mouse rests on a widget."""
 
     DELAY, WRAP = 450, 380
-    BACKGROUND, BORDER = '#fffdf2', '#c9b977'
+    BACKGROUND, BORDER = '#FFFFFF', '#DCE5EC'
 
     def __init__(self, tk, widget, text):
         self.tk = tk
@@ -4938,8 +4938,8 @@ class Tooltip:
         window = tk.Toplevel(self.widget)
         window.wm_overrideredirect(True)
         tk.Label(window, text=self.text, justify='left', anchor='w', wraplength=self.WRAP, background=self.BACKGROUND,
-                 foreground='#1f2933', relief='solid', borderwidth=1, highlightbackground=self.BORDER,
-                 padx=8, pady=6).pack()
+                 foreground='#203449', relief='solid', borderwidth=1, highlightbackground=self.BORDER,
+                 font='TkDefaultFont', padx=12, pady=10).pack()
         window.update_idletasks()
         # Below the widget, kept on the screen.
         x = min(self.widget.winfo_rootx() + 12, self.widget.winfo_screenwidth() - window.winfo_reqwidth() - 8)
@@ -4970,7 +4970,7 @@ class FilterTable:
     """
 
     ALL = 'All'
-    HEADER_HEIGHT, FILTER_HEIGHT = 28, 30
+    HEADER_HEIGHT, FILTER_HEIGHT = 34, 38
 
     def __init__(self, dialog, parent, columns, height=8, selectmode='extended', tag_column=None, tips=None):
         """`columns`: (id, heading, width, stretch, choices); choices None for text, else labels or (label, value) pairs.
@@ -4986,6 +4986,8 @@ class FilterTable:
         self.sort_column, self.descending = None, False
         self.tag_column = tag_column
         self._pending = None
+        self.HEADER_HEIGHT = round(34 * dialog.ui_scale)
+        self.FILTER_HEIGHT = round(38 * dialog.ui_scale)
         self.frame = ttk.Frame(parent, style='Card.TFrame')
         self.frame.columnconfigure(0, weight=1)
         self.frame.rowconfigure(2, weight=1)
@@ -4996,16 +4998,18 @@ class FilterTable:
         self.tree = ttk.Treeview(self.frame, columns=[column[0] for column in columns], show='', height=height,
                                  selectmode=selectmode)
         self.tree.grid(row=2, column=0, sticky='nsew')
-        scroll = ttk.Scrollbar(self.frame, orient='vertical', command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        scroll.grid(row=2, column=1, sticky='ns')
+        self.scroll = ttk.Scrollbar(self.frame, orient='vertical', command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self._yscroll)
+        self.horizontal = ttk.Scrollbar(self.frame, orient='horizontal', command=self.tree.xview)
+        self.horizontal.grid(row=3, column=0, sticky='ew')
+        self.tree.configure(xscrollcommand=self._xscroll)
+        self.empty = ttk.Label(self.tree, text='No entries', style='Muted.TLabel', anchor='center', wraplength=240)
         footer = ttk.Frame(self.frame, style='Card.TFrame')
-        footer.grid(row=3, column=0, columnspan=2, sticky='ew', pady=(3, 0))
+        footer.grid(row=4, column=0, columnspan=2, sticky='ew', pady=(6, 0))
         self.count = ttk.Label(footer, text='', style='Muted.TLabel')
         self.count.grid(row=0, column=0, sticky='w')
-        self.clear = ttk.Label(footer, text='Clear filters', style='Link.TLabel', cursor='hand2')
+        self.clear = ttk.Button(footer, text='Clear filters', style='Link.TButton', command=self.clear_filters)
         self.clear.grid(row=0, column=1, sticky='w', padx=(10, 0))
-        self.clear.bind('<Button-1>', lambda _event: self.clear_filters())
         self.labels, self.inputs, self.values, self.choice_values = [], [], [], []
         for index, (_, heading, _, _, choices) in enumerate(columns):
             label = tk.Label(self.header, text=heading, anchor='w', background=dialog.HEADER, foreground=dialog.TEXT,
@@ -5039,14 +5043,43 @@ class FilterTable:
         width = self.tree.winfo_width()
         if width <= 1:
             return
-        widths = column_widths([(base, stretch) for _, _, base, stretch, _ in self.columns], width)
-        x = 0
+        # Keep dates, flags and filters readable. Narrow panes scroll horizontally
+        # instead of squeezing every field down to a few characters.
+        scale = self.dialog.ui_scale
+        minimum = [round(max(50, min(base, 140))*scale) for _, _, base, _, _ in self.columns]
+        widths = column_widths([(round(base*scale), stretch) for _, _, base, stretch, _ in self.columns],
+                               max(width, sum(minimum)))
+        widths = [max(value, least) for value, least in zip(widths, minimum)]
+        self._column_sizes = widths
         for index, (name, _, _, _, _) in enumerate(self.columns):
             column_width = widths[index]
             self.tree.column(name, width=column_width, minwidth=20, stretch=False)
+        self._place_headers()
+
+    def _place_headers(self):
+        widths = getattr(self, '_column_sizes', [])
+        first = self.tree.xview()[0]
+        icon_width = int(self.tree.column('#0', 'width')) if 'tree' in self.tree.cget('show') else 0
+        x = icon_width - round(first * (sum(widths) + icon_width))
+        for index, column_width in enumerate(widths):
             self.labels[index].place(x=x, y=0, width=column_width, height=self.HEADER_HEIGHT)
             self.inputs[index].place(x=x + 2, y=3, width=max(26, column_width - 4), height=self.FILTER_HEIGHT - 6)
             x += column_width
+
+    def _xscroll(self, first, last):
+        self.horizontal.set(first, last)
+        if float(first) <= 0 and float(last) >= 1:
+            self.horizontal.grid_remove()
+        else:
+            self.horizontal.grid()
+        self._place_headers()
+
+    def _yscroll(self, first, last):
+        self.scroll.set(first, last)
+        if float(first) <= 0 and float(last) >= 1:
+            self.scroll.grid_remove()
+        else:
+            self.scroll.grid(row=2, column=1, sticky='ns')
 
     def _schedule(self):
         # Filter after a short pause so that typing stays responsive with many rows.
@@ -5122,6 +5155,15 @@ class FilterTable:
         if self.tree.focus() not in visible_keys:
             self.tree.focus('')  # Space must never toggle an outage hidden by a filter.
         self.count.configure(text='{} of {} shown'.format(len(rows), len(self.rows)) if filters else '{} shown'.format(len(rows)))
+        if rows:
+            self.empty.place_forget()
+        else:
+            if filters:
+                text = 'No matching entries'
+            else:
+                text = getattr(self, 'empty_text', 'No entries')
+            self.empty.configure(text=text)
+            self.empty.place(relx=0.5, rely=0.5, anchor='center', relwidth=0.95)
         if filters:
             self.clear.grid()
         else:
@@ -5160,16 +5202,19 @@ class CaseManagerDialog:
     PowerFactory result objects and the report.
     """
 
-    BACKGROUND, CARD, TEXT, MUTED = '#eef3f7', '#ffffff', '#1c3244', '#5c7082'
-    ACCENT, ACCENT_ACTIVE, SELECTED, PROBLEM = '#276a89', '#1b4e68', '#dcecf4', '#a83030'
-    HEADER, FILTER, BORDER = '#e7eef4', '#f5f8fa', '#d0dce5'
-    MASTHEAD, MASTHEAD_MUTED, INSET = '#18384c', '#c7d8e4', '#f0f6fa'
-    FIXED, OVERLAP, GAP = '#8a94a3', '#dbe6f5', '#eceff3'
+    # Presentation tokens only; no calculation or configuration defaults live here.
+    BACKGROUND, CARD, TEXT, MUTED = '#F3F7FA', '#FFFFFF', '#203449', '#64788B'
+    ACCENT, ACCENT_ACTIVE, SELECTED, PROBLEM = '#087F9C', '#06677F', '#E5F3FA', '#DC3545'
+    HEADER, FILTER, BORDER = '#EDF3F7', '#F7FAFC', '#DCE5EC'
+    MASTHEAD, MASTHEAD_MUTED, INSET = '#16384F', '#C5DCE8', '#EFF7FA'
+    FIXED, OVERLAP, GAP = '#64788B', '#DCEEF4', '#EDF1F5'
+    WARNING, SUCCESS = '#D97706', '#16835D'
     TAB_CASES, TAB_SETTINGS = 'Case Manager', 'Settings'
     SETTINGS_PAGES = (('Network scope', ('Network scope',)), ('Limits', ('Thermal limits', 'Voltage limits')),
                       ('Classification', ('Classification',)), ('Report and run', ('Report', 'Run')),
                       ('Contingency analysis', ('Contingency analysis',)))
     PAGE_TIME, PAGE_FIXED = 'QDS time base', 'Fixed background & rules'
+    ZOOM_LEVELS = (75, 90, 100, 110, 125, 150, 175, 200)
 
     def __init__(self, root, editor, config_path, user, tk_modules):
         self.root = root
@@ -5186,6 +5231,8 @@ class CaseManagerDialog:
         # Settings tab: entry variable, entry, source label and message label per setting.
         self.setting_vars, self.setting_inputs, self.setting_sources, self.setting_messages = {}, {}, {}, {}
         self.preview_visible = False
+        self.ui_zoom = 1.0
+        self._flow_layouts = []
 
     def tip(self, widget, text):
         """Explain `widget` on hover; returns the Tooltip."""
@@ -5205,44 +5252,60 @@ class CaseManagerDialog:
         ttk, root = self.ttk, self.root
         self._style()
         root.title('GridLens {} - Case Manager'.format(PUBLISHER_VERSION))
-        root.geometry(window_geometry(root.winfo_screenwidth(), root.winfo_screenheight()))
+        root.geometry(window_geometry(root.winfo_screenwidth(), root.winfo_screenheight(), share=0.94, largest=(1720, 1020)))
         root.minsize(*minimum_window_size(root.winfo_screenwidth(), root.winfo_screenheight()))
         root.configure(background=self.BACKGROUND)
         root.columnconfigure(0, weight=1)
         root.rowconfigure(1, weight=1)
-        masthead = ttk.Frame(root, style='Masthead.TFrame', padding=(18, 12))
+        masthead = ttk.Frame(root, style='Masthead.TFrame', padding=(24, 16))
         masthead.grid(row=0, column=0, sticky='ew')
         masthead.columnconfigure(1, weight=1)
-        ttk.Label(masthead, text='GridLens', style='Brand.TLabel').grid(row=0, column=0, rowspan=2, sticky='w', padx=(0, 22))
-        ttk.Label(masthead, text='Planning case manager', style='MastheadTitle.TLabel').grid(row=0, column=1, sticky='w')
-        ttk.Label(masthead, text='Build independent cases. Check the settings. Start the calculation.',
-                  style='MastheadHint.TLabel').grid(row=1, column=1, sticky='w', pady=(2, 0))
+        ttk.Label(masthead, text='GridLens', style='Brand.TLabel').grid(row=0, column=0, sticky='w', padx=(0, 32))
+        ttk.Label(masthead, text= PUBLISHER_VERSION, style='MastheadHint.TLabel').grid(row=1, column=0, sticky='w')
+        self.page_title = ttk.Label(masthead, text='Planning case manager', style='MastheadTitle.TLabel', wraplength=300)
+        self.page_title.grid(row=0, column=1, sticky='w')
+        self.page_hint = ttk.Label(masthead, text='Build independent cases. Check the settings. Start the calculation.',
+                                   style='MastheadHint.TLabel', wraplength=440)
+        self.page_hint.grid(row=1, column=1, sticky='w', pady=(4, 0))
+        def fit_header(event):
+            width = max(120, event.width - 250*self.ui_zoom)
+            self.page_title.configure(wraplength=width)
+            self.page_hint.configure(wraplength=width)
+        masthead.bind('<Configure>', fit_header, add='+')
+        self._bind_zoom_keys()
         self.notebook = ttk.Notebook(root)
         self.notebook.enable_traversal()
-        self.notebook.grid(row=1, column=0, sticky='nsew', padx=14, pady=(12, 0))
+        self.notebook.grid(row=1, column=0, sticky='nsew', padx=20, pady=(14, 0))
         self.cases_tab = ttk.Frame(self.notebook, padding=(0, 8, 0, 0))
         self.settings_tab = ttk.Frame(self.notebook, padding=(0, 8, 0, 0))
         self.notebook.add(self.cases_tab, text=self.TAB_CASES)
         self.notebook.add(self.settings_tab, text=self.TAB_SETTINGS)
+        self.notebook.bind('<<NotebookTabChanged>>', self._on_page_change)
         self._build_case_manager(self.cases_tab)
         self._build_settings(self.settings_tab)
-        bottom = ttk.Frame(root, padding=(14, 6, 14, 12))
+        bottom = ttk.Frame(root, padding=(20, 8, 20, 16))
         bottom.grid(row=2, column=0, sticky='ew')
-        bottom.columnconfigure(2, weight=1)
-        self.status_line = self._wrapped_label(bottom, '', style='Status.TLabel', row=0, column=0,
-                                               columnspan=5, pady=(0, 6))
+        bottom.columnconfigure(0, weight=1)
+        ttk.Separator(bottom).grid(row=0, column=0, sticky='ew', pady=(0, 8))
+        self.status_line = self._wrapped_label(bottom, '', style='Status.TLabel', row=1, column=0, pady=(0, 10))
         self.status_line.configure(cursor='hand2')
         self.status_line.bind('<Button-1>', lambda _event: self.notebook.select(self.cases_tab))
         self.tip(self.status_line, HELP_TEXTS['status_line'])
-        for column, (text, command, key, style) in enumerate((
-                ('Save configuration', self.save, 'save', 'TButton'), ('Load saved configuration', self.load_saved, 'load', 'TButton'),
-                (None, None, None, None), ('Cancel', self.cancel, 'cancel', 'TButton'),
-                ('Start calculation', self.start, 'start', 'Accent.TButton'))):
-            if text is None:
-                continue
-            button = ttk.Button(bottom, text=text, style=style, command=command)
-            button.grid(row=1, column=column, padx=(0, 8) if column in (0, 3) else 0)
-            self.tip(button, HELP_TEXTS[key])
+        left_actions, right_actions = ttk.Frame(bottom), ttk.Frame(bottom)
+        left_actions.grid(row=2, column=0, sticky='w')
+        right_actions.grid(row=2, column=0, sticky='e')
+        for parent, actions in ((left_actions, (('Save configuration', self.save, 'save', 'TButton'),
+                                               ('Load saved configuration', self.load_saved, 'load', 'TButton'))),
+                                (right_actions, (('Cancel', self.cancel, 'cancel', 'TButton'),
+                                                 ('Start calculation', self.start, 'start', 'Accent.TButton')))):
+            for column, (text, command, key, style) in enumerate(actions):
+                button = ttk.Button(parent, text=text, style=style, command=command)
+                button.grid(row=0, column=column, padx=(0, 8) if column == 0 else 0)
+                self.tip(button, HELP_TEXTS[key])
+        def fit_actions(event):
+            stacked = left_actions.winfo_reqwidth() + right_actions.winfo_reqwidth() + 32 > event.width
+            right_actions.grid(row=3 if stacked else 2, column=0, sticky='e', pady=(8, 0) if stacked else 0)
+        bottom.bind('<Configure>', fit_actions, add='+')
         root.protocol('WM_DELETE_WINDOW', self.cancel)
         root.bind('<Escape>', self.on_escape)
         self._bind_window_keys()
@@ -5250,6 +5313,53 @@ class CaseManagerDialog:
         self.refresh_all(ids[0] if ids else None)
         self.root.update_idletasks()
         self.place_dividers()
+
+    def _on_page_change(self, _event=None):
+        settings = self.notebook.select() == str(self.settings_tab)
+        self.page_title.configure(text='Settings' if settings else 'Planning case manager')
+        self.page_hint.configure(text='Configure network scope, evaluation limits and calculation settings.' if settings else
+                                 'Build independent cases. Check the settings. Start the calculation.')
+
+    def _bind_zoom_keys(self):
+        modifiers = ['Control']
+        if self.root.tk.call('tk', 'windowingsystem') == 'aqua':
+            modifiers.append('Command')
+        for modifier in modifiers:
+            for key in ('plus', 'equal', 'KP_Add'):
+                self.root.bind('<{}-{}>'.format(modifier, key), lambda _event: self.step_zoom(1), add='+')
+            for key in ('minus', 'KP_Subtract'):
+                self.root.bind('<{}-{}>'.format(modifier, key), lambda _event: self.step_zoom(-1), add='+')
+            self.root.bind('<{}-0>'.format(modifier), lambda _event: self.set_zoom(100), add='+')
+
+    def step_zoom(self, direction):
+        current = round(self.ui_zoom * 100)
+        choices = [value for value in self.ZOOM_LEVELS if (value > current if direction > 0 else value < current)]
+        return self.set_zoom((min(choices) if direction > 0 else max(choices)) if choices else current)
+
+    def set_zoom(self, percent):
+        """Session-only display scaling, independent of OS DPI and saved settings."""
+        percent = max(75, min(200, int(str(percent).rstrip('%'))))
+        self.ui_zoom = percent / 100.0
+        for font, points in self.ui_fonts.values():
+            font.configure(size=round(points * self.ui_zoom))
+        self.device_scale = max(1.0, float(self.root.tk.call('tk', 'scaling')) / (96.0 / 72.0))
+        self.ui_scale = self.device_scale * self.ui_zoom
+        style = self.ttk.Style(self.root)
+        style.configure('Treeview', rowheight=round(32 * self.ui_scale))
+        style.configure('TButton', padding=(round(12*self.ui_zoom), round(8*self.ui_zoom)))
+        style.configure('Accent.TButton', padding=(round(20*self.ui_zoom), round(9*self.ui_zoom)))
+        for name in ('case_table', 'member_table', 'available_table', 'problem_table', 'fixed_table', 'rule_table'):
+            table = getattr(self, name)
+            table.HEADER_HEIGHT = round(34*self.ui_scale)
+            table.FILTER_HEIGHT = round(38*self.ui_scale)
+            table.header.configure(height=table.HEADER_HEIGHT)
+            table.filter_bar.configure(height=table.FILTER_HEIGHT)
+            table.layout()
+        self._size_settings_tabs()
+        for layout in self._flow_layouts:
+            layout()
+        self.draw_timeline()
+        return 'break'
 
     def place_dividers(self):
         """Start with available outages : case outages : cases = 40 : 38 : 22; the engineer can drag them."""
@@ -5267,57 +5377,103 @@ class CaseManagerDialog:
             pass
 
     def _style(self):
+        """One ttk theme, with point-sized fonts and DPI-scaled widget metrics."""
         style = self.ttk.Style(self.root)
         if 'clam' in style.theme_names():
             style.theme_use('clam')
-        try:
-            family = self.tk.font.nametofont('TkDefaultFont').actual()['family']
-        except Exception:
-            family = 'TkDefaultFont'
-        self.body_font = (family, 10)
-        self.bold_font = (family, 10, 'bold')
-        style.configure('.', background=self.BACKGROUND, foreground=self.TEXT, font=(family, 10))
-        style.configure('TFrame', background=self.BACKGROUND)
-        style.configure('Card.TFrame', background=self.CARD)
-        style.configure('Inset.TFrame', background=self.INSET)
-        style.configure('Masthead.TFrame', background=self.MASTHEAD)
-        style.configure('Brand.TLabel', background=self.MASTHEAD, foreground=self.CARD, font=(family, 19, 'bold'))
-        style.configure('MastheadTitle.TLabel', background=self.MASTHEAD, foreground=self.CARD, font=(family, 11, 'bold'))
-        style.configure('MastheadHint.TLabel', background=self.MASTHEAD, foreground=self.MASTHEAD_MUTED, font=(family, 10))
-        style.configure('TLabel', background=self.CARD, foreground=self.TEXT)
-        style.configure('Inset.TLabel', background=self.INSET, foreground=self.TEXT)
-        style.configure('InsetTitle.TLabel', background=self.INSET, foreground=self.ACCENT, font=(family, 10, 'bold'))
-        style.configure('Optional.TLabel', background=self.HEADER, foreground=self.MUTED, padding=(7, 3), font=(family, 9))
-        style.configure('Muted.TLabel', background=self.CARD, foreground=self.MUTED)
-        style.configure('Link.TLabel', background=self.CARD, foreground=self.ACCENT)
-        style.configure('Status.TLabel', background=self.BACKGROUND, foreground=self.MUTED)
-        style.configure('Title.TLabel', background=self.CARD, font=(family, 12, 'bold'))
-        style.configure('Section.TLabel', background=self.CARD, font=(family, 10, 'bold'))
-        style.configure('Problem.TLabel', background=self.CARD, foreground=self.PROBLEM)
-        style.configure('TLabelframe', background=self.CARD, bordercolor=self.BORDER)
-        style.configure('TLabelframe.Label', background=self.CARD, foreground=self.TEXT, font=(family, 10, 'bold'))
-        style.configure('TCheckbutton', background=self.CARD, focuscolor=self.ACCENT)
-        style.map('TCheckbutton', background=[('active', self.INSET)])
-        style.configure('TButton', padding=(10, 6), background=self.CARD, bordercolor=self.BORDER, focuscolor=self.ACCENT)
-        style.map('TButton', background=[('active', self.HEADER)], bordercolor=[('focus', self.ACCENT)])
-        style.configure('Accent.TButton', background=self.ACCENT, foreground=self.CARD, padding=(18, 7), font=(family, 10, 'bold'))
-        style.map('Accent.TButton', background=[('active', self.ACCENT_ACTIVE), ('disabled', '#9aa5b1')])
+        families = set(self.tk.font.families(self.root))
+        default = self.tk.font.nametofont('TkDefaultFont').actual()['family']
+        family = next((name for name in ('Segoe UI', 'SF Pro Text', 'Helvetica Neue', 'DejaVu Sans') if name in families), default)
+        sizes = {'body': (11, 'normal'), 'bold': (11, 'bold'), 'small': (10, 'normal'),
+                 'brand': (23, 'bold'), 'page': (15, 'bold'), 'title': (12, 'bold'), 'user': (10, 'bold')}
+        self.ui_fonts = {name: (self.tk.font.Font(root=self.root, family=family, size=points, weight=weight), points)
+                         for name, (points, weight) in sizes.items()}
+        self.body_font, self.bold_font, self.small_font = [self.ui_fonts[name][0] for name in ('body', 'bold', 'small')]
+        # Tk scaling is pixels per point. Keep the OS scaling; don't reset it.
+        self.device_scale = max(1.0, float(self.root.tk.call('tk', 'scaling')) / (96.0 / 72.0))
+        self.ui_scale = self.device_scale
+        self.tk.font.nametofont('TkDefaultFont').configure(family=family, size=11)
+        self.tk.font.nametofont('TkTextFont').configure(family=family, size=11)
+        style.configure('.', background=self.BACKGROUND, foreground=self.TEXT, font=self.body_font)
+        for name, color in (('TFrame', self.BACKGROUND), ('Card.TFrame', self.CARD),
+                            ('Inset.TFrame', self.INSET), ('Masthead.TFrame', self.MASTHEAD)):
+            style.configure(name, background=color)
+        style.configure('Panel.TFrame', background=self.CARD, borderwidth=1, relief='solid', bordercolor=self.BORDER)
+        for name, background, foreground, font in (
+                ('TLabel', self.CARD, self.TEXT, self.body_font),
+                ('Brand.TLabel', self.MASTHEAD, self.CARD, self.ui_fonts['brand'][0]),
+                ('MastheadTitle.TLabel', self.MASTHEAD, self.CARD, self.ui_fonts['page'][0]),
+                ('MastheadHint.TLabel', self.MASTHEAD, self.MASTHEAD_MUTED, self.small_font),
+                ('Inset.TLabel', self.INSET, self.TEXT, self.body_font),
+                ('InsetTitle.TLabel', self.INSET, self.ACCENT, self.bold_font),
+                ('Optional.TLabel', self.INSET, self.MUTED, self.small_font),
+                ('Muted.TLabel', self.CARD, self.MUTED, self.small_font),
+                ('Link.TLabel', self.CARD, self.ACCENT, self.body_font),
+                ('Status.TLabel', self.BACKGROUND, self.MUTED, self.small_font),
+                ('Title.TLabel', self.CARD, self.TEXT, self.ui_fonts['title'][0]),
+                ('Section.TLabel', self.CARD, self.TEXT, self.bold_font),
+                ('Problem.TLabel', self.CARD, self.PROBLEM, self.small_font),
+                ('Source.TLabel', self.CARD, self.MUTED, self.small_font),
+                ('User.TLabel', self.CARD, self.ACCENT, self.ui_fonts['user'][0]),
+                ('Success.TLabel', self.CARD, self.SUCCESS, self.small_font)):
+            style.configure(name, background=background, foreground=foreground, font=font)
+        style.configure('Optional.TLabel', padding=(8, 3))
+        style.configure('TLabelframe', background=self.CARD, bordercolor=self.BORDER, relief='solid', borderwidth=1)
+        style.configure('TLabelframe.Label', background=self.CARD, foreground=self.TEXT, font=self.bold_font)
+        for name in ('TCheckbutton', 'TRadiobutton'):
+            style.configure(name, background=self.CARD, foreground=self.TEXT, padding=(0, 4), focuscolor=self.ACCENT)
+            style.map(name, background=[('active', self.INSET)], foreground=[('disabled', self.MUTED)],
+                      indicatorbackground=[('disabled', self.HEADER), ('selected', self.ACCENT)],
+                      indicatorforeground=[('selected', self.CARD)])
+        style.configure('TButton', padding=(12, 8), background=self.CARD, foreground=self.TEXT,
+                        borderwidth=1, bordercolor=self.BORDER, lightcolor=self.CARD, darkcolor=self.CARD,
+                        focuscolor=self.ACCENT, focusthickness=1)
+        style.map('TButton', background=[('disabled', self.FILTER), ('pressed', self.SELECTED), ('active', self.INSET)],
+                  foreground=[('disabled', self.MUTED)], bordercolor=[('focus', self.ACCENT), ('active', self.ACCENT)])
+        style.configure('Accent.TButton', background=self.ACCENT, foreground=self.CARD, bordercolor=self.ACCENT,
+                        lightcolor=self.ACCENT, darkcolor=self.ACCENT, padding=(20, 9), font=self.bold_font)
+        style.map('Accent.TButton', background=[('disabled', self.BORDER), ('pressed', self.ACCENT_ACTIVE), ('active', self.ACCENT_ACTIVE)],
+                  foreground=[('disabled', self.MUTED), ('!disabled', self.CARD)],
+                  bordercolor=[('focus', self.MASTHEAD), ('!disabled', self.ACCENT)])
+        style.configure('Link.TButton', padding=(4, 0), foreground=self.ACCENT, borderwidth=0)
         style.configure('TNotebook', background=self.BACKGROUND, borderwidth=0, tabmargins=(0, 0, 0, 0))
-        style.configure('TNotebook.Tab', padding=(18, 9), font=(family, 10), background=self.BACKGROUND, foreground=self.MUTED)
-        style.map('TNotebook.Tab', background=[('selected', self.CARD)], foreground=[('selected', self.TEXT)],
-                  font=[('selected', (family, 10, 'bold'))])
-        style.configure('Filter.TEntry', fieldbackground=self.CARD, padding=(4, 1))
-        style.configure('Invalid.TEntry', fieldbackground='#fbe4e4', foreground=self.PROBLEM)
-        style.configure('Source.TLabel', background=self.CARD, foreground=self.MUTED, font=(family, 9))
-        style.configure('User.TLabel', background=self.CARD, foreground=self.ACCENT, font=(family, 9, 'bold'))
-        style.configure('Filter.TCombobox', fieldbackground=self.CARD, padding=(4, 1))
-        style.configure('Treeview', rowheight=26, background=self.CARD, fieldbackground=self.CARD, borderwidth=0,
+        style.configure('TNotebook.Tab', padding=(22, 10), font=self.bold_font, background=self.BACKGROUND,
+                        foreground=self.MUTED, bordercolor=self.BORDER)
+        style.map('TNotebook.Tab', background=[('selected', self.CARD), ('active', self.INSET)],
+                  foreground=[('selected', self.ACCENT)])
+        style.configure('Settings.TNotebook.Tab', padding=(12, 10), font=self.small_font)
+        style.configure('Settings.TNotebook', tabposition='wn')
+        for name in ('TEntry', 'TCombobox'):
+            style.configure(name, fieldbackground=self.CARD, background=self.FILTER, foreground=self.TEXT,
+                            padding=(8, 6), bordercolor=self.BORDER, lightcolor=self.BORDER, darkcolor=self.BORDER,
+                            arrowcolor=self.MUTED, selectbackground=self.SELECTED, selectforeground=self.TEXT)
+            style.map(name, bordercolor=[('focus', self.ACCENT)],
+                      fieldbackground=[('disabled', self.HEADER), ('readonly', self.CARD)],
+                      foreground=[('disabled', self.MUTED)], background=[('active', self.SELECTED)])
+        style.configure('Filter.TEntry', padding=(5, 4), font=self.small_font)
+        style.configure('Filter.TCombobox', padding=(5, 4), font=self.small_font)
+        style.configure('Invalid.TEntry', fieldbackground='#FFF0F1', foreground=self.PROBLEM, bordercolor=self.PROBLEM)
+        style.configure('Treeview', rowheight=round(32 * self.ui_scale), font=self.body_font,
+                        background=self.CARD, fieldbackground=self.CARD, borderwidth=0,
                         lightcolor=self.CARD, darkcolor=self.CARD)
-        style.configure('Vertical.TScrollbar', arrowsize=12, background=self.HEADER, troughcolor=self.FILTER, borderwidth=0)
         style.map('Treeview', background=[('selected', self.SELECTED)], foreground=[('selected', self.TEXT)])
+        for orient in ('Vertical', 'Horizontal'):
+            name = orient + '.TScrollbar'
+            style.configure(name, arrowsize=12, background=self.BORDER, troughcolor=self.FILTER,
+                            borderwidth=0, gripcount=0, lightcolor=self.BORDER, darkcolor=self.BORDER)
+            style.map(name, background=[('pressed', self.ACCENT), ('active', self.MUTED)])
+        style.configure('TPanedwindow', background=self.BACKGROUND)
+        style.configure('Sash', sashthickness=10)
+        style.configure('TSeparator', background=self.BORDER)
+        self.root.option_add('*TCombobox*Listbox.font', self.body_font)
+        self.root.option_add('*TCombobox*Listbox.background', self.CARD)
+        self.root.option_add('*TCombobox*Listbox.foreground', self.TEXT)
+        self.root.option_add('*TCombobox*Listbox.selectBackground', self.SELECTED)
+        self.root.option_add('*TCombobox*Listbox.selectForeground', self.TEXT)
+
 
     def _card(self, parent, **grid):
-        frame = self.ttk.Frame(parent, style='Card.TFrame', padding=14)
+        frame = self.ttk.Frame(parent, style='Panel.TFrame', padding=16)
         frame.grid(**grid)
         return frame
 
@@ -5335,17 +5491,40 @@ class CaseManagerDialog:
         parent.bind('<Configure>', resize, add='+')
         return label
 
+    def _flow(self, parent, widgets, gap=6):
+        """Wrap a small action/legend row without changing its widgets or callbacks."""
+        def layout(_event=None):
+            available = max(1, parent.winfo_width())
+            row, column, used = 0, 0, 0
+            for widget in widgets:
+                width = widget.winfo_reqwidth() + gap
+                if column and used + width > available:
+                    row, column, used = row + 1, 0, 0
+                widget.grid(row=row, column=column, sticky='w', padx=(0, gap), pady=(0, 4))
+                column, used = column + 1, used + width
+            ancestor = parent
+            while ancestor is not None and not hasattr(ancestor, '_fit_viewport'):
+                ancestor = getattr(ancestor, 'master', None)
+            if ancestor is not None:
+                self.root.after_idle(ancestor._fit_viewport)
+        parent.bind('<Configure>', layout, add='+')
+        self._flow_layouts.append(layout)
+
     # --- tab "Case Manager" ------------------------------------------------------
     def _build_case_manager(self, tab):
-        """The three panes on top; the calculation choice, problems and preview below them."""
-        tab.columnconfigure(0, weight=1)
-        tab.rowconfigure(0, weight=1)
-        workspace = self.ttk.Frame(tab)
+        """A scrolling workspace; the root's status and action bar never scroll."""
+        content = self._scrolled(tab)
+        self.case_content = content
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(0, weight=3)
+        workspace = self.ttk.Frame(content)
         workspace.grid(row=0, column=0, sticky='nsew')
         self._build_workspace(workspace)
-        strip = self.ttk.Frame(tab)
-        strip.grid(row=1, column=0, sticky='nsew', pady=(8, 0))
+        self._build_timeline(content)
+        strip = self.ttk.Frame(content)
+        strip.grid(row=2, column=0, sticky='nsew', pady=(12, 0))
         self._build_calculation(strip)
+
 
     def _build_workspace(self, tab):
         ttk = self.ttk
@@ -5354,7 +5533,7 @@ class CaseManagerDialog:
         self.panes = ttk.Panedwindow(tab, orient='horizontal')
         self.panes.grid(row=0, column=0, sticky='nsew')
         # Left to right the way an outage travels: available, into the case, the cases.
-        left, centre, right = (ttk.Frame(self.panes, style='Card.TFrame', padding=10) for _ in range(3))
+        left, centre, right = (ttk.Frame(self.panes, style='Panel.TFrame', padding=14) for _ in range(3))
         self.panes.add(left, weight=40)
         self.panes.add(centre, weight=38)
         self.panes.add(right, weight=22)
@@ -5365,7 +5544,7 @@ class CaseManagerDialog:
     def _build_cases(self, pane):
         ttk = self.ttk
         pane.columnconfigure(0, weight=1)
-        pane.rowconfigure(1, weight=1, minsize=170)
+        pane.rowconfigure(1, weight=1, minsize=140)
         title = ttk.Frame(pane, style='Card.TFrame')
         title.grid(row=0, column=0, sticky='ew', pady=(0, 6))
         title.columnconfigure(0, weight=1)
@@ -5376,9 +5555,10 @@ class CaseManagerDialog:
         self.case_table = FilterTable(self, pane, (
             ('enabled', 'Run', 42, False, (('included', '\u2611'), ('excluded', '\u2610'))),
             ('name', 'Planning case', 150, True, None), ('count', 'Outages', 56, False, None),
-            ('status', 'Status', 100, False, ('ready', 'not calculated', 'excluded'))), height=6, selectmode='browse',
+            ('status', 'Status', 100, False, ('ready', 'not calculated', 'excluded'))), height=4, selectmode='browse',
             tips={'enabled': HELP_TEXTS['enabled'], 'name': COLUMN_HELP['case_name'], 'count': COLUMN_HELP['case_count'], 'status': COLUMN_HELP['case_status']})
         self.case_table.grid(row=1, column=0, sticky='nsew')
+        self.case_table.empty_text = 'Create your first planning case with "New"'
         self.case_tree = self.case_table.tree
         self.case_tree.bind('<<TreeviewSelect>>', self.on_case_select)
         self.case_tree.bind('<Button-1>', self.on_case_flag_click)
@@ -5393,9 +5573,10 @@ class CaseManagerDialog:
         for column, (label, command) in enumerate((('New', self.new_case), ('Copy', self.copy_case),
                                                    ('Delete', self.delete_case))):
             buttons.columnconfigure(column, weight=1)
-            self.case_buttons[label] = ttk.Button(buttons, text=label, command=command)
-            self.case_buttons[label].grid(row=0, column=column, sticky='ew', padx=1)
+            self.case_buttons[label] = ttk.Button(buttons, text=label, command=command, width=6)
+            self.case_buttons[label].grid(row=0, column=column, sticky='ew', padx=(0, 4) if column < 2 else 0)
             self.tip(self.case_buttons[label], HELP_TEXTS[label])
+        self._flow(buttons, list(self.case_buttons.values()))
         per_outage = ttk.Button(pane, text='One case per planned outage', command=self.one_case_per_outage)
         per_outage.grid(row=3, column=0, sticky='ew', pady=(4, 8))
         self.tip(per_outage, HELP_TEXTS['one_per_outage'])
@@ -5404,55 +5585,71 @@ class CaseManagerDialog:
                             row=4, column=0, pady=(2, 0))
 
     def _build_case_outages(self, pane):
-        tk, ttk = self.tk, self.ttk
+        ttk = self.ttk
         pane.columnconfigure(0, weight=1)
-        pane.rowconfigure(2, weight=3, minsize=170)
-        pane.rowconfigure(4, weight=2, minsize=90)
+        pane.rowconfigure(2, weight=1)
         heading = ttk.Frame(pane, style='Card.TFrame')
         heading.grid(row=0, column=0, sticky='ew')
-        heading.columnconfigure(1, weight=1)
-        self.case_title = ttk.Label(heading, text='', style='Title.TLabel')
-        self.case_title.grid(row=0, column=0, sticky='w')
+        heading.columnconfigure(0, weight=1)
+        self.case_title = ttk.Label(heading, text='', style='Title.TLabel', wraplength=280)
+        self.case_title.grid(row=0, column=0, sticky='ew')
+        heading.bind('<Configure>', lambda event: self.case_title.configure(wraplength=max(120, event.width)), add='+')
         self.case_heading = heading
-        self.case_description = ttk.Label(heading, text='', style='Muted.TLabel', cursor='xterm')
-        self.case_description.grid(row=0, column=1, sticky='w', padx=(10, 0))
+        self.case_description = self._wrapped_label(heading, '', row=1, column=0, pady=(4, 0))
+        self.case_description.configure(cursor='xterm')
         self.case_description.bind('<Double-1>', lambda _event: self.describe_in_place())
         self.tip(self.case_description, HELP_TEXTS['description'])
-        self.counts_label = ttk.Label(pane, text='', style='Muted.TLabel')
-        self.counts_label.grid(row=1, column=0, sticky='w', pady=(0, 6))
+        self.counts_label = self._wrapped_label(pane, '', row=1, column=0, pady=(4, 12))
         self.member_table = FilterTable(self, pane, (
             ('fs', 'Planned outage', 170, True, None), ('equipment', 'Equipment', 160, True, None),
-            ('start', 'Start', 118, False, None), ('end', 'End', 118, False, None), ('prio', 'Priority', 62, False, None)), height=7,
+            ('start', 'Start', 128, False, None), ('end', 'End', 128, False, None), ('prio', 'Priority', 70, False, None)), height=4,
             tips={'prio': COLUMN_HELP['prio']})
+        self.member_table.empty_text = 'No planned outages assigned to this case'
         self.member_table.grid(row=2, column=0, sticky='nsew')
         self.member_tree = self.member_table.tree
         self.member_tree.bind('<Double-1>', lambda _event: self.show_details(self.member_tree))
         self._bind_delete(self.member_tree, self.remove_selected)
         buttons = ttk.Frame(pane, style='Card.TFrame')
-        buttons.grid(row=3, column=0, sticky='ew', pady=(6, 8))
-        remove = ttk.Button(buttons, text='Remove from case', command=self.remove_selected)
-        remove.grid(row=0, column=0, padx=(0, 6))
-        details = ttk.Button(buttons, text='Details', command=lambda: self.show_details(self.member_tree))
-        details.grid(row=0, column=1)
-        self.tip(remove, HELP_TEXTS['remove'])
-        self.tip(details, HELP_TEXTS['details'])
-        buttons.columnconfigure(2, weight=1)
-        hint = ttk.Label(buttons, text='Removes only the assignment.', style='Muted.TLabel', wraplength=150)
-        hint.grid(row=0, column=2, sticky='w', padx=(10, 0))
-        timeline = ttk.Labelframe(pane, text='Timeline of the case (planning check only, no results)', padding=6)
-        timeline.grid(row=4, column=0, sticky='nsew')
+        buttons.grid(row=3, column=0, sticky='ew', pady=(10, 0))
+        for column, (text, command, key) in enumerate((
+                ('Remove from case', self.remove_selected, 'remove'),
+                ('Details', lambda: self.show_details(self.member_tree), 'details'))):
+            button = ttk.Button(buttons, text=text, command=command)
+            button.grid(row=0, column=column, padx=(0, 6))
+            self.tip(button, HELP_TEXTS[key])
+        self._flow(buttons, buttons.winfo_children())
+        self._wrapped_label(pane, 'Removes only the assignment.', row=4, column=0, pady=(8, 0))
+
+    def _build_timeline(self, parent):
+        timeline = self._card(parent, row=1, column=0, sticky='nsew', pady=(12, 0))
         timeline.columnconfigure(0, weight=1)
-        timeline.rowconfigure(1, weight=1)
-        self.tip(timeline, HELP_TEXTS['timeline'])
-        legend = self._wrapped_label(timeline, 'Blue: case outage · Grey: shared outage · Shaded: overlapping windows · Light band: shortened gap',
-                                     row=0, column=0, columnspan=2, pady=(0, 4))
-        self.tip(legend, HELP_TEXTS['timeline'])
-        self.canvas = tk.Canvas(timeline, height=70, background=self.CARD, highlightthickness=0)
-        scroll = ttk.Scrollbar(timeline, orient='vertical', command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scroll.set)
-        self.canvas.grid(row=1, column=0, sticky='nsew')
-        scroll.grid(row=1, column=1, sticky='ns')
+        timeline.rowconfigure(2, weight=1)
+        title = self.ttk.Label(timeline, text='Timeline of the case', style='Title.TLabel')
+        title.grid(row=0, column=0, sticky='w')
+        self.tip(title, HELP_TEXTS['timeline'])
+        legend = self.ttk.Frame(timeline, style='Card.TFrame')
+        legend.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(8, 6))
+        for column, (color, text) in enumerate(((self.ACCENT, 'Case outage'), (self.FIXED, 'Shared outage'),
+                                               (self.OVERLAP, 'Overlapping windows'), (self.GAP, 'Shortened gap'))):
+            item = self.ttk.Frame(legend, style='Card.TFrame')
+            self.tk.Label(item, text='  ', background=color).grid(row=0, column=0, padx=(0, 6))
+            self.ttk.Label(item, text=text, style='Muted.TLabel').grid(row=0, column=1, padx=(0, 12))
+        self._flow(legend, legend.winfo_children())
+        self.canvas = self.tk.Canvas(timeline, height=78, background=self.CARD, highlightthickness=0)
+        scroll = self.ttk.Scrollbar(timeline, orient='vertical', command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=lambda first, last: self._scrollbar(scroll, first, last))
+        self.canvas.grid(row=2, column=0, sticky='nsew')
+        scroll.grid(row=2, column=1, sticky='ns')
         self.canvas.bind('<Configure>', lambda _event: self.draw_timeline())
+        self._timeline_axis = self.ttk.Frame(timeline, style='Card.TFrame')
+        self._timeline_axis.grid(row=3, column=0, sticky='ew', pady=(4, 0))
+        self._timeline_axis.columnconfigure(1, weight=1)
+        self.timeline_start = self.ttk.Label(self._timeline_axis, style='Muted.TLabel')
+        self.timeline_start.grid(row=0, column=0, sticky='w')
+        self.timeline_end = self.ttk.Label(self._timeline_axis, style='Muted.TLabel')
+        self.timeline_end.grid(row=0, column=2, sticky='e')
+        self.tip(self._timeline_axis, 'Planning windows only. Light bands compress long gaps; bar lengths across those gaps are not to scale.')
+
 
     def _build_available(self, pane):
         ttk = self.ttk
@@ -5466,11 +5663,12 @@ class CaseManagerDialog:
             ('fs', 'Planned outage', 140, True, None), ('equipment', 'Equipment', 110, True, None),
             ('start', 'Start', 106, False, None), ('end', 'End', 106, False, None),
             ('status', 'Status', 132, False, ('in simulated period', 'outside simulated period', 'Ignored in PowerFactory'))),
-            height=16, tag_column=0, tips={'mark': COLUMN_HELP['mark'], 'status': COLUMN_HELP['outage_status']})
+            height=4, tag_column=0, tips={'mark': COLUMN_HELP['mark'], 'status': COLUMN_HELP['outage_status']})
+        self.available_table.empty_text = 'No planned outages available'
         self.available_table.grid(row=1, column=0, sticky='nsew')
         self.available_tree = self.available_table.tree
-        self.available_tree.tag_configure(MARK_IN_CASE, background='#e8f0fb')
-        self.available_tree.tag_configure(MARK_FIXED, background='#f1f2f4')
+        self.available_tree.tag_configure(MARK_IN_CASE, background=self.INSET)
+        self.available_tree.tag_configure(MARK_FIXED, background=self.HEADER)
         self.available_tree.bind('<Button-1>', self.on_available_click)
         self.available_tree.bind('<space>', lambda _event: self.toggle_outage(self.available_tree.focus()) or 'break')
         self.available_tree.bind('<Double-1>', self.on_available_double_click)
@@ -5483,12 +5681,14 @@ class CaseManagerDialog:
             button = ttk.Button(buttons, text=text, command=command)
             button.grid(row=0, column=column, padx=(0, 6))
             self.tip(button, HELP_TEXTS[key])
+        self._flow(buttons, buttons.winfo_children())
         self._wrapped_label(pane, 'Tick to add an outage to the selected case; untick to remove it. '
                             '"Add to case" or Enter adds all selected rows.', row=3, column=0, pady=(6, 0))
 
     # --- tab "Fixed background & rules" -------------------------------------------
     def _build_fixed_and_rules(self, tab):
         ttk = self.ttk
+        tab = self._scrolled(tab, horizontal='zoom')
         tab.columnconfigure(0, weight=1, uniform='overview')
         tab.columnconfigure(1, weight=1, uniform='overview')
         tab.rowconfigure(1, weight=1)
@@ -5574,42 +5774,49 @@ class CaseManagerDialog:
     def _build_calculation(self, strip):
         """Calculation choice, problems and the collapsible preview, below the three panes."""
         tk, ttk = self.tk, self.ttk
-        strip.columnconfigure(1, weight=1)
+        strip.columnconfigure(0, weight=1, uniform='calculation')
+        strip.columnconfigure(1, weight=1, uniform='calculation')
         options = self._card(strip, row=0, column=0, sticky='nsew', padx=(0, 4))
+        options.columnconfigure(0, weight=1)
         ttk.Label(options, text='Calculation', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 4))
         # n-0 (the QDS of REF and every case) is always calculated, so it has no control here.
         self.n1_var = tk.BooleanVar(value=N1_REFERENCE in self.editor.config['assessments'])
         self.n1_prime_var = tk.BooleanVar(value=N1_PRIME in self.editor.config['assessments'])
-        n1 = ttk.Checkbutton(options, text='n-1 - reference contingency analysis', variable=self.n1_var,
-                             command=self.apply_assessments)
+        check_style = dict(background=self.CARD, foreground=self.TEXT, activebackground=self.INSET,
+                           activeforeground=self.TEXT, selectcolor=self.CARD, font=self.body_font,
+                           borderwidth=0, highlightthickness=1, highlightbackground=self.CARD,
+                           highlightcolor=self.ACCENT, anchor='w', justify='left', padx=0, pady=4)
+        n1 = tk.Checkbutton(options, text='n-1 - reference contingency analysis', variable=self.n1_var,
+                            command=self.apply_assessments, **check_style)
         n1.grid(row=2, column=0, sticky='w')
         self.tip(n1, HELP_TEXTS['n1'])
-        prime = ttk.Checkbutton(options, text="(n-1)' - contingency analysis with planned-outage scenarios",
-                                variable=self.n1_prime_var, command=self.apply_assessments)
+        prime = tk.Checkbutton(options, text="(n-1)' - contingency analysis with planned-outage scenarios",
+                               variable=self.n1_prime_var, command=self.apply_assessments, **check_style)
         prime.grid(row=3, column=0, sticky='w')
+        options.bind('<Configure>', lambda event: [widget.configure(wraplength=max(180, event.width - 58))
+                                                   for widget in (n1, prime)], add='+')
         self.tip(prime, HELP_TEXTS['n1_prime'])
-        note = ttk.Label(options, text="n-1 and (n-1)': results in the log and on the QA page until part 4",
-                         style='Muted.TLabel')
-        note.grid(row=4, column=0, sticky='w', padx=(22, 0))
+        note = self._wrapped_label(options, "n-1 and (n-1)': results in the log and on the QA page until part 4",
+                                   row=4, column=0, padx=(22, 0))
         self.tip(note, N1_NOTE)
         results = ttk.Frame(options, style='Card.TFrame')
         results.grid(row=6, column=0, sticky='ew', pady=(6, 0))
+        results.columnconfigure(1, weight=1)
         ttk.Label(results, text='Results:').grid(row=0, column=0, sticky='w', padx=(0, 6))
         choices = self.editor.result_choices()
         self.results_var = tk.StringVar(value=choices[0][0])
         self.results_box = ttk.Combobox(results, textvariable=self.results_var, values=[label for label, _ in choices],
-                                        state='readonly' if len(choices) > 1 else 'disabled', width=46)
-        self.results_box.grid(row=0, column=1, sticky='w')
+                                        state='readonly' if len(choices) > 1 else 'disabled', width=20)
+        self.results_box.grid(row=0, column=1, sticky='ew')
         self.results_box.bind('<<ComboboxSelected>>', lambda _event: self.apply_results_choice())
         self.tip(self.results_box, HELP_TEXTS['results'])
         footer = ttk.Frame(options, style='Card.TFrame')
         footer.grid(row=5, column=0, sticky='ew', pady=(6, 0))
         footer.columnconfigure(0, weight=1)
-        qds = ttk.Label(footer, text='QDS: ' + self.editor.qds_text, style='Section.TLabel')
-        qds.grid(row=0, column=0, sticky='w')
+        qds = self._wrapped_label(footer, 'QDS: ' + self.editor.qds_text, style='Section.TLabel', row=0, column=0)
         self.tip(qds, HELP_TEXTS['qds'])
         self.preview_button = ttk.Button(footer, text='Show calculation preview', command=self.toggle_preview)
-        self.preview_button.grid(row=0, column=1, sticky='e', padx=(10, 0))
+        self.preview_button.grid(row=1, column=0, sticky='w', pady=(8, 0))
         self.tip(self.preview_button, HELP_TEXTS['preview'])
         problems = self._card(strip, row=0, column=1, sticky='nsew', padx=(4, 0))
         problems.columnconfigure(0, weight=1)
@@ -5618,6 +5825,9 @@ class CaseManagerDialog:
         self.problem_table = FilterTable(self, problems, (('where', 'Where', 130, False, None), ('problem', 'Problem', 600, True, None)),
                                          height=3)
         self.problem_table.grid(row=1, column=0, sticky='nsew')
+        self.problem_table.empty_text = 'No problems or warnings'
+        self.problem_table.tree.tag_configure('warning', foreground=self.WARNING)
+        self.problem_table.tree.tag_configure('error', foreground=self.PROBLEM)
         self.preview_card = self._card(strip, row=1, column=0, columnspan=2, sticky='nsew', pady=(8, 0))
         self.preview_card.columnconfigure(0, weight=1)
         self.preview_card.rowconfigure(2, weight=1)
@@ -5644,13 +5854,21 @@ class CaseManagerDialog:
         else:
             self.preview_card.grid_remove()
         self.preview_button.configure(text='Hide calculation preview' if self.preview_visible else 'Show calculation preview')
+        self.case_content._stick_bottom = self.preview_visible
+        if self.preview_visible:
+            def reveal():
+                self.root.update_idletasks()
+                canvas = self.case_content._viewport
+                canvas.configure(scrollregion=canvas.bbox('all'))
+                self.case_content._viewport.yview_moveto(1.0)
+            self.root.after_idle(reveal)
 
     # --- tab "Settings" -------------------------------------------------------------
     def _build_settings(self, tab):
         ttk = self.ttk
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(1, weight=1)
-        self.settings_book = ttk.Notebook(tab)
+        self.settings_book = ttk.Notebook(tab, style='Settings.TNotebook')
         self.settings_book.grid(row=1, column=0, sticky='nsew')
         for title, sections in self.SETTINGS_PAGES:
             page = ttk.Frame(self.settings_book, padding=(0, 6, 0, 0))
@@ -5663,6 +5881,7 @@ class CaseManagerDialog:
         self.settings_book.add(fixed_page, text=self.PAGE_FIXED)
         self.fixed_page = fixed_page
         self._build_fixed_and_rules(fixed_page)
+        self._size_settings_tabs()
         bar = ttk.Frame(tab, padding=(0, 0, 0, 6))
         bar.grid(row=0, column=0, sticky='ew')
         bar.columnconfigure(3, weight=1)
@@ -5673,35 +5892,86 @@ class CaseManagerDialog:
             button = ttk.Button(bar, text=text, command=command)
             button.grid(row=0, column=column, padx=(0, 6))
             self.tip(button, SETTING_HELP[key])
-        self.settings_state = ttk.Label(bar, text='', style='Status.TLabel')
-        self.settings_state.grid(row=0, column=3, sticky='w', padx=(8, 0))
+        self.settings_state = self._wrapped_label(bar, '', style='Status.TLabel', row=1, column=0,
+                                                  columnspan=4, pady=(8, 6))
 
-    def _scrolled(self, parent):
-        """A vertically scrolling frame that fills `parent`; returns the inner frame."""
+    def _size_settings_tabs(self):
+        font = self.small_font
+        labels = [(page, self.settings_book.tab(page, 'text')) for page in self.settings_book.tabs()]
+        longest = max(font.measure(text) for _, text in labels)
+        for page, text in labels:
+            self.settings_book.tab(page, padding=(14, 12, 14 + longest - font.measure(text), 12))
+
+    @staticmethod
+    def _scrollbar(scroll, first, last):
+        scroll.set(first, last)
+        if float(first) <= 0 and float(last) >= 1:
+            scroll.grid_remove()
+        else:
+            scroll.grid()
+
+    def _scrolled(self, parent, horizontal=False):
+        """Fill the viewport, scrolling only when the content no longer fits."""
         canvas = self.tk.Canvas(parent, background=self.BACKGROUND, highlightthickness=0, borderwidth=0)
         scroll = self.ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
+        across = self.ttk.Scrollbar(parent, orient='horizontal', command=canvas.xview)
+        across.grid(row=1, column=0, sticky='ew')
         inner = self.ttk.Frame(canvas)
         window = canvas.create_window(0, 0, anchor='nw', window=inner)
-        canvas.configure(yscrollcommand=scroll.set)
+        canvas.configure(yscrollcommand=lambda first, last: self._scrollbar(scroll, first, last))
+        canvas.configure(xscrollcommand=lambda first, last: self._scrollbar(across, first, last))
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(0, weight=1)
         canvas.grid(row=0, column=0, sticky='nsew')
         scroll.grid(row=0, column=1, sticky='ns')
-        inner.bind('<Configure>', lambda _event: canvas.configure(scrollregion=canvas.bbox('all')), add='+')
-        canvas.bind('<Configure>', lambda event: canvas.itemconfigure(window, width=event.width), add='+')
+        def fit(_event=None):
+            allow_horizontal = horizontal and (horizontal != 'zoom' or self.ui_zoom > 1)
+            natural_height = inner.winfo_reqheight() if horizontal != 'zoom' or self.ui_zoom > 1 else 1
+            canvas.itemconfigure(window, width=max(inner.winfo_reqwidth() if allow_horizontal else 1, canvas.winfo_width()),
+                                 height=max(natural_height, canvas.winfo_height()))
+            canvas.configure(scrollregion=canvas.bbox('all'))
+            if getattr(inner, '_stick_bottom', False):
+                canvas.yview_moveto(1.0)
+        inner.bind('<Configure>', fit, add='+')
+        canvas.bind('<Configure>', fit, add='+')
+        def wheel(event):
+            if event.state & 4:  # the root handles Ctrl+wheel as zoom
+                return
+            inner._stick_bottom = False
+            target = event.widget
+            if target.winfo_class() in ('Treeview', 'Listbox', 'Text', 'TCombobox'):
+                return  # keep the native scrolling/selection behaviour
+            if event.num in (4, 5):
+                delta = -1 if event.num == 4 else 1
+            else:
+                delta = -int(event.delta / 120) if abs(event.delta) >= 120 else -int(event.delta)
+            if canvas.yview() != (0.0, 1.0):
+                canvas.yview_scroll(delta, 'units')
+        def bind_wheel(widget):
+            for sequence in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+                widget.bind(sequence, wheel, add='+')
+            for child in widget.winfo_children():
+                bind_wheel(child)
+        self.root.after_idle(lambda: bind_wheel(inner) if inner.winfo_exists() else None)
+        inner._viewport = canvas
+        inner._fit_viewport = fit
         return inner
+
 
     def _build_setting_page(self, page, sections):
         ttk = self.ttk
-        inner = self._scrolled(page)
+        inner = self._scrolled(page, horizontal=True)
         inner.columnconfigure(0, weight=1)
+        if sections == ('Network scope',):
+            inner.rowconfigure(1, weight=1)
         self._wrapped_label(inner, SETTINGS_INTRO, style='Status.TLabel', row=0, column=0, pady=(0, 6))
         for row, section in enumerate(sections, 1):
-            frame = ttk.Labelframe(inner, text=section, padding=10)
-            frame.grid(row=row, column=0, sticky='ew', pady=(0, 8), padx=(0, 4))
+            frame = ttk.Frame(inner) if section == 'Network scope' else ttk.Labelframe(inner, text=section, padding=16)
+            frame.grid(row=row, column=0, sticky='nsew', pady=(0, 12), padx=(0, 4))
             if section == 'Network scope':
                 self._build_scope_section(frame)
                 continue
+            frame.columnconfigure(0, weight=2)
             frame.columnconfigure(5, weight=1)
             for column, text in enumerate(('Setting', 'Value', 'Unit', 'Source', 'Category')):
                 header = ttk.Label(frame, text=text, style='Muted.TLabel')
@@ -5722,15 +5992,15 @@ class CaseManagerDialog:
         ttk, tk = self.ttk, self.tk
         setting = SETTINGS_BY_KEY[key]
         help_text = setting_help(key)
-        label = ttk.Label(frame, text=setting['label'])
-        label.grid(row=row, column=0, sticky='w', padx=(0, 10), pady=1)
+        label = ttk.Label(frame, text=setting['label'], wraplength=260)
+        label.grid(row=row, column=0, sticky='w', padx=(0, 14), pady=8)
         self.tip(label, help_text)
         variable = tk.StringVar(value='')
         if setting['kind'] == 'choice':
             widget = ttk.Combobox(frame, textvariable=variable, values=[text for _, text in setting['choices']],
-                                  state='readonly', width=24)
+                                  state='readonly', width=18)
         else:
-            widget = ttk.Entry(frame, textvariable=variable, width=14 if setting['editable'] else 24)
+            widget = ttk.Entry(frame, textvariable=variable, width=12 if setting['editable'] else 18)
         widget.grid(row=row, column=1, sticky='w', padx=(0, 10), pady=1)
         self.tip(widget, help_text)
         ttk.Label(frame, text=setting['unit'], style='Muted.TLabel').grid(row=row, column=2, sticky='w', padx=(0, 10))
@@ -5742,7 +6012,7 @@ class CaseManagerDialog:
         category.grid(row=row, column=4, sticky='w', padx=(0, 10))
         self.tip(category, SETTING_HELP['limits'] if setting['category'] == CATEGORY_EVALUATION
                  else SETTING_HELP['calculation_parameters'])
-        message = ttk.Label(frame, text='', style='Problem.TLabel', wraplength=320)
+        message = ttk.Label(frame, text='', style='Problem.TLabel', wraplength=180)
         message.grid(row=row, column=5, sticky='w')
         self.setting_vars[key], self.setting_inputs[key] = variable, widget
         self.setting_sources[key], self.setting_messages[key] = source, message
@@ -5753,81 +6023,116 @@ class CaseManagerDialog:
             widget.state(['disabled'])
 
     def _build_scope_section(self, frame):
-        """Grid selections: assessed equipment (applies now) and contingencies (stored and previewed only)."""
+        """Searchable grid lists; filtering never changes a saved selection."""
         tk, ttk = self.tk, self.ttk
         frame.columnconfigure(0, weight=1, uniform='scope')
         frame.columnconfigure(1, weight=1, uniform='scope')
-        self.grid_lists = {}
-        left = ttk.Frame(frame, style='Card.TFrame')
-        left.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-        right = ttk.Frame(frame, style='Card.TFrame')
-        right.grid(row=0, column=1, sticky='nsew')
+        frame.rowconfigure(0, weight=1)
+        self.grid_lists, self.grid_search, self.grid_visible, self.grid_empty = {}, {}, {}, {}
+        left = self._card(frame, row=0, column=0, sticky='nsew', padx=(0, 6))
+        right = self._card(frame, row=0, column=1, sticky='nsew', padx=(6, 0))
         for parent in (left, right):
             parent.columnconfigure(0, weight=1)
-        title = ttk.Label(left, text="Assessed equipment (n-0 now, n-1 and (n-1)' later)", style='Section.TLabel')
+            parent.rowconfigure(1, minsize=70)
+            parent.rowconfigure(4, weight=1)
+            parent.rowconfigure(5, minsize=60)
+            parent.rowconfigure(6, minsize=40)
+        title = ttk.Label(left, text='Assessed equipment', style='Title.TLabel')
         title.grid(row=0, column=0, columnspan=2, sticky='w')
         self.tip(title, setting_help('monitoring_grids'))
-        self._grid_listbox(left, 'monitoring_grids', row=1)
-        self.monitoring_note = ttk.Label(left, text='', style='Muted.TLabel', wraplength=340)
-        self.monitoring_note.grid(row=2, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        self._wrapped_label(left, 'Choose the grids whose equipment is assessed.', row=1, column=0, columnspan=2, pady=(6, 10))
+        self._grid_search_field(left, 'monitoring_grids', row=3)
+        self._grid_listbox(left, 'monitoring_grids', row=4)
+        self.monitoring_note = self._wrapped_label(left, '', row=5, column=0, columnspan=2, pady=(10, 0))
         buttons = ttk.Frame(left, style='Card.TFrame')
-        buttons.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        buttons.grid(row=6, column=0, columnspan=2, sticky='ew', pady=(10, 0))
         for column, (text, command) in enumerate((('Select all grids', lambda: self.select_grids('monitoring_grids', True)),
-                                                  ('Clear selection', lambda: self.select_grids('monitoring_grids', False)))):
+                                               ('Clear selection', lambda: self.select_grids('monitoring_grids', False)))):
             button = ttk.Button(buttons, text=text, command=command)
-            button.grid(row=0, column=column, padx=(0, 6))
+            button.grid(row=0, column=column, sticky='w', padx=(0, 6))
             self.tip(button, SETTING_HELP['grid_buttons'])
-        title = ttk.Label(right, text='Contingencies: grids of the outaged equipment (category B)', style='Section.TLabel')
+        self._flow(buttons, buttons.winfo_children())
+        title = ttk.Label(right, text='Contingencies', style='Title.TLabel')
         title.grid(row=0, column=0, columnspan=2, sticky='w')
         self.tip(title, setting_help('contingency_grids'))
         self.contingency_mode = tk.StringVar(value='same')
         choices = ttk.Frame(right, style='Card.TFrame')
-        choices.grid(row=1, column=0, columnspan=2, sticky='w')
-        for column, (value, text) in enumerate((('same', 'Same grids as the assessed equipment'), ('own', 'Own selection'))):
+        choices.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(6, 10))
+        for row, (value, text) in enumerate((('same', 'Same grids as the assessed equipment'), ('own', 'Own selection'))):
             radio = ttk.Radiobutton(choices, text=text, value=value, variable=self.contingency_mode,
                                     command=self.on_contingency_mode)
-            radio.grid(row=0, column=column, padx=(0, 10), sticky='w')
+            radio.grid(row=row, column=0, sticky='w')
             self.tip(radio, setting_help('contingency_grids'))
-        self._grid_listbox(right, 'contingency_grids', row=2)
-        self.contingency_note = ttk.Label(right, text='', style='Muted.TLabel', wraplength=340)
-        self.contingency_note.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        self._grid_search_field(right, 'contingency_grids', row=3)
+        self._grid_listbox(right, 'contingency_grids', row=4)
+        self.contingency_note = self._wrapped_label(right, '', row=5, column=0, columnspan=2, pady=(10, 0))
         self.tip(self.contingency_note, SETTING_HELP['contingency_preview'])
         self.refresh_scope()
 
+    def _grid_search_field(self, parent, key, row):
+        self.grid_search[key] = self.tk.StringVar()
+        field = self.ttk.Frame(parent, style='Card.TFrame')
+        field.grid(row=row, column=0, columnspan=2, sticky='ew', pady=(0, 6))
+        field.columnconfigure(0, weight=1)
+        self.ttk.Label(field, text='Search grids', style='Muted.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 4))
+        entry = self.ttk.Entry(field, textvariable=self.grid_search[key], width=12)
+        entry.grid(row=1, column=0, sticky='ew')
+        self.grid_search[key].trace_add('write', lambda *_args: self.refresh_scope())
+        self.tip(entry, 'Filter the visible grid names. Selected grids remain selected when hidden by the search.')
+
+
     def _grid_listbox(self, parent, key, row):
         tk, ttk = self.tk, self.ttk
-        box = tk.Listbox(parent, selectmode='multiple', exportselection=False, height=7, activestyle='none',
+        box = tk.Listbox(parent, selectmode='multiple', exportselection=False, height=10, width=12, activestyle='dotbox',
                          background=self.CARD, foreground=self.TEXT, selectbackground=self.SELECTED,
-                         selectforeground=self.TEXT, highlightthickness=1, highlightcolor=self.ACCENT,
-                         highlightbackground=self.BORDER, relief='flat', font=self.body_font)
+                         selectforeground=self.TEXT, disabledforeground=self.MUTED,
+                         highlightthickness=1, highlightcolor=self.ACCENT,
+                         highlightbackground=self.BORDER, relief='flat', font=self.body_font,
+                         borderwidth=0)
         box.grid(row=row, column=0, sticky='nsew', pady=(4, 0))
         scroll = ttk.Scrollbar(parent, orient='vertical', command=box.yview)
         scroll.grid(row=row, column=1, sticky='ns', pady=(4, 0))
-        box.configure(yscrollcommand=scroll.set)
+        box.configure(yscrollcommand=lambda first, last: self._scrollbar(scroll, first, last))
         box.bind('<<ListboxSelect>>', lambda _event, name=key: self.on_grid_select(name), add='+')
         self.tip(box, setting_help(key))
         self.grid_lists[key] = box
+        empty = ttk.Label(parent, text='No grids available', style='Muted.TLabel', anchor='center', wraplength=220)
+        self.grid_empty[key] = (empty, row)
+
 
     def refresh_scope(self):
-        """Show the grid selections of the editor; nothing is applied to PowerFactory."""
+        """Render the view without changing the editor's complete grid selection."""
         if not getattr(self, 'grid_lists', None):
             return
         choices = self.editor.grid_choices()
         contingency = self.editor.selected_grids('contingency_grids')
         self.contingency_mode.set('same' if contingency is None else 'own')
         for key, box in self.grid_lists.items():
+            query = self.grid_search[key].get().strip().casefold()
+            visible = [name for name in choices if query in name.casefold()]
+            self.grid_visible[key] = visible
             selected = set(self.editor.selected_grids(key) or ())
-            box.configure(state='normal')
+            if key == 'contingency_grids' and contingency is None:
+                selected = set(self.editor.selected_grids('monitoring_grids'))
+            scroll = box.yview()
+            box.configure(state='normal', background=self.CARD)
             box.delete(0, 'end')
-            for name in choices:
+            for name in visible:
                 missing = self.editor.grids is not None and name not in self.editor.grids
                 box.insert('end', name + ('  (not in the project)' if missing else
                                           '  (inactive)' if name in self.editor.inactive_grids else ''))
-                if name in selected or (key == 'contingency_grids' and contingency is None
-                                        and name in set(self.editor.selected_grids('monitoring_grids'))):
+                if name in selected:
                     box.selection_set('end')
+            if scroll:
+                box.yview_moveto(scroll[0])
             if key == 'contingency_grids' and contingency is None:
-                box.configure(state='disabled')
+                box.configure(state='disabled', background=self.FILTER)
+            empty, row = self.grid_empty[key]
+            if visible:
+                empty.grid_remove()
+            else:
+                empty.configure(text='No matching grids' if choices else 'No grids available in this model')
+                empty.grid(row=row, column=0, sticky='ew', padx=10)
         if not choices:
             self.monitoring_note.configure(text='No grid could be read from the model; every element is assessed.')
         else:
@@ -5835,15 +6140,19 @@ class CaseManagerDialog:
                                            '. No grid selected: every grid is assessed.')
         self.contingency_note.configure(text=self.editor.contingency_preview())
 
+
     def on_grid_select(self, key):
         box = self.grid_lists[key]
         if str(box.cget('state')) == 'disabled':
             return
-        choices = self.editor.grid_choices()
-        problem = self.editor.set_grids(key, [choices[index] for index in box.curselection()])
+        visible = self.grid_visible[key]
+        selected = [name for name in self.editor.selected_grids(key) or () if name not in visible]
+        selected += [visible[index] for index in box.curselection()]
+        problem = self.editor.set_grids(key, selected)
         if problem:
             self.messagebox.showerror('Network scope', problem, parent=self.root)
         self.after_scope_change()
+
 
     def select_grids(self, key, everything):
         problem = self.editor.set_grids(key, self.editor.grid_choices() if everything else [])
@@ -5866,15 +6175,17 @@ class CaseManagerDialog:
     def _build_time_page(self, page):
         ttk = self.ttk
         page.columnconfigure(0, weight=1)
-        card = self._card(page, row=0, column=0, sticky='new')
+        inner = self._scrolled(page)
+        inner.columnconfigure(0, weight=1)
+        card = self._card(inner, row=0, column=0, sticky='new')
         card.columnconfigure(1, weight=1)
         title = ttk.Label(card, text='QDS time base (read only)', style='Title.TLabel')
         title.grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 6))
         self.tip(title, HELP_TEXTS['qds'])
         for row, (label, value) in enumerate(self.editor.qds_info, 1):
             caption = ttk.Label(card, text=label, style='Muted.TLabel')
-            caption.grid(row=row, column=0, sticky='nw', padx=(0, 14), pady=1)
-            shown = ttk.Label(card, text=value, wraplength=620)
+            caption.grid(row=row, column=0, sticky='nw', padx=(0, 14), pady=8)
+            shown = ttk.Label(card, text=value, wraplength=520)
             shown.grid(row=row, column=1, sticky='w', pady=1)
             self.tip(shown, HELP_TEXTS['qds'])
         self._wrapped_label(card, 'Change the period and the time step in PowerFactory (ComStatsim). n-1 and (n-1)\' will '
@@ -6056,6 +6367,11 @@ class CaseManagerDialog:
             self._case_preview_text = text
         problems = self.editor.problem_rows()
         self.problem_table.set_rows([(str(index), cells) for index, cells in enumerate(problems)])
+        self.problem_table.tree.configure(show='tree', displaycolumns=('where', 'problem'))
+        self.problem_table.tree.column('#0', width=28, minwidth=28, stretch=False)
+        for index, (_, message) in enumerate(problems):
+            warning = message.startswith('Warning:')
+            self.problem_table.tree.item(str(index), text='△' if warning else '!', tags=('warning' if warning else 'error',))
         self.notebook.tab(self.cases_tab, text=self.TAB_CASES + (' ({})'.format(len(problems)) if problems else ''))
         statuses = self.editor.case_statuses()
         ready = sum(1 for status in statuses.values() if status == 'ready')
@@ -6076,11 +6392,17 @@ class CaseManagerDialog:
         canvas.delete('all')
         items, overlaps = self.editor.timeline(self.selected)
         width = max(canvas.winfo_width(), 360)
-        label_width, row_height, top = 130, 20, 8
+        label_width, row_height, top = 180, round(30 * self.ui_scale), 8
+        self.timeline_start.configure(text='')
+        self.timeline_end.configure(text='')
         if not items:
-            canvas.create_text(10, 20, anchor='w', fill=self.MUTED, text='No planned outage with a readable window in this case.')
-            canvas.configure(scrollregion=(0, 0, width, 40))
+            canvas.configure(height=36)
+            canvas.create_text(10, 20, anchor='w', fill=self.MUTED, font=self.body_font, text='No planned outage with a readable window in this case.')
+            canvas.configure(scrollregion=(0, 0, width, 36))
             return
+        canvas.configure(height=78)
+        self.timeline_start.configure(text='Window start: ' + _format_pf_time(min(item[1] for item in items)))
+        self.timeline_end.configure(text='Window end: ' + _format_pf_time(max(item[2] for item in items)))
         position, breaks = timeline_scale([(start, end) for _, start, end, _ in items], width - label_width - 14)
         x = lambda moment: label_width + position(moment)
         bottom = top + row_height * len(items)
@@ -6090,11 +6412,11 @@ class CaseManagerDialog:
             canvas.create_rectangle(x(start), top - 4, x(end), bottom, fill=self.OVERLAP, outline='')
         for index, (name, start, end, kind) in enumerate(items):
             y = top + index * row_height
-            canvas.create_text(4, y + row_height / 2, anchor='w', text=clip_text(name, 20), fill=self.TEXT)
+            canvas.create_text(4, y + row_height / 2, anchor='w', text=clip_text(name, 26), fill=self.TEXT, font=self.body_font)
             left = x(start)
             canvas.create_rectangle(left, y + 4, max(x(end), left + 3), y + row_height - 4,
                                     fill=self.ACCENT if kind == 'case' else self.FIXED, outline='')
-        # Only the order and the overlap matter here: no dates, no numbers.
+        # The same compressed scale and intervals; endpoint dates sit below the canvas.
         canvas.create_line(label_width, bottom + 2, width - 14, bottom + 2, fill=self.MUTED)
         canvas.configure(scrollregion=(0, 0, width, bottom + 8))
 
@@ -6175,7 +6497,7 @@ class CaseManagerDialog:
         self.root.update_idletasks()
         heading, label = self.case_heading, self.case_description
         left = label.winfo_x()
-        box = (left, 0, max(heading.winfo_width() - left, 240), max(heading.winfo_height(), 24))
+        box = (left, label.winfo_y(), max(heading.winfo_width() - left, 200), max(label.winfo_height(), 26))
 
         def apply(value):
             self.editor.set_description(case_id, value)
@@ -6366,8 +6688,13 @@ class CaseManagerDialog:
         window.title('Planned outage')
         window.configure(background=self.CARD)
         window.transient(self.root)
-        frame = self.ttk.Frame(window, style='Card.TFrame', padding=12)
+        window.geometry(window_geometry(window.winfo_screenwidth(), window.winfo_screenheight(), share=0.65, largest=(900, 760)))
+        window.minsize(min(560, window.winfo_screenwidth()), min(400, window.winfo_screenheight()))
+        inner = self._scrolled(window, horizontal=True)
+        inner.columnconfigure(0, weight=1)
+        frame = self.ttk.Frame(inner, style='Card.TFrame', padding=20)
         frame.grid(row=0, column=0, sticky='nsew')
+        frame.columnconfigure(1, weight=1)
         details = self.editor.details(key)
         for row, (label, value) in enumerate(details):
             self.ttk.Label(frame, text=label, style='Muted.TLabel').grid(row=row, column=0, sticky='nw', padx=(0, 12), pady=1)

@@ -50,6 +50,14 @@ def _safe_text(widget):
         return None
 
 
+def _assert_inside(root, widgets):
+    for widget in widgets:
+        x = widget.winfo_rootx() - root.winfo_rootx()
+        y = widget.winfo_rooty() - root.winfo_rooty()
+        assert 0 <= x and x + widget.winfo_width() <= root.winfo_width(), (str(widget), x, widget.winfo_width())
+        assert 0 <= y and y + widget.winfo_height() <= root.winfo_height(), (str(widget), y, widget.winfo_height())
+
+
 def _run(monkeypatch, records, config, steps, tmp_path=None):
     """Open the real dialog, run `steps(dialog, root)` inside its loop and return (outcome, observations)."""
     seen = {}
@@ -181,7 +189,8 @@ def test_filters_stand_exactly_under_their_columns(monkeypatch, records, config)
             table.layout()
             root.update()
             widths = [table.tree.column(column[0], "width") for column in table.columns]
-            starts = [sum(widths[:index]) for index in range(len(widths))]
+            offset = table.tree.column('#0', 'width') if 'tree' in table.tree.cget('show') else 0
+            starts = [offset + sum(widths[:index]) for index in range(len(widths))]
             seen[name] = ([label.winfo_x() for label in table.labels] == starts,
                           [widget.winfo_x() - 2 for widget in table.inputs] == starts)
 
@@ -897,3 +906,110 @@ def test_network_scope_lists_the_grids_of_the_model_for_selection(monkeypatch, r
     assert all("grid" in tip for tip in seen["tips"])
     assert not seen["problems"]
     assert outcome["settings"] == {"monitoring_grids": ("Grid A",), "contingency_grids": ("Grid B",)}
+
+
+def test_grid_search_preserves_hidden_selections_and_saved_grid_names(monkeypatch, records, config):
+    def mainloop(root):
+        dialog = root.report_callback_exception.__self__
+        root.update()
+        dialog.select_grids('monitoring_grids', True)
+        dialog.grid_search['monitoring_grids'].set('north')
+        root.update()
+        box = dialog.grid_lists['monitoring_grids']
+        assert list(box.get(0, 'end')) == ['North']
+        box.selection_clear(0, 'end')
+        dialog.on_grid_select('monitoring_grids')
+        assert set(dialog.editor.selected_grids('monitoring_grids')) == {'East', 'South'}
+        dialog.grid_search['monitoring_grids'].set('not found')
+        root.update()
+        assert dialog.grid_empty['monitoring_grids'][0].cget('text') == 'No matching grids'
+        assert set(dialog.editor.selected_grids('monitoring_grids')) == {'East', 'South'}
+        dialog.grid_search['monitoring_grids'].set('')
+        root.update()
+        assert list(box.curselection()) == [0, 2]
+        assert list(dialog.grid_lists['contingency_grids'].curselection()) == [0, 2]
+        dialog.start()
+    monkeypatch.setattr(tk.Tk, 'mainloop', mainloop)
+    outcome = gl.run_case_manager(records, config, PERIOD, '/nonexistent/cases.json', grids=['East', 'North', 'South'])
+    assert set(outcome['settings']['monitoring_grids']) == {'East', 'South'}
+
+
+@pytest.mark.parametrize('size', [(1000, 620), (1280, 800), (1920, 1080)])
+def test_keyboard_zoom_keeps_actions_visible_and_does_not_change_configuration(monkeypatch, records, config, size):
+    def steps(dialog, root, seen):
+        root.geometry('{}x{}'.format(*size))
+        root.update()
+        original = gl.json.dumps(dialog.editor.config, sort_keys=True)
+        selected = dialog.selected
+        baseline = dialog.body_font.actual('size')
+        for percent in (75, 125, 200, 100):
+            dialog.set_zoom(percent)
+            root.update()
+            assert dialog.ui_zoom == percent / 100
+            assert dialog.body_font.actual('size') == round(baseline * percent / 100)
+            _assert_inside(root, [_button(root, text) for text in
+                                 ('Save configuration', 'Load saved configuration', 'Cancel', 'Start calculation')])
+            assert gl.json.dumps(dialog.editor.config, sort_keys=True) == original
+            assert dialog.selected == selected
+            assert not dialog.inline_edit
+        assert not hasattr(dialog, 'zoom_box'), 'zoom is keyboard-only'
+        assert not any(_safe_text(w) in ('Zoom', 'Reset', '+', '−') for w in _widgets(root))
+        root.focus_force()
+        root.event_generate('<Control-equal>')
+        root.update()
+        assert dialog.ui_zoom == 1.1
+        root.event_generate('<Control-minus>')
+        root.update()
+        assert dialog.ui_zoom == 1.0
+        root.event_generate('<Control-0>')
+        root.update()
+        assert dialog.ui_zoom == 1.0
+    _run(monkeypatch, records, config, steps)
+
+
+def test_narrow_tables_scroll_headers_and_filters_together(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        root.geometry('1000x620')
+        root.update()
+        dialog.place_dividers()
+        root.update()
+        table = dialog.available_table
+        assert table.horizontal.winfo_ismapped()
+        table.tree.xview_moveto(1.0)
+        root.update()
+        assert table.tree.xview()[0] > 0
+        assert table.labels[0].winfo_x() < 0
+        assert all(field.winfo_x() - label.winfo_x() == 2 for field, label in zip(table.inputs, table.labels))
+        table.values[1].set('FS3')
+        table.render()
+        assert list(table.tree.get_children()) == [records[2]['key']]
+        table.clear_filters()
+        assert len(table.tree.get_children()) == len(records)
+        assert dialog.canvas.winfo_width() > sum(tree.winfo_width() for tree in (dialog.available_tree, dialog.member_tree))
+    _run(monkeypatch, records, config, steps)
+
+
+@pytest.mark.parametrize('tk_scaling', [4/3, 2.0, 8/3])
+def test_zoom_respects_system_scaling_without_clipping_table_text(monkeypatch, records, config, tk_scaling):
+    original_init = tk.Tk.__init__
+    def init(root, *args, **kwargs):
+        original_init(root, *args, **kwargs)
+        root.tk.call('tk', 'scaling', tk_scaling)
+    monkeypatch.setattr(tk.Tk, '__init__', init)
+    def steps(dialog, root, seen):
+        for percent in (75, 100, 150, 200):
+            dialog.set_zoom(percent)
+            root.update()
+            style = dialog.ttk.Style(root)
+            assert int(style.lookup('Treeview', 'rowheight')) >= dialog.body_font.metrics('linespace')
+            assert dialog.available_table.HEADER_HEIGHT >= dialog.bold_font.metrics('linespace')
+            assert dialog.available_table.FILTER_HEIGHT - 6 >= dialog.small_font.metrics('linespace')
+        dialog.set_zoom(100)
+        entry = dialog.available_table.inputs[1]
+        entry.focus_force()
+        root.update()
+        entry.event_generate('<Control-equal>')
+        root.update()
+        assert dialog.ui_zoom == 1.1
+        assert entry.get() == '', 'zoom shortcuts must not insert text into a filter'
+    _run(monkeypatch, records, config, steps)
