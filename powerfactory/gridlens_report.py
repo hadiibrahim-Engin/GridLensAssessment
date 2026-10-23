@@ -18,8 +18,8 @@ TOP_N = 10
 MAX_PLOT_POINTS = 200
 MAX_VOLTAGE_ROWS = 30
 # Defaults of the Settings tab (SETTINGS); a run uses the active settings
-# through loading_limit(), voltage_bands() and the other helpers, never these
-# names directly.
+# through loading_limit(), voltage_band(), setting_value() and the other
+# helpers, never these names directly (a constant is the default of its setting).
 LOADING_MAX = 100.0
 # Loading classes and the appendix start here.
 LOADING_WARNING = 80.0
@@ -29,14 +29,13 @@ VOLTAGE_DELTA_TOLERANCE = 0.001
 # The appendix also lists elements that change at least this much.
 LOADING_APPENDIX_DELTA = 1.0
 VOLTAGE_APPENDIX_DELTA = 0.005
-# Permitted voltage band per nominal voltage, in kV:
-# (lowest nominal, nominal below which the row applies, minimum, maximum).
-# Any other nominal voltage uses VOLTAGE_MIN to VOLTAGE_MAX in p.u.
-VOLTAGE_LIMITS_KV = ((300.0, 450.0, 360.0, 420.0), (200.0, 300.0, 198.0, 245.0), (100.0, 150.0, 99.0, 123.0))
+# Permitted voltage band in p.u. of the nominal voltage, the same for every voltage level.
 VOLTAGE_MIN = 0.95
 VOLTAGE_MAX = 1.05
 # Below this a node counts as de-energised at that time step, not as a value.
 ENERGIZED_MIN_PU = 0.1
+# Upper bound of n-1 study times per case: every study time calculates every contingency.
+MAX_N1_TIMES = 2000
 TIME_UNIT_FALLBACK = 'h'
 PUBLISHER_VERSION = '8.0.0'
 TEMPLATE_NAME = 'MASTER_GRIDLENS'
@@ -548,6 +547,7 @@ def collect_series(elmres, counters=None):
     series = []
     dark_series = 0
     plot_rows = sample_rows(rows)
+    energized = setting_value('energized_min_pu')
     for (_, _), (_, column, obj, variable) in sorted(chosen.items()):
         values = []
         category = result_category(obj, variable)
@@ -555,7 +555,7 @@ def collect_series(elmres, counters=None):
         for row, value in enumerate(read_column(elmres, column, rows)):
             if value is None and category != 'voltage':
                 raise RuntimeError('Invalid result value in ElmRes cell ({}, {}) for {} {}.'.format(row, column, object_name(obj), variable))
-            if category == 'voltage' and (value is None or value < ENERGIZED_MIN_PU):
+            if category == 'voltage' and (value is None or value < energized):
                 # A node an outage cuts off is reported as 0 or as NaN: both mean
                 # de-energised, no value. A loading that is not a number still stops the run.
                 value = None
@@ -631,15 +631,16 @@ def sampled_plot_points(item):
     axes. Exact extremes remain in the statistics.
     """
     points = item['points']
-    if len(points) <= MAX_PLOT_POINTS:
+    if len(points) <= setting_value('max_plot_points'):
         return points
     return [points[index] for index in sample_rows(len(points))]
 
 def sample_rows(count):
     """Row indices of the plot: all up to MAX_PLOT_POINTS, otherwise a grid that depends only on `count`."""
-    if count <= MAX_PLOT_POINTS:
+    limit = setting_value('max_plot_points')
+    if count <= limit:
         return list(range(count))
-    return sorted({int(round(sample * (count - 1) / float(MAX_PLOT_POINTS - 1))) for sample in range(MAX_PLOT_POINTS)})
+    return sorted({int(round(sample * (count - 1) / float(max(limit - 1, 1)))) for sample in range(limit)})
 
 def unique_time_labels(hours):
     """Calendar labels; where a clock change repeats a local time, with the UTC offset."""
@@ -756,12 +757,8 @@ def has_time_variation(item):
 def empty_payload():
     return {name: [] for name, _ in TABLES}
 
-def voltage_band(nominal_kv):
-    """Permitted voltage in p.u. of the nominal voltage (lower, upper)."""
-    if nominal_kv:
-        for lowest, highest, minimum, maximum in voltage_bands():
-            if lowest <= nominal_kv < highest:
-                return minimum / nominal_kv, maximum / nominal_kv
+def voltage_band(nominal_kv=None):
+    """Permitted voltage in p.u. of the nominal voltage (lower, upper): one band for every voltage level."""
     return default_voltage_limits()
 
 def voltage_limits(item):
@@ -793,6 +790,9 @@ SOURCE_GRIDLENS, SOURCE_POWERFACTORY, SOURCE_USER = 'GridLens', 'PowerFactory', 
 CATEGORY_EVALUATION, CATEGORY_CALCULATION = 'A', 'B'
 N1_LIMITS_POWERFACTORY, N1_LIMITS_GLOBAL = 'powerfactory', 'global'
 N1_LIMIT_CHOICES = ((N1_LIMITS_POWERFACTORY, 'use PowerFactory limits'), (N1_LIMITS_GLOBAL, 'global assessment limit'))
+ON_OFF_CHOICES = ((True, 'on'), (False, 'off'))
+# Upper bounds of the count settings: beyond them a run takes hours or the report gets unreadable.
+COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'max_cases': 20}
 NOT_VERIFIED = 'not verified yet'
 PART3_NOTE = ('Read only: set in the contingency analysis (ComSimoutage) of the study case; GridLens reads it '
               'and does not change it.')
@@ -802,20 +802,10 @@ NUMERIC_TOLERANCE = 1e-9
 
 
 def _setting(key, section, label, unit, default, kind, category=CATEGORY_EVALUATION, editable=True, applies='n-0',
-             source=SOURCE_GRIDLENS, note=''):
+             source=SOURCE_GRIDLENS, note='', choices=None):
     return {'key': key, 'section': section, 'label': label, 'unit': unit, 'default': default, 'kind': kind,
-            'category': category, 'editable': editable, 'applies': applies, 'source': source, 'note': note}
-
-
-def _band_settings():
-    found = []
-    for number, (lowest, highest, minimum, maximum) in enumerate(VOLTAGE_LIMITS_KV, 1):
-        band = '{} to below {} kV nominal'.format(format_limit(lowest), format_limit(highest))
-        found.append(_setting('band{}_min'.format(number), 'Voltage limits', 'Minimum voltage, ' + band, 'kV', minimum, 'kv',
-                              note='GridLens proposal, to be confirmed by the engineer'))
-        found.append(_setting('band{}_max'.format(number), 'Voltage limits', 'Maximum voltage, ' + band, 'kV', maximum, 'kv',
-                              note='GridLens proposal, to be confirmed by the engineer'))
-    return tuple(found)
+            'category': category, 'editable': editable, 'applies': applies, 'source': source, 'note': note,
+            'choices': choices or (N1_LIMIT_CHOICES if kind == 'choice' else None)}
 
 
 def _contingency_setting(key, label):
@@ -837,11 +827,12 @@ SETTINGS = (
              applies="n-1, (n-1)'"),
     _setting('n1_limit_global', 'Thermal limits', "Global assessment limit for n-1 and (n-1)'", '%', LOADING_MAX, 'limit',
              applies="n-1, (n-1)'", note='only used with a global assessment limit'),
-) + _band_settings() + (
-    _setting('voltage_min_pu', 'Voltage limits', 'Minimum voltage, any other nominal voltage', 'p.u.', VOLTAGE_MIN, 'pu',
+    _setting('voltage_min_pu', 'Voltage limits', 'Minimum voltage, every voltage level', 'p.u.', VOLTAGE_MIN, 'pu',
              note='GridLens proposal, to be confirmed by the engineer'),
-    _setting('voltage_max_pu', 'Voltage limits', 'Maximum voltage, any other nominal voltage', 'p.u.', VOLTAGE_MAX, 'pu',
+    _setting('voltage_max_pu', 'Voltage limits', 'Maximum voltage, every voltage level', 'p.u.', VOLTAGE_MAX, 'pu',
              note='GridLens proposal, to be confirmed by the engineer'),
+    _setting('energized_min_pu', 'Voltage limits', 'De-energised below', 'p.u.', ENERGIZED_MIN_PU, 'pu',
+             note='a node below this voltage counts as de-energised at that time step, not as a value'),
     _setting('post_fault_voltage', 'Voltage limits', 'Post-fault voltage limits', '', None, 'text', editable=False,
              applies="n-1, (n-1)'", source=SOURCE_POWERFACTORY, note=PART3_NOTE),
     _setting('loading_change_tolerance', 'Classification', 'n-0 change tolerance, loading', '%-points',
@@ -864,6 +855,19 @@ SETTINGS = (
              VOLTAGE_DELTA_TOLERANCE, 'tolerance', applies="n-1, (n-1)'"),
     _setting('margin_warning_loading', 'Classification', 'Reduced margin warning from, loading', '%', LOADING_WARNING,
              'limit', applies="n-1, (n-1)'"),
+    _setting('loading_appendix_delta', 'Report', 'Appendix: also list a loading change from', '%-points',
+             LOADING_APPENDIX_DELTA, 'tolerance', note='lines and transformers below the warning threshold'),
+    _setting('voltage_appendix_delta', 'Report', 'Appendix: also list a voltage change from', 'p.u.',
+             VOLTAGE_APPENDIX_DELTA, 'tolerance', note='nodes without a violation'),
+    _setting('top_n', 'Report', 'Rows of the Top-N lists', 'rows', TOP_N, 'count'),
+    _setting('max_plot_points', 'Report', 'Points per time plot, at most', 'points', MAX_PLOT_POINTS, 'count',
+             note='longer series are drawn on an even grid that is the same for every case'),
+    _setting('run_reference', 'Run', 'Reference case (REF)', '', RUN_REFERENCE_CASE, 'choice', choices=ON_OFF_CHOICES,
+             note='off: no comparison with a reference, every violation counts as found in the case'),
+    _setting('max_cases', 'Run', 'Planning cases, at most', 'cases', MAX_CASES, 'count',
+             note='every case is one more QDS run over the complete period'),
+    _setting('max_n1_times', 'Run', 'n-1 study times per case, at most', 'study times', MAX_N1_TIMES, 'count',
+             applies="n-1, (n-1)'", note='every study time calculates every contingency'),
     _contingency_setting('contingency_set', 'Contingency set'),
     _contingency_setting('contingency_categories', 'Equipment categories with contingencies'),
     _contingency_setting('monitored_scope', 'Monitored equipment and network areas'),
@@ -875,11 +879,11 @@ SETTINGS = (
     _contingency_setting('remedial_actions', 'Remedial actions'),
 )
 SETTINGS_BY_KEY = {setting['key']: setting for setting in SETTINGS}
-SETTING_SECTIONS = ('Network scope', 'Thermal limits', 'Voltage limits', 'Classification', 'Contingency analysis')
+SETTING_SECTIONS = ('Network scope', 'Thermal limits', 'Voltage limits', 'Classification', 'Report', 'Run',
+                    'Contingency analysis')
 SAME_AS_ASSESSMENT = 'same grids as the assessed equipment'
 # (lower, upper) pairs that must keep lower < upper; (warning, limit) pairs that must keep warning <= limit.
-_ORDERED_PAIRS = tuple(('band{}_min'.format(number), 'band{}_max'.format(number)) for number in range(1, len(VOLTAGE_LIMITS_KV) + 1)) + (
-    ('voltage_min_pu', 'voltage_max_pu'),)
+_ORDERED_PAIRS = (('energized_min_pu', 'voltage_min_pu'), ('voltage_min_pu', 'voltage_max_pu'))
 _WARNING_PAIRS = (('line_warning', 'line_limit'), ('transformer_warning', 'transformer_limit'))
 
 
@@ -898,8 +902,8 @@ def parse_setting(key, text):
     if setting['kind'] == 'grids':
         return parse_grids(key, text)
     if setting['kind'] == 'choice':
-        return (text, None) if text in dict(N1_LIMIT_CHOICES) else (None, '{}: choose one of {}'.format(
-            setting['label'], ', '.join(label for _, label in N1_LIMIT_CHOICES)))
+        return (text, None) if any(text == value and type(text) is type(value) for value, _ in setting['choices']) else (
+            None, '{}: choose one of {}'.format(setting['label'], ', '.join(label for _, label in setting['choices'])))
     value = text if isinstance(text, (int, float)) and not isinstance(text, bool) else None
     if isinstance(text, str) and re.match(r'^\s*[+-]?(\d+([.,]\d*)?|[.,]\d+)([eE][+-]?\d+)?\s*$', text):
         value = float(text.strip().replace(',', '.'))
@@ -910,6 +914,10 @@ def parse_setting(key, text):
         return None, '{} must be greater than 0 {}'.format(setting['label'], setting['unit']).rstrip()
     if setting['kind'] == 'tolerance' and value < 0:
         return None, '{} must not be negative'.format(setting['label'])
+    if setting['kind'] == 'count':
+        if value != int(value) or not 1 <= value <= COUNT_LIMITS[key]:
+            return None, '{}: enter a whole number from 1 to {}'.format(setting['label'], COUNT_LIMITS[key])
+        return int(value), None
     return value, None
 
 
@@ -983,7 +991,7 @@ def setting_text(key, value):
     if value is None:
         return NOT_VERIFIED
     if setting['kind'] == 'choice':
-        return dict(N1_LIMIT_CHOICES).get(value, str(value))
+        return dict(setting['choices']).get(value, str(value))
     return '{} {}'.format(format_limit(value) if setting['kind'] != 'tolerance' else '{:g}'.format(value),
                           setting['unit']).strip()
 
@@ -1036,6 +1044,22 @@ def active_overrides():
     return clean_overrides(_ACTIVE_SETTINGS or {})
 
 
+# Settings whose default is a script constant: setting_value() reads the user override, else the constant.
+_SETTING_CONSTANTS = {'top_n': 'TOP_N', 'max_plot_points': 'MAX_PLOT_POINTS', 'energized_min_pu': 'ENERGIZED_MIN_PU',
+                      'loading_appendix_delta': 'LOADING_APPENDIX_DELTA', 'voltage_appendix_delta': 'VOLTAGE_APPENDIX_DELTA',
+                      'run_reference': 'RUN_REFERENCE_CASE', 'max_cases': 'MAX_CASES', 'max_n1_times': 'MAX_N1_TIMES'}
+
+
+def setting_value(key, overrides=None):
+    """A setting of _SETTING_CONSTANTS: the override of `overrides` (default: the active settings), else the constant."""
+    found = active_overrides() if overrides is None else overrides
+    if key in found:
+        value, problem = parse_setting(key, found[key])
+        if problem is None:
+            return value
+    return globals()[_SETTING_CONSTANTS[key]]
+
+
 def current_setting(key):
     if _ACTIVE_SETTINGS is not None and key in _ACTIVE_SETTINGS:
         return _ACTIVE_SETTINGS[key]
@@ -1048,12 +1072,6 @@ def loading_limit(category):
 
 def loading_warning(category):
     return current_setting('transformer_warning' if category == 'transformer' else 'line_warning')
-
-
-def voltage_bands():
-    """VOLTAGE_LIMITS_KV with the active minimum and maximum of each band."""
-    return tuple((lowest, highest, current_setting('band{}_min'.format(number)), current_setting('band{}_max'.format(number)))
-                 for number, (lowest, highest, _, _) in enumerate(VOLTAGE_LIMITS_KV, 1))
 
 
 def default_voltage_limits():
@@ -1263,8 +1281,6 @@ CODE_NOT_RECORDED = 3
 STATE_NOT_RECORDED = 'not_recorded'
 # ComStatsim stepUnit: 0 seconds, 1 minutes, 2 hours, 3 days.
 STEP_UNIT_SECONDS = {0: 1.0, 1: 60.0, 2: 3600.0, 3: 86400.0}
-# Upper bound of study times per sweep: every study time calculates every contingency.
-MAX_N1_TIMES = 2000
 # Severity of the n-1 statuses for the worst status of an element; the codes stay those of the classification.
 N1_SEVERITY = ('NEW', 'WORSENED', 'FAILED', 'NOT_EVALUATED', 'NOT_COMPARABLE', 'PRE_EXISTING', 'IMPROVED',
                'RESOLVED', 'NOT_APPLICABLE', 'OK')
@@ -1281,7 +1297,7 @@ def qds_grid(qds):
     return (start, end, step) if step > 0 else None
 
 
-def n1_study_times(windows, grid, limit=MAX_N1_TIMES):
+def n1_study_times(windows, grid, limit=None):
     """The QDS steps that lie in at least one window [begin, end), inside the QDS period; sorted.
 
     A window that is not known (None) covers the whole QDS period, as for the
@@ -1289,6 +1305,7 @@ def n1_study_times(windows, grid, limit=MAX_N1_TIMES):
     sweep would calculate every contingency at every one of them.
     """
     start, end, step = grid
+    limit = setting_value('max_n1_times') if limit is None else limit
     times = set()
     for begin, finish in windows:
         begin = start if begin is None else max(begin, start)
@@ -1947,9 +1964,9 @@ REFERENCE_NAME = 'Reference'
 MAX_REFERENCE_ROWS = 30
 
 def voltage_limits_text():
-    bands = ['{} to {} kV for a nominal voltage from {} kV up to {} kV'.format(format_limit(minimum), format_limit(maximum), format_limit(lowest), format_limit(highest)) for lowest, highest, minimum, maximum in voltage_bands()]
     lower, upper = default_voltage_limits()
-    return 'Permitted voltage band: {}; {} to {} p.u. for any other nominal voltage. Values on the band limit are no violation.'.format('; '.join(bands), format_limit(lower), format_limit(upper))
+    return ('Permitted voltage band: {} to {} p.u. of the nominal voltage, for every voltage level. Values on the band '
+            'limit are no violation.'.format(format_limit(lower), format_limit(upper)))
 
 def _result_name(result):
     return REFERENCE_NAME if result['id'] == REFERENCE_ID else result['name']
@@ -1989,7 +2006,7 @@ def _loading_appendix(payload, results, category, table):
         ref_stats = reference.get(key, (None, None))[1]
         peaks = [stats['max'] for _, (_, stats) in found]
         deltas = [stats['max'] - ref_stats['max'] for case_id, (_, stats) in found if ref_stats is not None and case_id != REFERENCE_ID]
-        if max(peaks) < loading_warning(category) and not any(abs(delta) >= LOADING_APPENDIX_DELTA for delta in deltas):
+        if max(peaks) < loading_warning(category) and not any(abs(delta) >= setting_value('loading_appendix_delta') for delta in deltas):
             continue
         case_stats = [by_result[case['id']][key][1] for case in cases if key in by_result[case['id']]]
         texts = {case['id']: loading_text(by_result[case['id']][key][1]['max']) if key in by_result[case['id']] else 'n/a' for case in cases}
@@ -2009,7 +2026,7 @@ def _voltage_appendix(payload, results):
         case_stats = [by_result[case['id']][key][1] for case in cases if key in by_result[case['id']]]
         statuses = [limit_status({'item': item, 'ref': ref_stats, 'outage': stats}) for stats in case_stats] or [limit_status({'item': item, 'ref': ref_stats, 'outage': None})]
         change = max([abs(stats['min'] - ref_stats['min']) for stats in case_stats] or [0.0]) if ref_stats is not None else 0.0
-        if all(status == STATUS_OK for status in statuses) and change < VOLTAGE_APPENDIX_DELTA:
+        if all(status == STATUS_OK for status in statuses) and change < setting_value('voltage_appendix_delta'):
             continue
         lower, upper = voltage_limits(item)
         excess = max(max(lower - stats['min'], stats['max'] - upper) for _, stats in found)
@@ -2021,11 +2038,11 @@ def _top_lines_by_case(payload, results):
     by_result = _stats_by_result(results, 'line')
     ranked = {}
     for result_id, entries in by_result.items():
-        ordered = sorted(entries.values(), key=lambda entry: (-entry[1]['max'], entry[0]['element_name'].casefold()))[:TOP_N]
+        ordered = sorted(entries.values(), key=lambda entry: (-entry[1]['max'], entry[0]['element_name'].casefold()))[:setting_value('top_n')]
         ranked[result_id] = ['{} - {}'.format(item['element_name'], loading_text(stats['max'])) for item, stats in ordered]
     cases = outage_cases(results)
     rows = []
-    for rank in range(1, TOP_N + 1):
+    for rank in range(1, setting_value('top_n') + 1):
         reference = ranked.get(REFERENCE_ID, [])
         texts = {case['id']: ranked[case['id']][rank - 1] if rank <= len(ranked.get(case['id'], [])) else 'n/a' for case in cases}
         if rank > len(reference) and all(text == 'n/a' for text in texts.values()):
@@ -2095,7 +2112,7 @@ def _line_bars(payload, results):
             current = best.get(item['key'])
             if current is None or stats['max'] > current[1]:
                 best[item['key']] = (item['element_name'], stats['max'], _result_name(result))
-    for rank, (name, value, case_name) in enumerate(sorted(best.values(), key=lambda entry: (-entry[1], entry[0].casefold()))[:TOP_N], 1):
+    for rank, (name, value, case_name) in enumerate(sorted(best.values(), key=lambda entry: (-entry[1], entry[0].casefold()))[:setting_value('top_n')], 1):
         payload['ScriptedLineLoadingBars'].append({'rank': rank, 'element_name': name, 'max_value': value, 'case_name': case_name})
 
 def _trend_rows(payload, table, results, key, title):
@@ -2228,7 +2245,7 @@ def _model_quality(payload, results, request=None):
                  'Reference: {} and {} left out; {} below {} p.u. count as de-energised, not as a voltage value.'.format(
                      _counted(counters.get('dc_nodes', 0), 'DC node', 'DC nodes'),
                      _counted(counters.get('deenergized_nodes', 0), 'node without voltage', 'nodes without voltage'),
-                     _counted(counters.get('deenergized_steps', 0), 'time step', 'time steps'), format_limit(ENERGIZED_MIN_PU)))
+                     _counted(counters.get('deenergized_steps', 0), 'time step', 'time steps'), format_limit(setting_value('energized_min_pu'))))
     dark_cases = [(case['name'], sum(1 for record in case['comparison']['voltage'] if record['status'] == STATUS_DEENERGIZED)) for case in cases if case.get('comparison')]
     dark_cases = [(name, count) for name, count in dark_cases if count]
     if dark_cases:
@@ -3463,11 +3480,22 @@ def plan_fingerprint(plan, background):
     return hashlib.sha256('\n'.join(parts).encode('utf-8')).hexdigest()[:16]
 
 
+def case_limit(config):
+    """Most planning cases of a configuration: its 'Planning cases, at most' setting, else MAX_CASES."""
+    settings = config.get('settings') if isinstance(config, dict) else None
+    return setting_value('max_cases', settings if isinstance(settings, dict) else {})
+
+
+def assessments_text(assessments):
+    """'n-0 quasi-dynamic simulation, n-1, (n-1)'' for preview and log."""
+    return ', '.join('n-0 quasi-dynamic simulation' if item == 'n-0' else item for item in assessments or ['n-0'])
+
+
 def _is_text_list(value):
     return isinstance(value, list) and all(isinstance(item, str) and item for item in value)
 
 
-def validate_case_config(config, max_cases=MAX_CASES):
+def validate_case_config(config, max_cases=-1):
     """Structural problems of a configuration, as messages; [] when it can be used.
 
     `max_cases` limits the number of planning cases (None: no limit, for the
@@ -3478,6 +3506,8 @@ def validate_case_config(config, max_cases=MAX_CASES):
     """
     if not isinstance(config, dict):
         return ['the configuration is not an object']
+    if max_cases == -1:
+        max_cases = case_limit(config)
     problems = []
     if config.get('schema') != CASE_CONFIG_SCHEMA:
         problems.append('unknown schema {!r}'.format(config.get('schema')))
@@ -3550,7 +3580,7 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
     proposed calculation windows. A case that breaks a rule gets the status
     NOT EVALUATED with the reason; nothing is combined automatically.
     """
-    problems = validate_case_config(config, None if source == 'per_outage' else MAX_CASES)
+    problems = validate_case_config(config, None if source == 'per_outage' else case_limit(config))
     if problems:
         raise GridLensError('The case configuration cannot be used: {}.'.format('; '.join(problems)))
     by_key = {record['key']: record for record in records}
@@ -3751,9 +3781,10 @@ def preview_text(request, period=(None, None)):
     groups = {}
     for plan in ready:
         groups.setdefault(plan['fingerprint'], []).append(plan['id'])
-    runs = len(groups) + (1 if RUN_REFERENCE_CASE else 0)
+    reference = setting_value('run_reference', request.get('settings') or {})
+    runs = len(groups) + (1 if reference else 0)
     lines.append('{} case(s), {} ready; QDS runs: {} ({} reference){}.'.format(
-        len(request['cases']), len(ready), runs, 1 if RUN_REFERENCE_CASE else 0,
+        len(request['cases']), len(ready), runs, 1 if reference else 0,
         '; identical cases calculated once: ' + ', '.join('/'.join(ids) for ids in groups.values() if len(ids) > 1)
         if any(len(ids) > 1 for ids in groups.values()) else ''))
     for plan in request['cases']:
@@ -3828,13 +3859,15 @@ HELP_TEXTS = {
                "once and reported as REUSED.\n"
                "Unticked: status 'excluded'. The case stays in the configuration but is neither calculated nor "
                "reported. Other cases stay unchanged.",
-    'case_limit': "At most {} planning cases. Each case is one more QDS run over the complete period.".format(MAX_CASES),
-    'New': "Creates the next case (C1 ... C{}) with the name 'Case n'. Double-click it to rename it. Key: Ctrl+N.".format(MAX_CASES),
+    'case_limit': "At most the number of planning cases set in Settings -> Report and run (GridLens default {}). Each "
+                  "case is one more QDS run over the complete period.".format(MAX_CASES),
+    'New': "Creates the next case (C1, C2, ...) with the name 'Case n'. Double-click it to rename it. Key: Ctrl+N.",
     'Copy': "New independent case with the same planned outages and own dates. Changes affect only the copy.",
     'Delete': "Removes only the selected case after confirmation. Other cases and the planned outages in PowerFactory "
               "stay unchanged. Key: Delete in the case list.",
     'one_per_outage': "Replaces all cases by one case per planned outage in the simulated period (GridLens 7 "
-                      "behaviour), at most {}. Ignored and fixed outages get none. Asks before replacing.".format(MAX_CASES),
+                      "behaviour), up to the case limit of the Settings. Ignored and fixed outages get none. Asks "
+                      "before replacing.",
     'add': "Assigns all selected planned outages to the selected case at once. Same as Enter. For one outage, "
            "tick its box in the first column.\n"
            "An outage already in the case or fixed is refused with the reason.",
@@ -3893,14 +3926,25 @@ SETTING_HELP = {
                      "rating, a model parameter or the load flow.",
     'n1_limit_global': "Assessment limit for n-1 and (n-1)' when 'global assessment limit' is chosen. It is an "
                        "assessment limit only: ratings and thermal data in PowerFactory stay unchanged.",
-    'voltage_min_pu': "Lower permitted voltage limit for every nominal voltage outside the kV bands. Voltages below "
-                      "this limit are assessed as a limit violation. GridLens proposal, to be confirmed.",
-    'voltage_max_pu': "Upper permitted voltage limit for every nominal voltage outside the kV bands. Voltages above "
-                      "this limit are assessed as a limit violation. GridLens proposal, to be confirmed.",
-    'band_min': "Lower permitted voltage limit of this nominal voltage band. Voltages below this limit are assessed "
-                "as a limit violation. GridLens proposal, to be confirmed by the engineer.",
-    'band_max': "Upper permitted voltage limit of this nominal voltage band. Voltages above this limit are assessed "
-                "as a limit violation. GridLens proposal, to be confirmed by the engineer.",
+    'voltage_min_pu': "Lower permitted voltage in p.u. of the nominal voltage, the same for every voltage level. "
+                      "Voltages below it are assessed as a limit violation. GridLens proposal, to be confirmed.",
+    'voltage_max_pu': "Upper permitted voltage in p.u. of the nominal voltage, the same for every voltage level. "
+                      "Voltages above it are assessed as a limit violation. GridLens proposal, to be confirmed.",
+    'energized_min_pu': "Below this voltage a node counts as de-energised at that time step: it is no measured value "
+                        "and the node is reported as DE-ENERGISED, not as a voltage violation.",
+    'loading_appendix_delta': "The appendix lists every line and transformer from the warning threshold on, and "
+                              "below it every element whose loading changes by at least this much against REF.",
+    'voltage_appendix_delta': "The appendix lists every node with a violation, and every node whose voltage changes "
+                              "by at least this much against REF.",
+    'top_n': "Number of rows of the Top-N lists (most loaded lines, strongly loaded lines by case).",
+    'max_plot_points': "Time plots draw every time step up to this number; longer series are drawn on an even grid "
+                       "that is the same for REF and every case. The assessment always uses every time step.",
+    'run_reference': "On: GridLens calculates the reference REF (R0 or Rfix) and compares every case with it. Off: "
+                     "no reference; violations cannot be split into new and pre-existing.",
+    'max_cases': "Most planning cases one run may hold. Every case is one more QDS run over the complete period, "
+                 "so the run time grows with each case.",
+    'max_n1_times': "Most n-1 study times per case. Every study time calculates every contingency twice (n-1 and "
+                    "(n-1)'); a case with more study times is not evaluated and says so.",
     'post_fault_voltage': "Post-fault voltage limits per post-fault time phase. PowerFactory's post-fault phases are "
                           "not verified yet, so no separate limit can be set.",
     'loading_change_tolerance': "n-0 QDS: a loading change smaller than this (in %-points) counts as unchanged when a "
@@ -3960,8 +4004,6 @@ def setting_help(key):
     """The hover text of one setting, with the reason when it is read only."""
     setting = SETTINGS_BY_KEY[key]
     family = key
-    if key.startswith('band'):
-        family = 'band_min' if key.endswith('_min') else 'band_max'
     for prefix in ('limit_tolerance', 'worsened_tolerance', 'improved_tolerance'):
         if key.startswith(prefix):
             family = prefix
@@ -4124,9 +4166,10 @@ class CaseEditor:
         return 'C{}'.format(number)
 
     def limit_problem(self):
-        """Why no further case can be created; None while fewer than MAX_CASES exist."""
-        if len(self.config['cases']) >= MAX_CASES:
-            return 'At most {} planning cases are possible. Delete or reuse a case first.'.format(MAX_CASES)
+        """Why no further case can be created; None while fewer than the case limit exist."""
+        if len(self.config['cases']) >= case_limit(self.config):
+            return 'At most {} planning cases are possible. Delete or reuse a case first, or raise the limit in ' \
+                   'Settings -> Report and run.'.format(case_limit(self.config))
         return None
 
     def case_label(self, case_id):
@@ -4185,15 +4228,16 @@ class CaseEditor:
             self.config['cases'].remove(case)
 
     def one_case_per_outage(self):
-        """One case per planned outage in the simulated period, at most MAX_CASES; a note when outages were left out."""
+        """One case per planned outage in the simulated period, up to the case limit; a note when outages were left out."""
+        limit = case_limit(self.config)
         candidates = [record for record in self.records if self.outage_status(record) == 'in simulated period'
                       and record['key'] not in self.config['background']]
         self.config['cases'] = []
-        for record in candidates[:MAX_CASES]:
+        for record in candidates[:limit]:
             identifier, _ = self.add_case(record['id'])
             self.case(identifier)['outages'] = [record['key']]
-        if len(candidates) > MAX_CASES:
-            return 'Only the first {} of {} planned outages got a case (at most {} cases).'.format(MAX_CASES, len(candidates), MAX_CASES)
+        if len(candidates) > limit:
+            return 'Only the first {} of {} planned outages got a case (at most {} cases).'.format(limit, len(candidates), limit)
         return None
 
     # --- planned outages of a case ---------------------------------------------
@@ -4559,9 +4603,10 @@ class CaseEditor:
             return ' to '.join(_format_pf_time(value) if value is not None else '?' for value in window)
         background = request['background']
         fixed = ', '.join(record['name'] for record in background) or 'none'
-        lines = ['Assessment: n-0 (QDS)', "n-1 and (n-1)': not available until the contingency interface is verified",
+        lines = ['Assessment: ' + assessments_text(self.config.get('assessments')),
                  'QDS period: ' + self.qds_text,
-                 'Reference: ' + (('Rfix' if background else 'R0') if RUN_REFERENCE_CASE else 'off'),
+                 'Reference: ' + (('Rfix' if background else 'R0') if setting_value('run_reference', self.settings_overrides())
+                                  else 'off'),
                  'Shared background: ' + fixed,
                  'Assessed equipment: ' + self.monitoring_text(),
                  'Contingencies: ' + self.contingency_preview(),
@@ -4611,11 +4656,11 @@ class CaseEditor:
             ('Fixed background outages', ', '.join(record['id'] for record in background) or 'none'),
             ('Reference', 'Rfix - with the fixed background outages' if background else 'R0 - no planned outage'),
             ('QDS period', self.qds_text + ' (from the active ComStatsim)'),
-            ('Assessment', 'n-0 quasi-dynamic simulation'),
+            ('Assessment', assessments_text(self.config.get('assessments'))),
             ('Assessed equipment', self.monitoring_text()),
             ('Settings', overrides_text(self.settings_overrides())),
             ('Calculation runs', '{} reference + {} case run(s){}'.format(
-                1 if RUN_REFERENCE_CASE else 0, len(ready) - reused,
+                1 if setting_value('run_reference', self.settings_overrides()) else 0, len(ready) - reused,
                 ', {} identical case(s) reused'.format(reused) if reused else '')),
         ]
         return lines, problems
@@ -4922,7 +4967,7 @@ class CaseManagerDialog:
     FIXED, OVERLAP, GAP = '#8a94a3', '#dbe6f5', '#eceff3'
     TAB_CASES, TAB_SETTINGS = 'Case Manager', 'Settings'
     SETTINGS_PAGES = (('Network scope', ('Network scope',)), ('Limits', ('Thermal limits', 'Voltage limits')),
-                      ('Classification', ('Classification',)),
+                      ('Classification', ('Classification',)), ('Report and run', ('Report', 'Run')),
                       ('Contingency analysis', ('Contingency analysis',)))
     PAGE_TIME, PAGE_FIXED = 'QDS time base', 'Fixed background & rules'
 
@@ -5147,7 +5192,7 @@ class CaseManagerDialog:
             self.case_buttons[label] = ttk.Button(buttons, text=label, command=command)
             self.case_buttons[label].grid(row=0, column=column, sticky='ew', padx=1)
             self.tip(self.case_buttons[label], HELP_TEXTS[label])
-        per_outage = ttk.Button(pane, text='One case per planned outage (up to {})'.format(MAX_CASES), command=self.one_case_per_outage)
+        per_outage = ttk.Button(pane, text='One case per planned outage', command=self.one_case_per_outage)
         per_outage.grid(row=3, column=0, sticky='ew', pady=(4, 8))
         self.tip(per_outage, HELP_TEXTS['one_per_outage'])
         self._wrapped_label(pane, 'Run: ☑ included · ☐ excluded. Click the flag or press Space. '
@@ -5471,7 +5516,7 @@ class CaseManagerDialog:
         self.tip(label, help_text)
         variable = tk.StringVar(value='')
         if setting['kind'] == 'choice':
-            widget = ttk.Combobox(frame, textvariable=variable, values=[text for _, text in N1_LIMIT_CHOICES],
+            widget = ttk.Combobox(frame, textvariable=variable, values=[text for _, text in setting['choices']],
                                   state='readonly', width=24)
         else:
             widget = ttk.Entry(frame, textvariable=variable, width=14 if setting['editable'] else 24)
@@ -5633,7 +5678,7 @@ class CaseManagerDialog:
             return NOT_VERIFIED
         value = self.editor.settings_overrides().get(key, setting['default'])
         if setting['kind'] == 'choice':
-            return dict(N1_LIMIT_CHOICES).get(value, str(value))
+            return dict(setting['choices']).get(value, str(value))
         return format_limit(value)
 
     def fill_setting(self, key):
@@ -5644,7 +5689,7 @@ class CaseManagerDialog:
         """What the entry holds, as parse_setting expects it."""
         text = self.setting_vars[key].get()
         if SETTINGS_BY_KEY[key]['kind'] == 'choice':
-            return {label: value for value, label in N1_LIMIT_CHOICES}.get(text, text)
+            return {label: value for value, label in SETTINGS_BY_KEY[key]['choices']}.get(text, text)
         return text
 
     def on_setting_edit(self, key):
@@ -5731,7 +5776,7 @@ class CaseManagerDialog:
         self.case_table.set_rows([(case_id, ('\u2611' if enabled else '\u2610', self.editor.case_label(case_id), count, statuses.get(case_id, '')))
                                   for case_id, enabled, _, count in self.editor.case_rows()])
         full = self.editor.limit_problem() is not None
-        self.case_limit_label.configure(text='{} of {} cases'.format(len(self.editor.case_ids()), MAX_CASES),
+        self.case_limit_label.configure(text='{} of {} cases'.format(len(self.editor.case_ids()), case_limit(self.editor.config)),
                                         style='Problem.TLabel' if full else 'Muted.TLabel')
         for label in ('New', 'Copy'):
             self.case_buttons[label].state(['disabled'] if full else ['!disabled'])
@@ -6395,8 +6440,8 @@ def _run_calculation(app, study_case, qds, case_id, name, description,
         returned = qds.Execute()
     except Exception as exc:
         raise GridLensError(
-            "{} calculation was interrupted or failed: {}".format(
-                case_id, _friendly_exception(exc))) from None
+            "{} calculation was interrupted or failed: {}. {}".format(
+                case_id, _friendly_exception(exc), REFUSED_HINT)) from None
     elapsed = time.monotonic() - started
     code = return_code(returned)
     if code is None or code != 0.0:
@@ -6635,6 +6680,12 @@ def _log_qds_settings(qds, result, study_time_state, logger):
             study_time_state["date"], study_time_state["time"])), 2)
 
 
+# PowerFactory reports why it refused a command only in its output window; Python sees "method call failed".
+REFUSED_HINT = ("PowerFactory names the cause in its own message just above this line, for example a licence that "
+                "does not include the quasi-dynamic simulation or the contingency analysis. The result object of this "
+                "run stays in the study case and may be empty.")
+
+
 def _friendly_exception(exc):
     if exc is None:
         return "unknown error"
@@ -6869,6 +6920,78 @@ def contingency_equipment(command):
     return found
 
 
+# Equipment GridLens defines contingencies for when the study case has no contingency analysis: branches,
+# transformers, reactors, compensation and FACTS. Not: generators, loads, busbars and terminals.
+N1_CONTINGENCY_CLASSES = ('ElmLne', 'ElmBranch', 'ElmZpu', 'ElmTr2', 'ElmTr3', 'ElmTr4', 'ElmSind', 'ElmScap',
+                          'ElmShnt', 'ElmSvs', 'ElmVsc', 'ElmVscmono')
+N1_SWEEP_OPTION = 'iEnableTS'
+
+
+def contingency_candidates(app, grids):
+    """Calculation-relevant equipment of N1_CONTINGENCY_CLASSES in `grids` (empty: every grid), one per contingency.
+
+    A line inside a branch (ElmBranch) is left out: the branch is its contingency.
+    """
+    found, seen = [], set()
+    for kind in N1_CONTINGENCY_CLASSES:
+        try:
+            objects = list(app.GetCalcRelevantObjects('*.' + kind) or [])
+        except Exception:
+            objects = []
+        for obj in objects:
+            if class_name(obj) != kind or object_key(obj) in seen:
+                continue
+            if kind == 'ElmLne':
+                try:
+                    if class_name(obj.GetParent()) == 'ElmBranch':
+                        continue
+                except Exception:
+                    pass
+            if grids and element_grid_name(obj) not in grids:
+                continue
+            seen.add(object_key(obj))
+            found.append(obj)
+    return found
+
+
+def create_contingency_analysis(app, study_case, grids, name):
+    """A new contingency analysis `name` in the study case with one contingency (ComOutage) per candidate.
+
+    It is kept after the run, like the QDS result objects. Every contingency
+    holds one element as its interrupted component (ComOutage.SetObjs); the
+    time sweep is switched on. Returns (command, contingencies, refused).
+    """
+    elements = contingency_candidates(app, grids)
+    if not elements:
+        raise GridLensError("no branch, transformer, reactor, compensation or FACTS element is calculation relevant in "
+                            "{}, so no contingency can be defined".format(', '.join(grids) if grids else 'the network'))
+    try:
+        command = study_case.CreateObject(N1_COMMAND_CLASS, name)
+    except Exception as exc:
+        raise GridLensError("the contingency analysis '{}' could not be created: {}".format(
+            name, _friendly_exception(exc))) from None
+    if command is None or class_name(command) != N1_COMMAND_CLASS:
+        raise GridLensError("PowerFactory did not create the contingency analysis '{}'".format(name))
+    if not _set_scalar_attribute(command, N1_SWEEP_OPTION, 1):
+        raise GridLensError("the time sweep [{}] of the new contingency analysis '{}' could not be switched on".format(
+            N1_SWEEP_OPTION, name))
+    made, refused = 0, 0
+    for element in elements:
+        try:
+            outage = command.CreateObject('ComOutage', object_name(element))
+            done = outage is not None and finite_number(outage.SetObjs([element])) == 0
+        except Exception:
+            done = False
+        if done:
+            made += 1
+        else:
+            refused += 1
+    if not made:
+        raise GridLensError("no contingency could be defined in '{}' (ComOutage.SetObjs refused all {} elements)".format(
+            name, len(elements)))
+    return command, made, refused
+
+
 def contingencies_outside(equipment, grids):
     """The analysed contingencies none of whose equipment lies in `grids`; they are set to 'Not analysed' for the run.
 
@@ -6917,7 +7040,8 @@ def run_n1_sweep(command, times, active_keys, records, excluded, label):
         try:
             code = command.Execute()
         except Exception as exc:
-            raise GridLensError("The contingency analysis for {} stopped: {}".format(label, _friendly_exception(exc))) from None
+            raise GridLensError("The contingency analysis for {} stopped: {}. {}".format(
+                label, _friendly_exception(exc), REFUSED_HINT.split(' The result object')[0])) from None
         if finite_number(code) != 0:
             raise GridLensError("The contingency analysis for {} ended with error code {}.".format(label, code))
         found = read_n1_results(command)
@@ -7176,7 +7300,7 @@ def _log_context(app, study_case, qds, original_result, logger):
         "grids whose name contains {!r}".format(GRID_NAME_FILTER)
         if GRID_NAME_FILTER else "every element (a grid selection in Settings takes precedence)"))
     logger.detail("Reference case: {} | case source: {} | time base: complete ComStatsim period".format(
-        "on" if RUN_REFERENCE_CASE else "off", CASE_SOURCE))
+        "on" if setting_value('run_reference') else "off", CASE_SOURCE))
 
 
 def _series_overview(series):
@@ -7273,7 +7397,7 @@ def contingency_grid_selection():
     return tuple(current_setting('monitoring_grids') if grids is None else grids)
 
 
-def run_n1(study_case, qds, request, records, ready, results, logger, study_time_state):
+def run_n1(app, study_case, qds, request, records, ready, results, logger, study_time_state):
     """n-1 and, if requested, (n-1)' for every ready planning case; the entry goes to result['n1'].
 
     A case that cannot be evaluated gets status NOT EVALUATED with the reason
@@ -7284,8 +7408,22 @@ def run_n1(study_case, qds, request, records, ready, results, logger, study_time
     by_id = {result['id']: result for result in results}
     command = contingency_analysis(study_case)
     grid = qds_grid(qds)
-    reason = ('the active study case does not hold exactly one contingency analysis (ComSimoutage)' if command is None
-              else 'the ComStatsim time step is not readable' if grid is None else None)
+    reason = None
+    if command is None and not _contents(study_case, '*.' + N1_COMMAND_CLASS) and grid is not None:
+        # No contingency analysis here (e.g. the QDS study case): GridLens defines one and keeps it.
+        name = "{}{}_N1".format(SNAPSHOT_PREFIX, datetime.now().strftime("%y%m%d-%H%M%S"))
+        try:
+            command, made, refused = create_contingency_analysis(app, study_case, contingency_grid_selection(), name)
+            logger.write("CALCULATION", "The study case holds no contingency analysis: GridLens created '{}' with {} "
+                         "contingencies (one per branch, transformer, reactor, compensation and FACTS element in {}; no "
+                         "generators, loads or busbars){}. It stays in the study case.".format(
+                             name, made, ', '.join(contingency_grid_selection()) or 'every grid',
+                             '; {} element(s) refused'.format(refused) if refused else ''), 4)
+        except GridLensError as exc:
+            command, reason = None, str(exc)
+    if reason is None:
+        reason = ('the active study case holds more than one contingency analysis (ComSimoutage)' if command is None
+                  else 'the ComStatsim time step is not readable' if grid is None else None)
     if reason:
         logger.write("CALCULATION", "n-1 is not evaluated: {}.".format(reason), 4, "WARNING")
         for plan in ready:
@@ -7366,10 +7504,14 @@ def execute_gridlens(app):
     if study_case is None:
         raise GridLensError(
             "No active study case was found. Activate a study case and retry.")
+    # Calculation and publication are separate: without an IntReport above the
+    # script GridLens calculates, builds and checks every report table and logs
+    # the results, but publishes nothing.
     report = script.GetParent()
     if report is None or class_name(report) != "IntReport":
-        raise GridLensError(
-            "Place this ComPython directly below the target IntReport and retry.")
+        report = None
+        logger.write("CONTEXT", "This ComPython is not below an IntReport: GridLens calculates and builds the report "
+                     "tables but does not publish them (standalone run). Place it below the IntReport to publish.", 1)
     qds = app.GetFromStudyCase("ComStatsim")
     if qds is None:
         raise GridLensError(
@@ -7404,7 +7546,7 @@ def execute_gridlens(app):
         "CONTEXT",
         "Study case '{}'; QDS '{}'; result '{}'; reference flag {}."
         .format(object_name(study_case), object_name(qds),
-                object_name(original_result), RUN_REFERENCE_CASE), 2)
+                object_name(original_result), setting_value('run_reference')), 2)
     _log_context(app, study_case, qds, original_result, logger)
     logger.step(2, "ComStatsim settings")
     _log_qds_settings(qds, original_result, study_time_state, logger)
@@ -7433,7 +7575,7 @@ def execute_gridlens(app):
     logger.step(4, "Calculation and extraction (log steps 4 and 5)")
     try:
         reference = None
-        if RUN_REFERENCE_CASE:
+        if setting_value('run_reference'):
             reference = _run_reference(app, study_case, qds, request, records, original_result, logger,
                                        result_objects, study_time_state)
             results.append(reference)
@@ -7468,7 +7610,7 @@ def execute_gridlens(app):
                 "CALCULATION",
                 "No planning case can be calculated; the case runs were skipped.", 4, "WARNING")
         if ready and N1_REFERENCE in (request.get("assessments") or ()):
-            run_n1(study_case, qds, request, records, ready, results, logger, study_time_state)
+            run_n1(app, study_case, qds, request, records, ready, results, logger, study_time_state)
     finally:
         logger.step(6, "Restore and clean-up")
         logger.write("RESTORE", "Restoring the original PowerFactory state.", 6)
@@ -7494,11 +7636,11 @@ def execute_gridlens(app):
         project = app.GetActiveProject()
     except Exception:
         project = None
-    if ready and RUN_REFERENCE_CASE:
+    if ready and setting_value('run_reference'):
         run_mode = "REFERENCE + PLANNING CASES"
     elif ready:
         run_mode = "PLANNING CASES ONLY"
-    elif RUN_REFERENCE_CASE:
+    elif setting_value('run_reference'):
         run_mode = "REFERENCE ONLY - NO PLANNING CASE TO CALCULATE"
     else:
         run_mode = "NO CALCULATION - NO PLANNING CASE TO CALCULATE"
@@ -7510,6 +7652,14 @@ def execute_gridlens(app):
         if result_objects else "No calculation executed",
         request, _generated_by(), run_mode)
     _log_findings(logger, payload)
+    if report is None:
+        counts = {name: len(payload.get(name) or []) for name, _ in TABLES}
+        logger.write(
+            "COMPLETE",
+            "Standalone run finished: {} report table(s) built, none published; {} planning case(s), {} calculated "
+            "case(s).".format(len(counts), len(request["cases"]), len(results)), 7)
+        logger.table(("Table", "Rows (built, not published)"), [(name, count) for name, count in counts.items() if count])
+        return counts
     logger.write(
         "REPORT", "Preparing publication of {} report tables.".format(len(TABLES)), 7)
     counts = publish_report(report, payload, log=lambda message: logger.write(
