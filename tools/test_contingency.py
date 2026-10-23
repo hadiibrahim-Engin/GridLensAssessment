@@ -26,7 +26,8 @@ T1  Run the contingency analysis as configured (ComSimoutage.Execute) and
     values (GetValue code 3), c:maxCntcy holds contingency numbers, one row
     per analysed contingency.
 T2  Planned outages: calculate with isPlannedOutages = 0 and = 1 and compare
-    the results; tells whether the switch applies the planned outages.
+    the results; tells whether the switch applies the planned outages, which
+    contingencies drop out and whether only at study times inside the window.
 T3  Contingency filter: set one contingency to "Not analysed" (outserv = 1),
     calculate, check that it is missing from the results, restore.
 T4  Native storage: create an IntDplmap in the study case of the copy, insert
@@ -34,6 +35,13 @@ T4  Native storage: create an IntDplmap in the study case of the copy, insert
 T5  Writing own values into an ElmRes: not run. The Python reference
     documents Write() for the current calculation results of monitored
     variables, not for values chosen by a script.
+T6  Study times set by GridLens: the sweep shall follow the QDS period and the
+    windows of the planned outages of a case. T6 picks a few QDS steps around
+    the window of one planned outage (before, inside, last inside, at the end)
+    and writes them (a) into the studyTime vector, else (b) as startTime /
+    endTime / step. It checks which of the two the calculation follows and
+    whether the planned outage is applied per study time: its contingency
+    must be missing inside the window and present outside it.
 
 Privacy: the output consists of fixed labels and fixed tokens only (PASS,
 TRUE, ...). No project, study case, object or user name, no value, study time,
@@ -43,25 +51,30 @@ PROJECT_COPY_NAME) and result values / study times (compared with each other).
 """
 
 import hashlib
+import math
 import time
 
 ENABLED = False
 # The exact name of the project copy, e.g. '<project> - GridLens TEST copy'.
 PROJECT_COPY_NAME = ""
 COPY_MARKER = "copy"
-RUN = ("T1", "T2", "T3", "T4")
+RUN = ("T1", "T2", "T3", "T4", "T6")
 # Rows and columns of a sub-result inspected per check.
 SAMPLE_ROWS, SAMPLE_COLUMNS = 500, 2000
+# T6 (b) calculates every QDS step from the first to the last chosen time; above this only the window start.
+MAX_T6_TIMES = 48
 # ComSimoutage / ComStatsim stepUnit: 0 seconds, 1 minutes, 2 hours, 3 days (4 months, 5 years not converted).
 STEP_SECONDS = {0: 1, 1: 60, 2: 3600, 3: 86400}
 EQUIPMENT_CLASSES = frozenset(("ElmLne", "ElmTr2", "ElmTr3", "ElmTr4", "ElmTerm", "ElmSym", "ElmGenstat", "ElmPvsys",
                                "ElmLod", "ElmCoup", "ElmScap", "ElmSind", "ElmShnt", "ElmVsc", "ElmRec", "ElmBranch"))
 CODE_OK, CODE_SPARSE = 0, 3
 TEST_KEY, TEST_VALUE = "gridlens.test", "value-1"
-WRITTEN_ATTRIBUTES = ("isPlannedOutages", "outserv", "cDate", "cTime")
+WRITTEN_ATTRIBUTES = ("isPlannedOutages", "outserv", "cDate", "cTime", "studyTime", "bIgnoreTime", "startTime",
+                      "endTime", "stepSize", "stepUnit")
 
-TOKENS = frozenset(("PASS", "FAIL", "TRUE", "FALSE", "SUCCESS", "ERROR", "NOT_RUN", "NOT_CONFIRMED", "NOT_VERIFIED",
-                    "NOT_APPLICABLE", "NOT_DOCUMENTED", "ERROR_EXCEPTION", "STARTED"))
+TOKENS = frozenset({"PASS", "FAIL", "TRUE", "FALSE", "SUCCESS", "ERROR", "NOT_RUN", "NOT_CONFIRMED", "NOT_VERIFIED",
+                    "NOT_APPLICABLE", "NOT_DOCUMENTED", "ERROR_EXCEPTION", "STARTED", "VALUE_OTHER"}
+                   | {"VALUE_{}".format(number) for number in range(10)})
 LABELS = frozenset(
     {"Test run", "Precondition", "Final run with the original settings"}
     | {"Restored " + name for name in WRITTEN_ATTRIBUTES}
@@ -71,16 +84,23 @@ LABELS = frozenset(
         "Study times match startTime/endTime/step", "End time included", "Time sweep equals the QDS time steps",
         "Study times lie on the QDS time grid", "Rows are contingencies", "Columns are equipment",
         "Sparse values present", "c:maxCntcy holds contingency numbers", "c:maxCntcy holds row numbers",
-        "One row per analysed contingency", "Error", "Result")}
+        "One row per analysed contingency", "calcPeriod setting", "Error", "Result")}
     | {"T2 " + label for label in (
         "Confirmed", "Planned outage inside the sweep period", "Execute without planned outages",
         "Execute with planned outages", "Results differ with planned outages",
+        "One row per analysed contingency without planned outages", "Planned outage active at every study time",
         "Contingencies missing with planned outages", "Missing contingency switches a planned-outage element",
-        "Error", "Result")}
+        "Contingencies missing only inside the planned-outage window", "Error", "Result")}
     | {"T3 " + label for label in ("Confirmed", "Execute", "Not analysed excludes the contingency", "Error", "Result")}
     | {"T4 " + label for label in ("Confirmed", "IntDplmap created", "Key/value read back unchanged",
                                    "Test object deleted", "Error", "Result")}
-    | {"T5 Result"})
+    | {"T5 Result"}
+    | {"T6 " + label for label in (
+        "Confirmed", "Planned outage with a matching contingency", "Study times written",
+        "Execute with written studyTime", "Study times follow the studyTime vector",
+        "Execute with written startTime/endTime/step", "Study times follow startTime/endTime/step",
+        "Missing inside the planned-outage window", "Present outside the planned-outage window",
+        "Present at the window end", "Error", "Result")})
 PRECONDITION_TEXTS = {
     "disabled": "ENABLED is False; this tool runs only after an explicit release",
     "name": "PROJECT_COPY_NAME must name the project copy and contain the copy marker",
@@ -113,6 +133,15 @@ class Output:
 
 def flag(value):
     return "TRUE" if value else "FALSE"
+
+
+def value_token(value):
+    """A small setting number (an option of a command, not a value of the network) as a fixed token."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return "NOT_VERIFIED"
+    return "VALUE_{}".format(number) if 0 <= number <= 9 and number == value else "VALUE_OTHER"
 
 
 def confirm(question):
@@ -164,11 +193,12 @@ class Restorer:
         self.output = output
         self.changes = []
 
-    def write(self, obj, attribute, value):
+    def write(self, obj, attribute, value, same=None):
         original = getattr(obj, attribute)
         self.changes.append((obj, attribute, original))
         setattr(obj, attribute, value)
-        if getattr(obj, attribute) != value:
+        written = getattr(obj, attribute)
+        if not (same(written, value) if same else written == value):
             raise RuntimeError("an attribute did not accept the value")
 
     def restore(self):
@@ -446,6 +476,7 @@ def test_run(ctx, out):
                 "NOT_VERIFIED" if found["max_cntcy_rows"] is None else flag(found["max_cntcy_rows"]))
         analysed = [outage for outage in ctx["outages"] if getattr(outage, "outserv", 0) in (0, False)]
         out.add("T1 One row per analysed contingency", flag(found["rows"] == len(analysed)))
+        out.add("T1 calcPeriod setting", value_token(getattr(command, "calcPeriod", None)))
         ctx["rows"], ctx["rows_are_contingencies"] = found["rows"], rows_are_contingencies
         return True
     finally:
@@ -453,16 +484,9 @@ def test_run(ctx, out):
             restorer.restore()
 
 
-def active_planned_outages(ctx):
-    """(study time, planned outage) for every planned outage that is active at a study time; None if unknown.
-
-    The study times are those of the calculated sub-results (T1), else the studyTime vector; the
-    window is half open, [starttime, endtime).
-    """
-    times = ctx.get("times") or vector_times(ctx["command"])
-    if not times:
-        return None
-    active = []
+def planned_windows(ctx):
+    """(start, end, component keys) of every planned outage that is not ignored; the window is [start, end)."""
+    windows = []
     for outage in of_class(ctx["project"], "IntPlannedout", 1):
         try:
             if getattr(outage, "outserv", 0) not in (0, False):
@@ -470,13 +494,30 @@ def active_planned_outages(ctx):
             start, end = float(outage.starttime), float(outage.endtime)
         except (AttributeError, TypeError, ValueError):
             continue
-        active += [(moment, outage) for moment in times if start <= moment < end]
-    return active
+        windows.append((start, end, {identity(item) for item in (getattr(outage, "components", None) or [])}))
+    return windows
+
+
+def active_planned_outages(ctx):
+    """(study time, window) for every planned outage that is active at a study time; None if unknown.
+
+    The study times are those of the calculated sub-results (T1), else the studyTime vector.
+    """
+    times = ctx.get("times") or vector_times(ctx["command"])
+    if not times:
+        return None
+    return [(moment, window) for window in planned_windows(ctx) for moment in times
+            if window[0] <= moment < window[1]]
 
 
 def planned_outage_in_period(ctx):
     active = active_planned_outages(ctx)
     return None if active is None else bool(active)
+
+
+def contingency_elements(ctx):
+    """Contingency key -> keys of the equipment it interrupts."""
+    return {identity(outage): {identity(element) for element in outage_elements(outage)} for outage in ctx["outages"]}
 
 
 def test_planned_outages(ctx, out):
@@ -499,19 +540,27 @@ def test_planned_outages(ctx, out):
         differ = fingerprint(command) != without
         out.add("T2 Results differ with planned outages", flag(differ))
         rows_with = rows_by_time(command)
-        # Which contingencies disappear at a study time with an active planned outage, and whether they
-        # switch equipment that this planned outage already takes out of service (-> NOT_APPLICABLE later).
-        by_id = {identity(outage): outage for outage in ctx["outages"]}
-        missing, explained = False, True
-        for moment, planned in active_planned_outages(ctx) or ():
-            gone = rows_without.get(moment, set()) - rows_with.get(moment, set())
-            components = {identity(item) for item in (getattr(planned, "components", None) or [])}
-            for key in gone:
+        analysed = sum(1 for outage in ctx["outages"] if getattr(outage, "outserv", 0) in (0, False))
+        out.add("T2 One row per analysed contingency without planned outages",
+                flag(rows_without and all(len(ids) == analysed for ids in rows_without.values())))
+        windows = planned_windows(ctx)
+        out.add("T2 Planned outage active at every study time",
+                flag(rows_without and all(any(start <= moment < end for start, end, _ in windows)
+                                          for moment in rows_without)))
+        # Which contingencies disappear, whether they switch equipment that a planned outage already takes
+        # out of service (-> NOT_APPLICABLE later), and whether only at study times inside its window.
+        elements = contingency_elements(ctx)
+        missing, explained, only_inside = False, True, True
+        for moment, before in rows_without.items():
+            for key in before - rows_with.get(moment, set()):
                 missing = True
-                elements = {identity(element) for element in outage_elements(by_id[key])} if key in by_id else set()
-                explained &= bool(elements & components)
+                switched = [(start, end) for start, end, components in windows if elements.get(key, set()) & components]
+                explained &= bool(switched)
+                only_inside &= any(start <= moment < end for start, end in switched)
         out.add("T2 Contingencies missing with planned outages", flag(missing))
         out.add("T2 Missing contingency switches a planned-outage element", flag(explained) if missing else "NOT_APPLICABLE")
+        out.add("T2 Contingencies missing only inside the planned-outage window",
+                flag(only_inside) if missing else "NOT_APPLICABLE")
         # Applied when the results change while a planned outage lies in the period.
         return differ if inside else None
     finally:
@@ -580,7 +629,117 @@ def test_storage(ctx, out):
                                                            for item in of_class(study_case, "IntDplmap"))))
 
 
-TESTS = (("T1", test_run), ("T2", test_planned_outages), ("T3", test_not_analysed), ("T4", test_storage))
+def qds_grid(statsim):
+    """(start, end, step) of the QDS period, or None."""
+    try:
+        start, end = float(statsim.startTime), float(statsim.endTime)
+        step = float(statsim.stepSize) * STEP_SECONDS[int(statsim.stepUnit)]
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    return (start, end, step) if step > 0 and end > start else None
+
+
+def window_times(window, grid):
+    """QDS steps around a window [start, end): the step before, the first two inside, the last inside and the
+    first at or after the end, inside the QDS period; None if no QDS step lies in the window."""
+    begin, finish = window
+    start, end, step = grid
+    first = start + max(0, math.ceil((begin - start) / step - 1e-9)) * step
+    last = start + (math.ceil((finish - start) / step - 1e-9) - 1) * step
+    if first >= finish or first > end or last < first:
+        return None
+    chosen = {first - step, first, first + step, last, last + step}
+    return sorted(moment for moment in chosen if start - 1.0 <= moment <= end + 1.0)
+
+
+def window_check(rows, key, window):
+    """Per study time: the contingency missing inside [start, end), present outside, present at the end."""
+    begin, finish = window
+    inside = [key not in ids for moment, ids in rows.items() if begin <= moment < finish]
+    outside = [key in ids for moment, ids in rows.items() if not begin <= moment < finish]
+    at_end = [key in ids for moment, ids in rows.items() if abs(moment - finish) <= 1.0]
+
+    def token(checks):
+        return flag(all(checks)) if checks else "NOT_APPLICABLE"
+    return token(inside), token(outside), token(at_end)
+
+
+def matching_window(ctx, grid):
+    """(window, contingency key) of a planned outage inside the QDS period with a contingency that switches
+    one of its components, or None."""
+    elements = contingency_elements(ctx)
+    for start, end, components in planned_windows(ctx):
+        if window_times((start, end), grid) is None:
+            continue
+        for key, switched in sorted(elements.items()):
+            if switched & components:
+                return (start, end), key
+    return None
+
+
+def test_study_times(ctx, out):
+    grid = qds_grid(ctx["statsim"]) if ctx["statsim"] is not None else None
+    found = matching_window(ctx, grid) if grid else None
+    out.add("T6 Planned outage with a matching contingency", flag(found))
+    if not found:
+        return None
+    if not confirm("T6 temporarily sets the study times of the contingency analysis to a few QDS steps around "
+                   "one planned outage (first the studyTime vector, if needed startTime/endTime/step), with "
+                   "planned outages on, calculates and restores every value. Continue?"):
+        out.add("T6 Confirmed", "NOT_CONFIRMED")
+        return None
+    window, key = found
+    command, targets = ctx["command"], window_times(window, grid)
+    ctx["written"] = True
+    rows = None
+    restorer = Restorer(out)
+    try:
+        restorer.write(command, "isPlannedOutages", 1)
+        restorer.write(command, "studyTime", list(targets), same=lambda written, wanted: same_times(
+            [float(value) for value in written], wanted))
+        if isinstance(getattr(command, "bIgnoreTime", None), (list, tuple)):
+            restorer.write(command, "bIgnoreTime", [0.0] * len(targets),
+                           same=lambda written, wanted: [float(value) for value in written] == wanted)
+        out.add("T6 Study times written", "TRUE")
+        out.add("T6 Execute with written studyTime", "SUCCESS" if execute(command) else "ERROR")
+        follows = same_times(sub_result_times(sub_results(command)[1]), targets)
+        out.add("T6 Study times follow the studyTime vector", flag(follows))
+        if follows:
+            rows = rows_by_time(command)
+    finally:
+        restorer.restore()
+    if rows is None:
+        first, last = targets[0], targets[-1]
+        if (last - first) / grid[2] + 1 > MAX_T6_TIMES:
+            last = min(first + 3 * grid[2], targets[-1])
+        restorer = Restorer(out)
+        try:
+            restorer.write(command, "isPlannedOutages", 1)
+            for attribute, value in (("startTime", int(first)), ("endTime", int(last)),
+                                     ("stepSize", ctx["statsim"].stepSize), ("stepUnit", ctx["statsim"].stepUnit)):
+                restorer.write(command, attribute, value)
+            out.add("T6 Execute with written startTime/endTime/step", "SUCCESS" if execute(command) else "ERROR")
+            inclusive, exclusive = time_steps(command)
+            times = sub_result_times(sub_results(command)[1])
+            follows = same_times(times, inclusive) or same_times(times, exclusive)
+            out.add("T6 Study times follow startTime/endTime/step", flag(follows))
+            if follows:
+                rows = rows_by_time(command)
+        finally:
+            restorer.restore()
+    if rows is None:
+        return False
+    inside, outside, at_end = window_check(rows, key, window)
+    out.add("T6 Missing inside the planned-outage window", inside)
+    out.add("T6 Present outside the planned-outage window", outside)
+    out.add("T6 Present at the window end", at_end)
+    if "NOT_APPLICABLE" in (inside, outside):
+        return None
+    return inside == "TRUE" and outside == "TRUE"
+
+
+TESTS = (("T1", test_run), ("T2", test_planned_outages), ("T3", test_not_analysed), ("T4", test_storage),
+         ("T6", test_study_times))
 
 
 def run(app, printer=None):
