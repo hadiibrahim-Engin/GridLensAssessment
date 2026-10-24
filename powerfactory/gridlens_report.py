@@ -530,6 +530,7 @@ def collect_series(elmres, counters=None):
     recorded = {}  # what the result object records that GridLens does not assess, for the error message
     # Without a grid selection every element is assessed, so its grid is not read at all.
     filtered = bool(current_setting('monitoring_grids') or GRID_NAME_FILTER)
+    by_class, by_variable = {}, {}
     for column in range(columns):
         try:
             obj = elmres.GetObject(column)
@@ -537,6 +538,10 @@ def collect_series(elmres, counters=None):
             category = result_category(obj, variable)
         except Exception:
             continue
+        if column != t_column:
+            kind = class_name(obj) or 'unknown'
+            by_class[kind] = by_class.get(kind, 0) + 1
+            by_variable[variable] = by_variable.get(variable, 0) + 1
         if not category or variable not in VARIABLES[category]:
             if column != t_column:
                 name = '{} {}'.format(class_name(obj) or 'unknown object', variable)
@@ -560,6 +565,8 @@ def collect_series(elmres, counters=None):
         if key not in chosen or priority < chosen[key][0]:
             chosen[key] = (priority, column, obj, variable)
     if counters is not None:
+        counters['columns'], counters['rows'] = columns, rows
+        counters['columns_by_class'], counters['columns_by_variable'] = by_class, by_variable
         counters['out_of_scope'] = out_of_scope
         counters['grids'] = {name: tuple(value) for name, value in grids.items()}
         counters['dc_nodes'] = len(dc_nodes)
@@ -1965,6 +1972,40 @@ def outage_effects(result, reference, plan):
     return checks
 
 
+def outage_persistence(result, reference, plan):
+    """Per outage: does it stay in effect after its window? [(name, hours, total hours, until, back)].
+
+    Counted are the time steps from the window end on in which a recorded
+    component of the outage carries no load in the case while it does in REF.
+    `hours` is the unbroken stretch right after the window end, `total` every
+    such step after it; `until` labels the last step of the stretch and `back`
+    the first step in service again ('' when it never is). Outages without a
+    recorded component or without REF on the same time axis are left out.
+    """
+    hours = result.get('hours') or []
+    if reference is None or not hours or not result.get('absolute') or not _same_time_axis(reference, result):
+        return []
+    labels, steps = result.get('labels') or [], row_steps(hours)
+    case_items, ref_items = result.get('item_by_key') or {}, reference.get('item_by_key') or {}
+    found = []
+    for record in plan['members']:
+        end = plan['windows'][record['key']][1]
+        components = set(record.get('component_keys') or ())
+        pairs = [(case_items[key]['values'], ref_items[key]['values']) for key in case_items
+                 if key[0] != 'voltage' and key[1] in components and key in ref_items
+                 and 'values' in case_items[key] and 'values' in ref_items[key]]
+        if end is None or not pairs:
+            continue
+        first = bisect.bisect_left(hours, end / 3600.0)
+        off = [any(abs(case[row] or 0.0) <= OFF_LOADING < abs(ref[row] or 0.0) for case, ref in pairs)
+               for row in range(first, len(hours))]
+        stretch = next((index for index, value in enumerate(off) if not value), len(off))
+        found.append((record['name'], sum(steps[first + index] for index in range(stretch)),
+                      sum(steps[first + index] for index, value in enumerate(off) if value),
+                      labels[first + stretch - 1] if stretch else '', labels[first + stretch] if stretch < len(off) else ''))
+    return found
+
+
 def release_values(result):
     """Drop the full-resolution arrays of a compared case; statistics and plot points stay."""
     for item in result['item_by_key'].values():
@@ -2402,6 +2443,7 @@ def _model_quality(payload, results, request=None):
              'Settings {}, classification rules {}: {}. Stored provisionally in the case configuration file.'.format(
                  snapshot['settings_version'], snapshot['classification_version'], overrides_text(snapshot['overrides'])))
     outage_quality(payload, results)
+    persistence_quality(payload, results)
     n1_quality(payload, results)
 
 QDS_TIME_BASE_TEXT = ('Complete ComStatsim period: every run covers the whole simulated period with the ComStatsim time step; '
@@ -3487,6 +3529,79 @@ def _outage_record(outage):
     }
 
 
+def attribute_label(obj, attribute):
+    """PowerFactory's own label of an attribute (GetAttributeDescription), '' when it gives none."""
+    describe = getattr(obj, "GetAttributeDescription", None)
+    if not callable(describe):
+        return ""
+    try:
+        text = describe(attribute)
+    except Exception:
+        return ""
+    return str(text).strip() if isinstance(text, str) else ""
+
+
+def data_attributes_text(obj, limit=40):
+    """'name=value' of the data attributes an object shows (dir(); GetAttributes fails on data objects)."""
+    try:
+        names = [name for name in dir(obj) if not name.startswith("_")]
+    except Exception:
+        return "not readable"
+    parts = []
+    for name in sorted(names):
+        value = safe_attr(obj, name)
+        if callable(value) or value is None:
+            continue
+        if class_name(value):
+            shown = "'{}' ({})".format(object_name(value), class_name(value))
+        elif isinstance(value, (list, tuple)):
+            shown = "[{}]".format(", ".join(object_name(item) if class_name(item) else clip_text(str(item), 20)
+                                            for item in value[:6]) + (", ..." if len(value) > 6 else ""))
+        elif name.lower().endswith("time") and finite_number(value) is not None:
+            shown = _format_pf_time(value)
+        else:
+            shown = clip_text(str(value), 40)
+        parts.append("{}={}".format(name, shown))
+    return "; ".join(parts[:limit]) + (" and {} more".format(len(parts) - limit) if len(parts) > limit else "")
+
+
+def outage_contents_text(outage):
+    """What an outage object holds below itself (switching and other actions), with their data, one line each."""
+    try:
+        children = list(outage.GetContents("*") or [])
+    except Exception:
+        children = []
+    return ["{} '{}': {}".format(class_name(child), object_name(child), data_attributes_text(child, 20))
+            for child in children]
+
+
+SWITCH_CLASSES = ("ElmCoup", "StaSwitch")
+
+
+def switch_states(app):
+    """{key: (name, on_off)} of every calculation-relevant switch; {} when they cannot be read."""
+    found = {}
+    for kind in SWITCH_CLASSES:
+        try:
+            switches = list(app.GetCalcRelevantObjects("*." + kind) or [])
+        except Exception:
+            switches = []
+        for switch in switches:
+            state = finite_number(safe_attr(switch, "on_off"))
+            if state is not None:
+                found[object_key(switch)] = (object_name(switch), state)
+    return found
+
+
+def switch_changes_text(before, after):
+    """The switches whose state differs between two snapshots, e.g. "CB1 closed -> open"."""
+    word = {0.0: "open", 1.0: "closed"}
+    changed = ["{} {} -> {}".format(name, word.get(state, state), word.get(after[key][1], after[key][1]))
+               for key, (name, state) in sorted(before.items(), key=lambda entry: entry[1][0])
+               if key in after and after[key][1] != state]
+    return changed
+
+
 def outage_window(outage):
     """The outage's (start, end) in epoch seconds, where PowerFactory has them."""
     start = finite_number(_first_attribute(outage, OUTAGE_START_ATTRIBUTES))
@@ -3575,6 +3690,14 @@ def classify_planned_outages(app, logger, period=(None, None)):
         ("#", "Planned outage", "Location"),
         [(number, record["name"], object_key(record["_object"]))
          for number, record in enumerate(records, 1)])
+    logger.detail("What each outage object holds (its data and the actions below it):")
+    for number, record in enumerate(records, 1):
+        logger.detail("{} {}: {}".format(number, record["name"], data_attributes_text(record["_object"])))
+        contents = outage_contents_text(record["_object"])
+        for line in contents:
+            logger.detail("    below it: " + line)
+        if not contents:
+            logger.detail("    below it: nothing (no own switching actions; PowerFactory isolates the components itself)")
     return records, candidates
 
 
@@ -7163,6 +7286,8 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
         "PowerFactory is calculating {}. This blocking API call may take "
         "several minutes; intermediate progress is controlled by PowerFactory."
         .format(case_id), 4)
+    with RUN_STATS.measure("read switch states"):
+        switches_before = switch_states(app)
     started = time.monotonic()
     try:
         returned = qds.Execute()
@@ -7191,6 +7316,16 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
     logger.write(
         "CALCULATION", "{} completed successfully in {:.1f}s.".format(
             case_id, elapsed), 4)
+    with RUN_STATS.measure("read switch states"):
+        changed = switch_changes_text(switches_before, switch_states(app))
+    if changed:
+        logger.detail("Switches in another state after the QDS than before it ({}): {}. PowerFactory left them so; "
+                      "GridLens does not change switches.".format(len(changed), clip_text(", ".join(changed), 400)),
+                      "WARNING")
+    elif switches_before:
+        logger.detail("Switch states after the QDS: all {} switches as before it.".format(len(switches_before)))
+    else:
+        logger.detail("Switch states could not be read (no ElmCoup/StaSwitch with on_off).")
     with RUN_STATS.measure("keep a copy of each QDS result"):
         snapshot = _case_result_object(study_case, produced, case_id, result_objects.name_for(case_id))
     result_objects.append(snapshot, case_id)
@@ -7216,6 +7351,52 @@ def result_fingerprint(obj):
     """The fingerprint mark_result_object() wrote, or None."""
     match = re.search(r'fingerprint (\S+)', object_description(obj))
     return match.group(1) if match and match.group(1) != '-' else None
+
+
+def counts_text(counted, limit=8):
+    ordered = sorted(counted.items(), key=lambda entry: (-entry[1], entry[0]))
+    return ", ".join("{} {}".format(name, number) for name, number in ordered[:limit]) + (
+        " and {} more".format(len(ordered) - limit) if len(ordered) > limit else "") or "none"
+
+
+def result_object_text(elmres, counters, labels, plot_times):
+    """What a QDS result object holds: time steps, period, step, columns by class and by variable."""
+    step = (plot_times[1] - plot_times[0]) if len(plot_times) > 1 else 0.0
+    return ("Result object '{}': {} time step(s) from {} to {} (step {:g} h, span {:g} h); {} column(s) by class: {}; "
+            "by variable: {}.".format(object_name(elmres), len(labels), labels[0], labels[-1], step,
+                                      plot_times[-1] - plot_times[0], counters.get('columns', 0),
+                                      counts_text(counters.get('columns_by_class') or {}),
+                                      counts_text(counters.get('columns_by_variable') or {})))
+
+
+def outage_component_lines(result, reference, plan):
+    """Per outage and recorded component: time steps without load inside and outside its window, case and REF."""
+    lines = []
+    hours = result.get('hours') or []
+    case_items, ref_items = result.get('item_by_key') or {}, (reference or {}).get('item_by_key') or {}
+    for record in plan['members']:
+        window = plan['windows'][record['key']]
+        inside = set(window_rows(hours, [window])) if result.get('absolute') and window != (None, None) else set()
+        recorded = False
+        for key, item in sorted(case_items.items()):
+            if key[0] == 'voltage' or key[1] not in set(record.get('component_keys') or ()) or 'values' not in item:
+                continue
+            recorded = True
+            values = item['values']
+            off = [row for row in range(len(values)) if abs(values[row] or 0.0) <= OFF_LOADING]
+            ref_values = (ref_items.get(key) or {}).get('values')
+            ref_off = sum(1 for value in ref_values if abs(value or 0.0) <= OFF_LOADING) if ref_values else None
+            lines.append("Outage '{}', component '{}' ({}, {}): without load in {} of {} step(s) inside its window and "
+                         "in {} of {} outside it; REF: {}.".format(
+                             record['name'], item['element_name'], class_name(item['object']), item['variable_id'],
+                             sum(1 for row in off if row in inside), len(inside),
+                             sum(1 for row in off if row not in inside), len(values) - len(inside),
+                             "without load in {} of {} step(s)".format(ref_off, len(ref_values))
+                             if ref_values else "not recorded"))
+        if not recorded:
+            lines.append("Outage '{}': none of its {} component(s) is recorded as loading in the result object.".format(
+                record['name'], len(record.get('component_keys') or ())))
+    return lines
 
 
 def evaluate_qds(run, description, plan, logger):
@@ -7248,6 +7429,7 @@ def evaluate_qds(run, description, plan, logger):
             .format("absolute" if absolute else "relative",
                     unit, labels[0], labels[-1],
                     '{:g} h'.format(plot_times[-1] - plot_times[0])), 6)
+        logger.detail(result_object_text(snapshot, counters, labels, plot_times))
         _log_extraction_detail(logger, series, counters)
     except Exception as exc:
         raise GridLensError(
@@ -7441,8 +7623,9 @@ def _log_qds_settings(qds, result, study_time_state, logger):
         found, value = _read_setting(qds, attribute)
         if found:
             logger.write(
-                "SETTINGS", "Planned outages [{}] = {}".format(
-                    attribute, _format_setting_value(value)), 2)
+                "SETTINGS", "{} [{}] = {}".format(
+                    attribute_label(qds, attribute) or "Planned outages", attribute,
+                    _format_setting_value(value)), 2)
     logger.write(
         "SETTINGS",
         "Result object [results] = '{}' ({})".format(
@@ -7685,6 +7868,29 @@ def evaluate_case(run, reference, logger):
         for name, status, reason in result["outage_checks"]:
             logger.detail("Outage '{}': {} - {}.".format(name, status, reason),
                           "WARNING" if status == OUTAGE_NO_EFFECT else "INFO")
+        try:
+            for line in outage_component_lines(result, reference, plan):
+                logger.detail(line)
+        except Exception as exc:
+            logger.detail("The components of the outages could not be listed: {}.".format(_friendly_exception(exc)),
+                          "WARNING")
+        try:
+            result["outage_persistence"] = outage_persistence(result, reference, plan)
+        except Exception as exc:
+            result["outage_persistence"] = []
+            logger.detail("Whether the outages stay in effect after their windows could not be checked: {}.".format(
+                _friendly_exception(exc)), "WARNING")
+        for name, stretch, total, until, back in result["outage_persistence"]:
+            if stretch:
+                logger.detail(
+                    "Outage '{}' stays in effect after its window: its components carry no load for {:g} h from the "
+                    "window end (until {}), while REF carries load; {}. The switching state of the outage persists "
+                    "after its window in the QDS.".format(
+                        name, stretch, until, "back in service at " + back if back else
+                        "not back in service until the end of the period"), "WARNING")
+            else:
+                logger.detail("Outage '{}': back in service right at its window end{}.".format(
+                    name, "" if not total else " ({:g} h later without load again)".format(total)))
         out_of_service = {key for record in plan["members"] for key in record.get("component_keys") or ()}
         started = time.monotonic()
         try:
@@ -8031,6 +8237,7 @@ def load_n1(found):
     else:
         with RUN_STATS.measure("read n-1 results"):
             data = read_n1_results(found['kept'], recording_limits=found.get('recording_limits'))
+    data = dict(data, calculated_count=len(data['times']))
     wanted = found.get('window_times')
     if wanted is not None:
         missing = _missing_times(wanted, list(data['times']))
@@ -8046,6 +8253,30 @@ def load_n1(found):
     RUN_STATS.count("n1_times", len(data['times']))
     RUN_STATS.count("n1_loadflows", len({(moment, key[0]) for moment, values in data['times'].items() for key in values}))
     return data
+
+
+def n1_data_text(kind, found, data, qds_steps=None, reference=None):
+    """What a kept n-1 result holds: study times, contingencies x equipment per time, values and code 3."""
+    kept = found.get('kept')
+    per_time = []
+    for moment in sorted(data['times']):
+        values = data['times'][moment]
+        per_time.append("{} {} x {}".format(_format_pf_time(moment), len({key[0] for key in values}),
+                                            len({key[1] for key in values})))
+    cells = [value for values in data['times'].values() for value in values.values()]
+    text = ("{} result '{}': {} study time(s) assessed ({} calculated{}); contingencies x equipment with a value per "
+            "study time: {}; {} value(s), {} inside the recording limits (code 3).".format(
+                kind, object_name(kept) if kept is not None else 'read at once', len(data['times']),
+                data.get('calculated_count', len(data['times'])),
+                ", of {} QDS steps in the period; the others are not calculated".format(qds_steps) if qds_steps else "",
+                clip_text("; ".join(per_time), 300) or "none", len(cells), sum(1 for value in cells if value is None)))
+    if reference is not None:
+        mine = {key[0] for values in data['times'].values() for key in values}
+        theirs = {key[0] for values in reference['times'].values() for key in values}
+        missing = sorted(reference['contingencies'].get(key, key) for key in theirs - mine)
+        text += " Contingencies of n-1 missing here: {}.".format(
+            clip_text(", ".join(missing), 200) + " (their equipment is switched off by the case)" if missing else "none")
+    return text
 
 
 def _n1_reference_text(comparison):
@@ -8079,7 +8310,8 @@ def calculate_n1_case(command, plan, request, records, grid, excluded, prime, re
             reference.get('recording_limits') or {}))
         reference = dict(reference, kept=copied) if copied is not None else reference
     entry = {'status': 'CALCULATED', 'times': len(times), 'reference': reference, 'scenario': None,
-             'kind': N1_PRIME if prime else N1_REFERENCE}
+             'kind': N1_PRIME if prime else N1_REFERENCE,
+             'qds_steps': int(round((grid[1] - grid[0]) / grid[2])) if grid[1] is not None else None}
     if prime:
         active = background | {record['key'] for record in plan['members']}
         entry['scenario'] = run_n1_sweep(
@@ -8094,12 +8326,14 @@ def evaluate_n1_case(entry, plan, elements_of):
         return entry
     reference = load_n1(entry['reference'])
     result = {'status': 'EVALUATED', 'times': len(reference['times']), 'contingencies': len(reference['contingencies']),
-              'kind': entry['kind']}
+              'kind': entry['kind'],
+              'details': [n1_data_text(N1_REFERENCE, entry['reference'], reference, entry.get('qds_steps'))]}
     if entry['kind'] != N1_PRIME or entry.get('scenario') is None:
         result.update(kind=N1_REFERENCE, comparison=compare_n1(reference, reference))
         result['summary'] = 'n-1 reference: ' + _n1_reference_text(result['comparison'])
         return result
     scenario = load_n1(entry['scenario'])
+    result['details'].append(n1_data_text(N1_PRIME, entry['scenario'], scenario, entry.get('qds_steps'), reference))
     switched_off = {component for record in plan['members'] for component in record.get('component_keys') or ()}
     with RUN_STATS.measure("classify (n-1)' against n-1"):
         result['comparison'] = compare_n1(reference, scenario, switched_off, elements_of)
@@ -8529,6 +8763,8 @@ def evaluate_n1(entries, request, ready, results, logger):
             except GridLensError as exc:
                 done[id(entry)] = {'status': 'NOT EVALUATED', 'reason': str(exc), 'times': 0}
             evaluated = done[id(entry)]
+            for line in evaluated.get('details') or ():
+                logger.detail(line)
             if evaluated['status'] == 'EVALUATED':
                 logger.detail("{} at {} study time(s).".format(evaluated['summary'], evaluated['times']))
             elif entry.get('status') == 'CALCULATED':
@@ -8662,6 +8898,19 @@ def outage_quality(payload, results):
         detail = '; '.join('{}: {}'.format(clip_text(name, 40), status) for name, status in doubtful[:3])
         _quality(payload, 'outages_' + result['id'], 'Outages applied ' + result['id'],
                  'WARNING' if doubtful else 'PASS', counts + ('. ' + detail + '.' if detail else '.'), result['id'])
+
+
+def persistence_quality(payload, results):
+    """One Model Quality row per case whose outages stay in effect after their windows."""
+    for result in results:
+        lasting = [entry for entry in result.get('outage_persistence') or () if entry[1]]
+        if lasting:
+            _quality(payload, 'outages_after_' + result['id'], 'Outage in effect after its window ' + result['id'],
+                     'WARNING', '; '.join('{}: {:g} h after its window end{}'.format(
+                         clip_text(name, 40), stretch, ', until the end of the period' if not back else '')
+                         for name, stretch, _total, _until, back in lasting[:3])
+                     + '. The switching state persists in the QDS; time steps after the window are assessed as '
+                       'effect outside the window.', result['id'])
 
 
 def n1_quality(payload, results):

@@ -1469,6 +1469,10 @@ def test_run_output_is_structured_in_steps_cases_and_tables(monkeypatch):
     assert "Read back before the calculation: 'Planned outages' [iopt_maint] = 1; planned outages applied: Outage A." in text
     assert "n-1 is not calculated: it is not ticked in the case manager" in text
     assert "Outage 'Outage A': " in text
+    # The outage objects, the switch states around each QDS and the end of each outage are logged.
+    assert "What each outage object holds (its data and the actions below it):" in text
+    assert "below it: " in text
+    assert "Switch state" in text
 
 
 class NanVoltageElmRes(VoltageElmRes):

@@ -279,6 +279,10 @@ def test_a_case_runs_n1_and_n1_prime_on_the_qds_steps_of_its_windows_and_restore
     # 2 study times x contingencies C1, C3 x lines L1, L3 are NEW; C2 trips L2, which the case switches off.
     assert entry["comparison"]["counts"] == {"NEW": 8, "NOT_APPLICABLE": 4}
     assert entry["summary"] == "(n-1)' against n-1: NEW 8, NOT_APPLICABLE 4"
+    # The log names what each result holds; (n-1)' lacks the contingency of the switched-off line.
+    reference_text, scenario_text = entry["details"]
+    assert "contingencies x equipment with a value per study time: " in reference_text
+    assert scenario_text.endswith("Contingencies of n-1 missing here: C2 (their equipment is switched off by the case).")
     assert (analysis.isPlannedOutages, analysis.studyTime, analysis.bIgnoreTime) == (1, [START], [0.0])
     # The period GridLens wrote for the run is undone: the sweep settings are those found before.
     assert (analysis.calcPeriod, analysis.startTime, analysis.endTime, analysis.stepNumber) == (
@@ -312,6 +316,8 @@ def test_cases_with_the_same_study_times_share_one_reference_sweep():
     gl.run_n1_case(analysis, dict(plan, id="C2"), request, records, GRID, [], {}, False, references)
     assert len(analysis.runs) == 1 and first["kind"] == "n-1"
     assert first["summary"] == "n-1 reference: 0 element(s) with a post-fault violation"
+    assert first["details"][0].startswith("n-1 result 'read at once': 2 study time(s) assessed (2 calculated, of 23 "
+                                          "QDS steps in the period; the others are not calculated)")
 
 
 def test_a_failed_calculation_or_other_study_times_are_errors_and_settings_are_restored():

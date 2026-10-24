@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of powerfactory/gridlens_report.py, written by tools/sync_case_manager_copy.py - do not edit >>>
-# GridLens 8.0.0: 163 definitions.
+# GridLens 8.0.0: 166 definitions.
 import re
 import hashlib
 import math
@@ -939,6 +939,40 @@ def _outage_record(outage):
     }
 
 
+def data_attributes_text(obj, limit=40):
+    """'name=value' of the data attributes an object shows (dir(); GetAttributes fails on data objects)."""
+    try:
+        names = [name for name in dir(obj) if not name.startswith("_")]
+    except Exception:
+        return "not readable"
+    parts = []
+    for name in sorted(names):
+        value = safe_attr(obj, name)
+        if callable(value) or value is None:
+            continue
+        if class_name(value):
+            shown = "'{}' ({})".format(object_name(value), class_name(value))
+        elif isinstance(value, (list, tuple)):
+            shown = "[{}]".format(", ".join(object_name(item) if class_name(item) else clip_text(str(item), 20)
+                                            for item in value[:6]) + (", ..." if len(value) > 6 else ""))
+        elif name.lower().endswith("time") and finite_number(value) is not None:
+            shown = _format_pf_time(value)
+        else:
+            shown = clip_text(str(value), 40)
+        parts.append("{}={}".format(name, shown))
+    return "; ".join(parts[:limit]) + (" and {} more".format(len(parts) - limit) if len(parts) > limit else "")
+
+
+def outage_contents_text(outage):
+    """What an outage object holds below itself (switching and other actions), with their data, one line each."""
+    try:
+        children = list(outage.GetContents("*") or [])
+    except Exception:
+        children = []
+    return ["{} '{}': {}".format(class_name(child), object_name(child), data_attributes_text(child, 20))
+            for child in children]
+
+
 def outage_window(outage):
     """The outage's (start, end) in epoch seconds, where PowerFactory has them."""
     start = finite_number(_first_attribute(outage, OUTAGE_START_ATTRIBUTES))
@@ -1027,6 +1061,14 @@ def classify_planned_outages(app, logger, period=(None, None)):
         ("#", "Planned outage", "Location"),
         [(number, record["name"], object_key(record["_object"]))
          for number, record in enumerate(records, 1)])
+    logger.detail("What each outage object holds (its data and the actions below it):")
+    for number, record in enumerate(records, 1):
+        logger.detail("{} {}: {}".format(number, record["name"], data_attributes_text(record["_object"])))
+        contents = outage_contents_text(record["_object"])
+        for line in contents:
+            logger.detail("    below it: " + line)
+        if not contents:
+            logger.detail("    below it: nothing (no own switching actions; PowerFactory isolates the components itself)")
     return records, candidates
 
 
@@ -4319,6 +4361,12 @@ def qds_period(qds):
         if start is not None and end is not None and end >= start:
             return start, end
     return None, None
+
+
+def counts_text(counted, limit=8):
+    ordered = sorted(counted.items(), key=lambda entry: (-entry[1], entry[0]))
+    return ", ".join("{} {}".format(name, number) for name, number in ordered[:limit]) + (
+        " and {} more".format(len(ordered) - limit) if len(ordered) > limit else "") or "none"
 
 
 def _read_setting(obj, attribute):

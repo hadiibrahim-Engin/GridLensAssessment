@@ -9,6 +9,10 @@ eigenen Zeitfenster während einer quasi-dynamischen Simulation (QDS) an. Ein
 Fall durchläuft dadurch mehrere Netzzustände. Jeder Fall wird **zum selben
 Zeitschritt** mit einer Referenz verglichen. LODF ist vollständig entfernt.
 
+Alles, was GridLens in PowerFactory tut (Objekte, Schalter, Planned Outages,
+QDS, Contingency Analysis, Falldefinition, geprüftes und offenes
+API-Verhalten), beschreibt [`POWERFACTORY.md`](POWERFACTORY.md).
+
 Nichts davon ist bisher in PowerFactory gelaufen. Abschnitt 11 nennt, was
 dort geprüft werden muss, bevor man sich auf die Ergebnisse verlässt.
 

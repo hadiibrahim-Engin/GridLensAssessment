@@ -9,6 +9,10 @@ during one quasi-dynamic simulation (QDS), so one case passes through several
 network states. Every case is compared with a reference **at the same time
 step**. LODF is removed completely.
 
+Everything GridLens does in PowerFactory (objects, switches, planned outages,
+QDS, contingency analysis, case definition, verified and open API behaviour)
+is described in [`POWERFACTORY.md`](POWERFACTORY.md).
+
 Nothing here has run in PowerFactory yet. Section 11 lists what must be
 verified there before the results may be relied on.
 

@@ -475,3 +475,64 @@ def test_recorded_text_lists_the_assessed_variables_first():
     assert gl.recorded_text({"b:noconv": 1, "b:number": 1}) == "2 column(s): b:noconv x1, b:number x1"
     assert gl.recorded_text({"b:noconv": 1, "m:u": 3}) == "4 column(s): m:u x3, b:noconv x1"
     assert gl.recorded_text(None).startswith("not readable")
+
+
+# ---------------------------------------------------------------------------
+# Does an outage stay in effect after its window?
+# ---------------------------------------------------------------------------
+def test_an_outage_that_stays_switched_off_after_its_window_is_found():
+    plan = _effect_plan([LINE_KEY])  # window: rows 1 and 2
+    reference = _effect_result("REF")
+    lasting = _effect_result("OUT01", {"L-220 Nordring": [76, 0, 0, 0, 0, 84]})
+    [(name, stretch, total, until, back)] = gl.outage_persistence(lasting, reference, plan)
+    assert (name, stretch, total, until, back) == ("Outage A", 2.0, 2.0, LABELS[4], LABELS[5])
+    forever = _effect_result("OUT01", {"L-220 Nordring": [76, 0, 0, 0, 0, 0]})
+    assert gl.outage_persistence(forever, reference, plan)[0][1:] == (3.0, 3.0, LABELS[5], "")
+    back = _effect_result("OUT01", {"L-220 Nordring": [76, 0, 0, 82, 88, 84]})
+    assert gl.outage_persistence(back, reference, plan)[0][1:] == (0, 0, "", LABELS[3])
+    assert gl.outage_persistence(back, None, plan) == []
+
+
+def test_persistence_quality_names_the_hours_after_the_window():
+    payload = {"ScriptedModelQuality": []}
+    gl.persistence_quality(payload, [{"id": "OUT01", "outage_persistence": [("Outage A", 3.0, 3.0, "x", "")]},
+                                     {"id": "OUT02", "outage_persistence": [("Outage B", 0, 0, "", "y")]}])
+    [row] = payload["ScriptedModelQuality"]
+    assert (row["check_id"], row["status"]) == ("outages_after_OUT01", "WARNING")
+    assert row["message"].startswith("Outage A: 3 h after its window end, until the end of the period.")
+
+
+def test_switch_changes_name_each_switch_that_differs():
+    before = {"a": ("CB1", 1.0), "b": ("IS.1", 1.0), "c": ("CB5", 0.0)}
+    after = {"a": ("CB1", 0.0), "b": ("IS.1", 1.0), "c": ("CB5", 0.0)}
+    assert gl.switch_changes_text(before, after) == ["CB1 closed -> open"]
+    assert gl.switch_changes_text(before, before) == []
+
+
+def test_data_attributes_text_shows_values_objects_and_times():
+    line = Obj("L-220 Nordring")
+    outage = Obj("Outage A", "IntPlannedout", outserv=0, components=[line], starttime=BASE, priority=2)
+    text = gl.data_attributes_text(outage)
+    assert "components=[L-220 Nordring]" in text and "outserv=0" in text and "priority=2" in text
+    assert "starttime=" + gl._format_pf_time(BASE) in text
+
+
+# ---------------------------------------------------------------------------
+# What each result object holds, in the log
+# ---------------------------------------------------------------------------
+def test_outage_component_lines_count_steps_without_load_inside_and_outside_the_window():
+    plan = _effect_plan([LINE_KEY])  # window: rows 1 and 2
+    case = _effect_result("OUT01", {"L-220 Nordring": [76, 0, 0, 0, 0, 84]})
+    [line] = gl.outage_component_lines(case, _effect_result("REF"), plan)
+    assert line == ("Outage 'Outage A', component 'L-220 Nordring' (ElmLne, x): without load in 2 of 2 step(s) "
+                    "inside its window and in 2 of 4 outside it; REF: without load in 0 of 6 step(s).")
+    [missing] = gl.outage_component_lines(case, None, _effect_plan(["Project\\ElmCoup\\CB1.ElmCoup"]))
+    assert missing == "Outage 'Outage A': none of its 1 component(s) is recorded as loading in the result object."
+
+
+def test_result_object_text_names_steps_period_classes_and_variables():
+    counters = {"columns": 4, "columns_by_class": {"ElmTerm": 2, "ElmLne": 1, "ElmTr2": 1},
+                "columns_by_variable": {"m:u": 2, "c:loading": 2}}
+    text = gl.result_object_text(Obj("GridLens_x_REF", "ElmRes"), counters, LABELS, TIMES)
+    assert text == ("Result object 'GridLens_x_REF': 6 time step(s) from {} to {} (step 1 h, span 5 h); 4 column(s) "
+                    "by class: ElmTerm 2, ElmLne 1, ElmTr2 1; by variable: c:loading 2, m:u 2.".format(LABELS[0], LABELS[-1]))
