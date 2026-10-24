@@ -90,7 +90,7 @@ den Stand 7.0 und sind historisch.
 | P3 | mehrere aktive FS wirken gleichzeitig und enden je an ihrem eigenen Ende | Mehrfach-FS-Fälle, T01–T13 | nicht geprüft |
 | P4 | zwei FS auf demselben Betriebsmittel: Verhalten, wenn die erste endet | V13 | unbekannt; sich überlappende FS sind normale Planung und keine Warnung |
 | P5 | `ElmRes`-Zeitstempel und Fenstergrenzen (02:00-Effekt im Test vom 29.09.) | halboffene Fenster | offen; die Spill-over-Prüfung erkennt und bewertet solche Effekte |
-| P6 | `AddCopy` des konfigurierten `ElmRes`, Umbenennen, Bindung `ComStatsim.results` | Ergebnisobjekt je Fall | seit 6.x genutzt, nicht Ende-zu-Ende geprüft |
+| P6 | `AddCopy` des `ElmRes`, in das eine QDS schrieb, nach dem Lauf; Umbenennen | Ergebnisobjekt je Fall | geprüft am 24.10.2026: die Kopie behält Zeilen, Spalten, Werte und IntMon, auch nach dem nächsten QDS-Lauf |
 | P7 | Schreiben von `IntPlannedout.starttime/endtime` | eigene Termine je Fall | nicht genutzt (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
 | P8 | Schreiben von `ComStatsim.startTime/endTime` und Anfangszustand zeitgekoppelter Modelle | – | nicht genutzt; kürzere QDS-Fenster sind entfernt |
 | P9 | `tkinter` / Tcl/Tk in PowerFactorys Python | Fall-Manager | Probe-Werkzeug vorhanden, Ergebnis in PowerFactory nicht dokumentiert |
@@ -171,7 +171,7 @@ flowchart TD
     RUN --> CMP["mit REF zum selben Zeitschritt vergleichen;<br/>Fallreihen freigeben; Speicherbudget prüfen"]
     CMP --> LOOP
     REUSE --> LOOP
-    LOOP -- fertig --> S6["6 Wiederherstellen: Studienzeit, iopt_maint, results-Bindung;<br/>erhaltene Ergebnisobjekte auflisten"]
+    LOOP -- fertig --> S6["6 Wiederherstellen: Studienzeit, iopt_maint;<br/>erhaltene Ergebnisobjekte auflisten"]
     S6 --> S7["7 19 Tabellen bilden, prüfen, publizieren"]
 ```
 
@@ -195,9 +195,9 @@ sequenceDiagram
         SG->>IP: outserv lesen, merken
         SG->>IP: 0 schreiben (Fall / fest) oder 1 (andere)
     end
-    OR->>ER: AddCopy(konfiguriertes ElmRes), Name GridLens_<stamp>_<Fall>
-    OR->>CS: results = Kopie; Execute()
-    CS-->>ER: QDS-Ergebnisse (PowerFactory wendet die aktiven FS in ihren Fenstern an)
+    OR->>CS: Execute() wie konfiguriert
+    CS-->>CS: QDS in sein eigenes ElmRes (PowerFactory wendet die aktiven FS in ihren Fenstern an)
+    OR->>ER: AddCopy(ElmRes des Laufs), Name GridLens_<stamp>_<Fall>
     OR->>ER: Load, Reihen lesen, Release
     OR->>SG: schließen
     loop umgekehrte Reihenfolge
@@ -455,6 +455,48 @@ das in Log und Bericht sichtbar:
   Warnung im Log), **NOT CHECKABLE** (kein REF auf derselben Zeitachse oder
   keine Ergebniszeile im Fenster). Die Model-Quality-Seite trägt je Fall eine
   Zeile `outages_<case>`.
+
+**Erhaltene Ergebnisobjekte: eine Kopie nach jedem Lauf.** GridLens bindet
+`ComStatsim.results` nicht. PowerFactory schreibt eine QDS in sein eigenes
+Ergebnisobjekt im Study Case: Hat das gebundene Objekt keine Variablenauswahl
+(etwa ein temporäres im Benutzerordner `Set\Tmp`), bindet PowerFactory ein
+Ergebnisobjekt mit seiner Standard-Variablenauswahl und schreibt dort hinein;
+jeder Lauf überschreibt es. Direkt nach jedem Lauf kopiert GridLens dieses
+Objekt als `GridLens_<stamp>_<Fall>` in den Study Case (geprüft: die Kopie
+behält Zeilen, Spalten, Werte und IntMon, auch nach dem nächsten Lauf). Die
+Bindung von PowerFactory bleibt, wie ein Lauf von Hand sie hinterlässt. Ist ein
+erhaltenes GridLens-Objekt gebunden, stoppt der Lauf vor jeder Rechnung, weil
+die QDS es überschreiben würde.
+
+**Aufzeichnungsprüfung nach dem ersten Lauf.** Direkt nach dem ersten
+QDS-Lauf (REF oder, ohne REF, dem ersten Fall) liest GridLens die Spaltenliste
+seiner erhaltenen Kopie (`check_recording`). Zeichnet sie keine der bewerteten
+Variablen auf (`c:loading`, `m:loading`, `m:u`, `m:u1`), bricht GridLens sofort
+mit einem `RecordingError` ab, statt alle weiteren Fälle und n-1 umsonst zu
+rechnen. Der Fehler nennt, was Kopie und PowerFactory-Ergebnisobjekt
+aufzeichnen, dessen Variablenauswahl (IntMon) und die vermutliche Ursache.
+
+**n-1-Time-Sweep als Zeitraum.** Mit `calcPeriod` 4 rechnet die Contingency
+Analysis von `startTime` bis `endTime` (exklusiv) in Schritten von
+`stepSize`/`stepUnit` und ignoriert `studyTime` (geprüft am 24.10.2026).
+GridLens schreibt diesen Zeitraum je Sweep (`calcPeriod`, Schritt,
+`startTime`, `endTime`, `stepNumber`; verifiziert zurückgesetzt): vom ersten
+bis zum letzten QDS-Schritt in den FS-Fenstern des Falls (`sweep_period`).
+Schritte zwischen auseinanderliegenden Fenstern werden gerechnet, aber nicht
+bewertet; ein Zeitraum über dem n-1-Limit wird abgelehnt. Vor jedem Sweep
+liest GridLens die Einstellungen zurück (`sweep_settings_text`); direkt danach
+prüft es, ob jeder Zeitpunkt in den Fenstern gerechnet wurde (`cnttime` der
+Teilergebnisse). Fehlt einer, endet n-1 dieses Falls mit gewünschten,
+fehlenden und gerechneten Zeitpunkten und den Einstellungen.
+
+**Fehlerbericht.** Ein fehlgeschlagener Lauf gibt vor der Laufübersicht einen
+Block *FAILURE REPORT* aus (`log_failure`): Fehler, Ort (Schritt und Fall zum
+Zeitpunkt des Fehlers), Ursachenkette, Detailzeilen
+(`GridLensError.details`), Codestelle (Funktion und Zeile in
+`gridlens_report.py`), PowerFactory-Zustand nach der Wiederherstellung,
+erhaltene Ergebnisobjekte, letzte Warnungen und Abhilfe
+(`GridLensError.hint`). Scheitert nur ein Fall oder sein n-1, stehen dessen
+Detailzeilen unter seiner Fehlermeldung.
 
 Jeder Lauf endet mit einer **Laufübersicht** (`RunStats`, `log_run_summary`),
 auch ein fehlgeschlagener: Zeit und Aufrufe je Dienst (FS lesen, Grids und

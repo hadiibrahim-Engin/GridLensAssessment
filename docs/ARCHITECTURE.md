@@ -87,7 +87,7 @@ design and are historical.
 | P3 | several active outages are applied at the same time and switch back at their own end | multi-outage cases, T01–T13 | not verified |
 | P4 | two outages on the same equipment: behaviour when the first ends | V13 | unknown; overlapping outages are normal planning and no warning |
 | P5 | `ElmRes` time stamp vs. window boundaries (02:00 effect seen in the 29 Sep test) | half-open windows | open; the spill-over check now detects and assesses such effects |
-| P6 | `AddCopy` of the configured `ElmRes`, renaming, `ComStatsim.results` binding | result objects per case | used since 6.x, not end-to-end verified |
+| P6 | `AddCopy` of the `ElmRes` a QDS wrote into, made after the run; renaming | result objects per case | probed 24 Oct 2026: the copy keeps rows, columns, values and IntMon, also after the next QDS run |
 | P7 | writing `IntPlannedout.starttime/endtime` | own dates per case | not used (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
 | P8 | writing `ComStatsim.startTime/endTime` and initial state of time-coupled models | – | not used; shorter QDS windows were removed |
 | P9 | `tkinter` / Tcl/Tk inside PowerFactory's Python | case manager | tested only with `tools/FS_CaseManager_GUI_Test_PowerFactory2026.py` design; result not recorded |
@@ -168,7 +168,7 @@ flowchart TD
     RUN --> CMP["compare with REF at the same time steps;<br/>release case arrays"]
     CMP --> LOOP
     REUSE --> LOOP
-    LOOP -- done --> S6["6 Restore: study time, iopt_maint, results binding;<br/>list kept result objects"]
+    LOOP -- done --> S6["6 Restore: study time, iopt_maint;<br/>list kept result objects"]
     S6 --> S7["7 Build 19 tables, validate, publish"]
 ```
 
@@ -191,9 +191,9 @@ sequenceDiagram
         SG->>IP: read outserv, remember
         SG->>IP: write 0 (case / fixed) or 1 (other)
     end
-    OR->>ER: AddCopy(configured ElmRes), name GridLens_<stamp>_<case>
-    OR->>CS: results = copy; Execute()
-    CS-->>ER: QDS results (PowerFactory applies the active outages in their windows)
+    OR->>CS: Execute() as configured
+    CS-->>CS: QDS into its own ElmRes (PowerFactory applies the active outages in their windows)
+    OR->>ER: AddCopy(ElmRes of the run), name GridLens_<stamp>_<case>
     OR->>ER: Load, read series, Release
     OR->>SG: close
     loop reverse order
@@ -444,6 +444,45 @@ log and the report:
   REF in the window; most likely not applied, logged as a warning), **NOT
   CHECKABLE** (no REF on the same time axis or no result row in the window).
   The model quality page carries one row `outages_<case>` per case.
+
+**Kept result objects: a copy made after each run.** GridLens does not bind
+`ComStatsim.results`. PowerFactory writes a QDS into its own result object of
+the study case: when the bound object has no variable selection (for instance
+a temporary one in the user's `Set\Tmp` folder), PowerFactory binds a result
+object with its default variable selection and writes into it; every run
+overwrites it. Right after each run GridLens copies that object into the study
+case as `GridLens_<stamp>_<case>` (probed: the copy keeps rows, columns,
+values and IntMon, also after the next run). PowerFactory's own binding is left
+as a run by hand leaves it. A binding to a kept GridLens object stops the run
+before any calculation, since the QDS would overwrite it.
+
+**Recording check after the first run.** Right after the first QDS run
+(REF, or the first case without REF) GridLens reads the column list of its
+kept copy (`check_recording`). If none of the assessed variables
+(`c:loading`, `m:loading`, `m:u`, `m:u1`) is recorded, it stops at once with a
+`RecordingError` instead of calculating every further case and n-1 for
+nothing. The error names what the copy and PowerFactory's result object
+record, the variable selection (IntMon) of the latter and the probable cause.
+
+**n-1 time sweep as a period.** With `calcPeriod` 4 the contingency analysis
+calculates from `startTime` to `endTime` (exclusive) in steps of
+`stepSize`/`stepUnit` and ignores `studyTime` (probed 24 Oct 2026). GridLens
+writes that period for each sweep (`calcPeriod`, step, `startTime`,
+`endTime`, `stepNumber`; restored and verified): from the first to the last
+QDS step inside the case's outage windows (`sweep_period`). Steps between
+windows that lie apart are calculated but not assessed; a period longer than
+the n-1 limit is refused. Before each sweep GridLens reads the settings back
+(`sweep_settings_text`); right after it checks that every study time inside the
+windows was calculated (`cnttime` of the sub-results). A missing one stops that
+case's n-1 with the wanted, missing and calculated times and the settings.
+
+**Failure report.** A failed run prints a *FAILURE REPORT* block before the
+run summary (`log_failure`): the error, where the run was (step and case, as
+captured when the error occurred), the cause chain, the detail lines of the
+error (`GridLensError.details`), the code location (function and line in
+`gridlens_report.py`), the PowerFactory state after the restore step, the
+result objects kept, the last warnings and what to do (`GridLensError.hint`).
+A case or n-1 run that fails alone logs its detail lines below its error.
 
 Every run ends with a **run summary** (`RunStats`, `log_run_summary`), also a
 failed one: time and calls per service (reading planned outages, grids and

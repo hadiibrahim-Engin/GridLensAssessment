@@ -275,7 +275,8 @@ damit weit auseinanderliegende FS lesbar bleiben (`timeline_scale`).
 - **n-1 – Referenz-Ausfallanalyse** und **(n-1)' – Ausfallanalyse mit
   FS-Szenarien**: gerechnet mit der Contingency Analysis (ComSimoutage) des
   aktiven Study Case, zu den QDS-Zeitschritten in den FS-Fenstern jedes Falls
-  (GridLens schreibt sie für den Lauf in `studyTime`). n-1 rechnet nur mit den
+  (GridLens schreibt für den Lauf den Zeitraum vom ersten bis zum letzten,
+  `calcPeriod` 4 mit `startTime`/`endTime`). n-1 rechnet nur mit den
   festen FS, (n-1)' mit den FS des Falls; jedes Ergebnis von (n-1)' wird gegen
   n-1 zum selben Zeitpunkt und Fehlerfall eingestuft. Ohne Contingency Analysis
   im aktiven Study Case (z. B. dem QDS-Study-Case) legt GridLens dort

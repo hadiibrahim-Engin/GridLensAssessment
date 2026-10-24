@@ -1305,6 +1305,9 @@ N1_COMMAND_CLASS = 'ComSimoutage'
 MAX_CONTINGENCY_ELEMENTS = 200
 N1_PLANNED_OPTION = 'isPlannedOutages'
 N1_TIMES_ATTRIBUTE, N1_IGNORE_ATTRIBUTE = 'studyTime', 'bIgnoreTime'
+# The time sweep as a period: with calcPeriod 4 PowerFactory 2026 calculates from startTime to endTime (exclusive)
+# in steps of stepSize/stepUnit and ignores studyTime (probe of 24 October 2026). GridLens writes that period.
+N1_PERIOD_ATTRIBUTE, N1_PERIOD_MODE = 'calcPeriod', 4
 N1_RESULT_ATTRIBUTE = 'p_rescnt'
 N1_VARIABLES = {'loading': ('c:loading',), 'voltage': ('m:u',)}
 # Recording limits of the ComSimoutage: below loadmax, and inside vlmin..vlmax, nothing is written (code 3).
@@ -6999,7 +7002,7 @@ class ResultStore:
 
 
 def _case_result_object(study_case, template, case_id, name=None):
-    """A copy of the configured ElmRes for one case, with its variable selection."""
+    """The kept copy of a calculated result object, in the study case, named for its case."""
     name = name or "{}{}_{}".format(SNAPSHOT_PREFIX, datetime.now().strftime("%y%m%d-%H%M%S"), case_id)
     snapshot = None
     if template is not None:
@@ -7020,9 +7023,10 @@ def _case_result_object(study_case, template, case_id, name=None):
                     snapshot = None
     if snapshot is None:
         raise GridLensError(
-            "PowerFactory could not copy the configured ElmRes for case {}. "
-            "The calculation was not started because a new empty ElmRes would "
-            "lose the configured result-variable selection.".format(case_id))
+            "PowerFactory could not copy the result object of {} after its run, so the run cannot be kept; the "
+            "next run would overwrite it.".format(case_id),
+            details=["Result object to copy: {}".format(object_key(template) if template is not None else "none"),
+                     "Study case: {}".format(object_key(study_case))])
     # A copy that cannot carry its name is removed again: it would be an
     # anonymous duplicate of the configured result object.
     try:
@@ -7096,27 +7100,13 @@ def recorded_text(counted, limit=10):
                                        " and {} more variable(s)".format(len(ordered) - limit) if len(ordered) > limit else "")
 
 
-def complete_monitors(template, snapshot):
-    """Copy every IntMon of the configured result object that its copy lacks; the number copied."""
-    have = {object_name(monitor) for monitor in _contents(snapshot, '*.IntMon')}
-    copied = 0
-    for monitor in _contents(template, '*.IntMon') if template is not None else []:
-        if object_name(monitor) in have:
-            continue
-        try:
-            if _as_objects(snapshot.AddCopy(monitor)):
-                copied += 1
-        except Exception:
-            pass
-    return copied
-
-
-def check_recording(snapshot, template, qds, case_id, logger):
+def check_recording(snapshot, produced, qds, case_id, logger):
     """Right after the first run: does its kept result object record what GridLens assesses? Else stop at once.
 
-    Without the assessed variables every further run would be wasted; the
-    error names what the copy and the configured result object record and
-    define, so the cause can be told apart.
+    `produced` is the result object PowerFactory wrote the run into and
+    `snapshot` GridLens' copy of it. Without the assessed variables every
+    further run would be wasted; the error names what both record and the
+    variable selection of the QDS result object.
     """
     counted = recorded_variables(snapshot)
     assessed = {variable: number for variable, number in (counted or {}).items() if variable in ASSESSED_VARIABLES}
@@ -7129,59 +7119,40 @@ def check_recording(snapshot, template, qds, case_id, logger):
             pass
     if assessed:
         return
-    copy_monitors, template_monitors = monitor_definitions(snapshot), monitor_definitions(template)
-    template_counted = recorded_variables(template) if template is not None else None
-    hint = ("Open ComStatsim > Result Variables and select c:loading for lines and transformers and m:u for "
-            "terminals; run the quasi-dynamic simulation once by hand and check that the configured result object "
-            "records them. If it does and this error stays, send this report: the copy is then not recorded by "
-            "PowerFactory.")
-    if any(variable in ASSESSED_VARIABLES for variable in template_counted or {}):
-        cause = ("The configured result object holds the assessed variables from its last calculation, the copy "
-                 "does not: the quasi-dynamic simulation records its variable selection only into the result object "
-                 "it manages itself, or the selection is kept outside the result object.")
-        hint = ("Nothing to change in the study case: the QDS records correctly into its own result object. Send this "
-                "report; GridLens must then calculate into the configured result object and keep a copy afterwards.")
-    elif template_monitors and not copy_monitors:
-        cause = ("The copy holds no variable selection although the configured result object has one: PowerFactory "
-                 "did not copy the IntMon objects, and GridLens could not add them.")
-    elif template_monitors:
-        cause = ("The copy holds the same variable selection as the configured result object, but the quasi-dynamic "
-                 "simulation did not record it into the copy: it probably records the selected variables only into "
-                 "the result object it manages itself.")
+    produced_counted = recorded_variables(produced) if produced is not None else None
+    if any(variable in ASSESSED_VARIABLES for variable in produced_counted or {}):
+        cause = ("PowerFactory's result object records the assessed variables, its copy does not: the copy lost them.")
+        hint = "Send this report; the copy of a calculated result object is then not complete."
     else:
-        cause = ("Neither the configured result object nor its copy holds a variable selection (IntMon); the quasi-dynamic "
-                 "simulation then records only its own status columns.")
+        cause = ("The variable selection of the quasi-dynamic simulation's result object contains none of the assessed "
+                 "variables.")
+        hint = ("Open ComStatsim > Result Variables and select c:loading for lines and transformers and m:u for "
+                "terminals, then run GridLens again.")
     raise RecordingError(
         "{} was calculated, but its kept result object '{}' records none of the variables GridLens assesses ({}). "
         "Every further run would record the same, so GridLens stopped after the first run.".format(
             case_id, object_name(snapshot), ", ".join(sorted(ASSESSED_VARIABLES))),
-        details=["Kept result object: {} ({})".format(object_name(snapshot), object_key(snapshot)),
+        details=["Kept result object (copy made after the run): {} ({})".format(object_name(snapshot), object_key(snapshot)),
                  "Recorded in the kept result object: " + recorded_text(counted),
-                 "Variable selection of the kept result object: " + monitor_text(snapshot),
-                 "Configured result object of '{}': {} ({})".format(object_name(qds), object_name(template), object_key(template)),
-                 "Variable selection of the configured result object: " + monitor_text(template),
-                 "Columns the configured result object holds from its last calculation: " + recorded_text(template_counted),
+                 "Result object '{}' wrote the run into: {} ({})".format(object_name(qds), object_name(produced), object_key(produced)),
+                 "Recorded there: " + recorded_text(produced_counted),
+                 "Its variable selection: " + monitor_text(produced),
                  "Probable cause: " + cause],
         hint=hint)
 
 
 def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger, result_objects,
                    fingerprint='', announce=True):
-    """Phase 1 for one run: the QDS into its own kept ElmRes. Nothing is read; returns the run."""
+    """Phase 1 for one run: the QDS as configured, then a kept copy of its result object. Returns the run.
+
+    PowerFactory writes a QDS into its own result object of the study case
+    (it creates one with its default variable selection when the bound object
+    has none) and overwrites it with the next run. GridLens therefore keeps
+    every run as a copy made right after it, named GridLens_<stamp>_<case>.
+    Nothing is read here.
+    """
     if announce:
         logger.case("Case {} \u00b7 {}".format(case_id, name))
-    snapshot = _case_result_object(study_case, original_result, case_id, result_objects.name_for(case_id))
-    result_objects.append(snapshot, case_id)
-    added = complete_monitors(original_result, snapshot)
-    if added:
-        logger.detail("Copied {} missing variable set(s) (IntMon) of '{}' into the copy.".format(
-            added, object_name(original_result)), "WARNING")
-    logger.detail("Result object: '{}', a copy of '{}'; {}.".format(
-        object_name(snapshot), object_name(original_result), monitor_text(snapshot)))
-    if not _set_attribute(qds, "results", snapshot):
-        raise GridLensError(
-            "PowerFactory did not bind ComStatsim.results to the result object "
-            "of the case. No calculation was started.")
     logger.write(
         "CALCULATION",
         "Starting {} with the active ComStatsim settings; only the "
@@ -7211,17 +7182,24 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
                 case_id, elapsed,
                 "an unreadable return value" if code is None
                 else "error code {:g}".format(code)))
-    if not _same_object(safe_attr(qds, "results"), snapshot):
+    produced = safe_attr(qds, "results")
+    if produced is None or class_name(produced) != "ElmRes":
         raise GridLensError(
-            "ComStatsim.results changed during {}. Results were rejected."
-            .format(case_id))
+            "{} was calculated, but ComStatsim.results names no result object afterwards.".format(case_id),
+            details=["ComStatsim.results after the run: {}".format(
+                "none" if produced is None else "{} ({})".format(object_name(produced), class_name(produced)))])
     logger.write(
         "CALCULATION", "{} completed successfully in {:.1f}s.".format(
             case_id, elapsed), 4)
+    with RUN_STATS.measure("keep a copy of each QDS result"):
+        snapshot = _case_result_object(study_case, produced, case_id, result_objects.name_for(case_id))
+    result_objects.append(snapshot, case_id)
+    logger.detail("PowerFactory wrote {} into '{}'; kept as '{}' ({}).".format(
+        case_id, object_name(produced), object_name(snapshot), monitor_text(snapshot)))
     mark_result_object(snapshot, case_id, fingerprint)
     if not RUN_CONTEXT.get('recording_checked'):
         RUN_CONTEXT['recording_checked'] = True
-        check_recording(snapshot, original_result, qds, case_id, logger)
+        check_recording(snapshot, produced, qds, case_id, logger)
     return {"id": case_id, "name": name, "snapshot": snapshot, "elapsed": elapsed,
             "result_object": object_name(snapshot)}
 
@@ -7308,10 +7286,14 @@ def _log_kept_results(results_store, logger):
         RUN_CONTEXT.setdefault('kept', []).append(object_name(obj))
 
 
-def _restore_results_binding(qds, original_result):
-    if not _set_attribute(qds, "results", original_result):
-        return ["ComStatsim.results could not be restored to its original object."]
-    return []
+def _log_results_binding(qds, original_result, logger):
+    """GridLens does not bind ComStatsim.results. PowerFactory may bind its own result object during a QDS (in place
+    of a temporary one without variable selection), as a run by hand does; that binding is left as it is."""
+    now = safe_attr(qds, "results")
+    if not _same_object(now, original_result):
+        logger.write("RESTORE", "PowerFactory bound its own result object '{}' to ComStatsim.results during the QDS "
+                     "(before: '{}'), as a run by hand does; left as it is.".format(
+                         object_name(now), object_name(original_result)), 5)
 
 
 def _read_setting(obj, attribute):
@@ -7878,6 +7860,34 @@ def sweep_settings_text(command):
     return "; ".join(parts)
 
 
+def step_setting(step):
+    """(stepSize, stepUnit) of a step in seconds, in the largest unit that divides it."""
+    for unit in sorted(STEP_UNIT_SECONDS, key=lambda key: -STEP_UNIT_SECONDS[key]):
+        size = step / STEP_UNIT_SECONDS[unit]
+        if size >= 1 and abs(size - round(size)) < 1e-9:
+            return int(round(size)), unit
+    return int(round(step)), 0
+
+
+def sweep_period(times, step, limit=None):
+    """Every QDS step from the first to the last study time: what one sweep over a period calculates.
+
+    Outage windows that lie apart make the period longer than the windows;
+    the steps outside them are calculated but not assessed.
+    """
+    limit = setting_value('max_n1_times') if limit is None else limit
+    first, last = min(times), max(times)
+    count = int(round((last - first) / step)) + 1
+    if count > limit:
+        raise GridLensError(
+            "The n-1 time sweep from the first to the last study time of the outage windows covers {} QDS steps, more "
+            "than {}; every one calculates every contingency.".format(count, limit),
+            details=["Study times inside the windows: " + times_text(times)],
+            hint="Split the case into cases whose outage windows lie close together, or raise 'max n-1 study times' "
+                 "in Settings.")
+    return [first + index * step for index in range(count)]
+
+
 def calculated_times(command):
     """The study times of the sub-results the last sweep wrote (cnttime), without loading them."""
     result = safe_attr(command, N1_RESULT_ATTRIBUTE)
@@ -7886,15 +7896,21 @@ def calculated_times(command):
                   if moment is not None) if result is not None else []
 
 
+def _missing_times(wanted, found, tolerance=1.0):
+    return [moment for moment in wanted if not any(abs(moment - other) <= tolerance for other in found)]
+
+
 def _same_times(found, wanted, tolerance=1.0):
     return len(found) == len(wanted) and all(abs(a - b) <= tolerance for a, b in zip(sorted(found), sorted(wanted)))
 
 
-def run_n1_sweep(command, times, active_keys, records, excluded, label, keep=None):
-    """Phase 1: one contingency analysis over `times` with exactly `active_keys` applied.
+def run_n1_sweep(command, times, step, active_keys, records, excluded, label, keep=None):
+    """Phase 1: one contingency analysis over the period of `times` with exactly `active_keys` applied.
 
-    Written temporarily and restored verified (StateGuard): studyTime and
-    bIgnoreTime, isPlannedOutages (0 without any active outage, else 1),
+    `times` are the QDS steps inside the outage windows, `step` the QDS step in
+    seconds. Written temporarily and restored verified (StateGuard): the time
+    sweep as a period (calcPeriod, step, startTime, endTime, stepNumber),
+    isPlannedOutages (0 without any active outage, else 1),
     the 'Ignored' flag of every planned outage, and 'Not analysed' of the
     contingencies outside the contingency grids. With `keep` = (study case,
     name, mark) the result object is kept as a copy for phase 2; without it,
@@ -7912,14 +7928,22 @@ def run_n1_sweep(command, times, active_keys, records, excluded, label, keep=Non
             if not guard.set(outage, 'outserv', 1, "'Not analysed' flag of contingency '{}'".format(object_name(outage))):
                 raise GridLensError("Contingency '{}' could not be set to 'Not analysed' for the contingency grid "
                                     "selection.".format(object_name(outage)))
-        if not guard.set(command, N1_TIMES_ATTRIBUTE, [float(moment) for moment in times], 'study times of the contingency analysis'):
-            raise GridLensError("The study times [{}] of the contingency analysis could not be written for {}.".format(
-                N1_TIMES_ATTRIBUTE, label))
-        known, ignore = _read_setting(command, N1_IGNORE_ATTRIBUTE)
-        if known and isinstance(ignore, (list, tuple)) and not guard.set(
-                command, N1_IGNORE_ATTRIBUTE, [0.0] * len(times), 'ignored study times of the contingency analysis'):
-            raise GridLensError("The ignored study times [{}] of the contingency analysis could not be cleared for "
-                                "{}.".format(N1_IGNORE_ATTRIBUTE, label))
+        period = sweep_period(times, step)
+        size, unit = step_setting(step)
+        for attribute, value in ((N1_PERIOD_ATTRIBUTE, N1_PERIOD_MODE), ('stepUnit', unit), ('stepSize', size),
+                                 ('startTime', int(round(period[0]))), ('endTime', int(round(period[-1] + step)))):
+            if not guard.set(command, attribute, value, "time sweep [{}] of the contingency analysis".format(attribute)):
+                found, current = _read_setting(command, attribute)
+                raise GridLensError(
+                    "The time sweep of the contingency analysis could not be set for {}: [{}] did not take the "
+                    "value.".format(label, attribute),
+                    details=["Wanted: {} = {}".format(attribute, _format_pf_time(value) if attribute.endswith('Time')
+                                                      else value),
+                             "Read back: {}".format(_format_setting_value(current) if found else 'unreadable'),
+                             "Time-sweep settings now: " + sweep_settings_text(command)])
+        if _read_setting(command, 'stepNumber')[0]:
+            # Derived by PowerFactory in some versions; written where it is not, so both agree on the period.
+            guard.set(command, 'stepNumber', len(period), "time sweep [stepNumber] of the contingency analysis")
         applied = applied_text(command, records, N1_PLANNED_OPTION)
         settings = sweep_settings_text(command)
         started = time.monotonic()
@@ -7936,16 +7960,20 @@ def run_n1_sweep(command, times, active_keys, records, excluded, label, keep=Non
                                 details=["Settings before the run: " + settings, applied],
                                 hint="Read the PowerFactory messages of the contingency analysis just above.")
         calculated = calculated_times(command)
-        if not _same_times(calculated, times):
+        missing = _missing_times(times, calculated)
+        if missing:
             raise GridLensError(
-                "The contingency analysis for {} calculated other study times than GridLens wrote, so its results "
-                "cannot be placed in the outage windows.".format(label),
-                details=["Written (QDS steps inside the outage windows): " + times_text(times),
+                "The contingency analysis for {} did not calculate {} of the {} study times inside the outage windows, "
+                "so its results cannot be placed in the windows.".format(label, len(missing), len(times)),
+                details=["Wanted (QDS steps inside the outage windows): " + times_text(times),
+                         "Missing: " + times_text(missing),
+                         "Written period: {} to {} (exclusive), {} step(s)".format(
+                             _format_pf_time(period[0]), _format_pf_time(period[-1] + step), len(period)),
                          "Calculated by PowerFactory (cnttime of the sub-results): " + times_text(calculated),
                          "Time-sweep settings read back before the run: " + settings,
                          "Time-sweep settings now: " + sweep_settings_text(command)],
-                hint="Compare the two lists: the time sweep of '{}' probably follows another time definition than "
-                     "the studyTime vector. Send this report.".format(object_name(command)))
+                hint="Compare the lists: the time sweep of '{}' follows another time definition than calcPeriod {} "
+                     "(startTime to endTime). Send this report.".format(object_name(command), N1_PERIOD_MODE))
         limits = _recording_limits(command)
         kept = None
         if keep is not None:
@@ -7956,7 +7984,8 @@ def run_n1_sweep(command, times, active_keys, records, excluded, label, keep=Non
         else:
             with RUN_STATS.measure("read n-1 results"):
                 found = read_n1_results(command)
-    return dict(found, written_times=list(times), applied=applied, settings=settings, calculated_times=calculated)
+    return dict(found, written_times=period, window_times=list(times), applied=applied, settings=settings,
+                calculated_times=calculated)
 
 
 def keep_copy(study_case, obj, name, mark):
@@ -8002,10 +8031,16 @@ def load_n1(found):
     else:
         with RUN_STATS.measure("read n-1 results"):
             data = read_n1_results(found['kept'], recording_limits=found.get('recording_limits'))
-    written = found.get('written_times')
-    if written is not None and not _same_times(list(data['times']), written):
-        raise GridLensError("the contingency analysis calculated {} study time(s) instead of the {} written ones".format(
-            len(data['times']), len(written)))
+    wanted = found.get('window_times')
+    if wanted is not None:
+        missing = _missing_times(wanted, list(data['times']))
+        if missing:
+            raise GridLensError("the n-1 result lacks {} of the {} study times inside the outage windows".format(
+                len(missing), len(wanted)), details=["Missing: " + times_text(missing),
+                                                     "Held: " + times_text(data['times'])])
+        # The steps between windows that lie apart were calculated with the period; only the windows are assessed.
+        data = dict(data, times={moment: values for moment, values in data['times'].items()
+                                 if not _missing_times([moment], wanted)})
     if not data['times']:
         raise GridLensError("the kept n-1 result holds no study time")
     RUN_STATS.count("n1_times", len(data['times']))
@@ -8037,7 +8072,7 @@ def calculate_n1_case(command, plan, request, records, grid, excluded, prime, re
     reference = references.get(key)
     if reference is None:
         reference = references[key] = run_n1_sweep(
-            command, times, background, records, excluded, 'the n-1 reference of ' + label,
+            command, times, grid[2], background, records, excluded, 'the n-1 reference of ' + label,
             (keep[0], keep[1] + '_N1', mark.format('n-1')) if keep else None)
     elif keep and reference.get('kept') is not None:
         copied = keep_copy(keep[0], reference['kept'], keep[1] + '_N1', mark.format('n-1') + recording_text(
@@ -8048,7 +8083,7 @@ def calculate_n1_case(command, plan, request, records, grid, excluded, prime, re
     if prime:
         active = background | {record['key'] for record in plan['members']}
         entry['scenario'] = run_n1_sweep(
-            command, times, active, records, excluded, "the (n-1)' scenario of " + label,
+            command, times, grid[2], active, records, excluded, "the (n-1)' scenario of " + label,
             (keep[0], keep[1] + '_N1P', mark.format("(n-1)'")) if keep else None)
     return entry
 
@@ -8553,7 +8588,7 @@ def kept_stamps(study_case):
     return sorted(stamps, reverse=True)
 
 
-def kept_runs(study_case, stamp, request, ready, logger):
+def kept_runs(study_case, stamp, request, ready, logger, grid=None):
     """Phase 1 without a calculation: the runs and n-1 entries from the result objects of an earlier run.
 
     Every object is found by its name GridLens_<stamp>_<case>; a case whose
@@ -8603,11 +8638,14 @@ def kept_runs(study_case, stamp, request, ready, logger):
                                   'reason': "the run {} kept no {} result for this case".format(
                                       stamp, N1_REFERENCE if reference is None else N1_PRIME)}
             else:
+                window_times = n1_study_times([plan['windows'][record['key']] for record in plan['members']],
+                                              grid) if grid else None
                 n1[plan['id']] = {'status': 'CALCULATED', 'times': 0, 'elements_of': elements_of,
                                   'kind': N1_PRIME if prime else N1_REFERENCE,
-                                  'reference': {'kept': reference, 'recording_limits': recording_limits_of(reference)},
-                                  'scenario': {'kept': scenario, 'recording_limits': recording_limits_of(scenario)}
-                                  if prime else None}
+                                  'reference': {'kept': reference, 'recording_limits': recording_limits_of(reference),
+                                                'window_times': window_times},
+                                  'scenario': {'kept': scenario, 'recording_limits': recording_limits_of(scenario),
+                                               'window_times': window_times} if prime else None}
     return runs, n1
 
 
@@ -8688,17 +8726,13 @@ def execute_gridlens(app):
             "ComStatsim.results is empty. Configure a result object and the "
             "required variables before running GridLens.")
     if object_name(original_result).startswith(SNAPSHOT_PREFIX):
-        # An aborted run can leave this binding behind. The object still holds
-        # the full variable selection and every case recalculates into a fresh
-        # copy, so the stored settings are used as they are.
-        logger.write(
-            "CONTEXT",
-            "ComStatsim.results is bound to '{}', a result object of an earlier "
-            "GridLens run (left bound when that run was aborted). GridLens uses "
-            "it as the configured result object and restores this binding "
-            "afterwards; it is not changed. Bind ComStatsim.results to the "
-            "intended ElmRes to avoid this.".format(
-                object_name(original_result)), 2, "WARNING")
+        # The QDS writes into the bound result object; a kept run would be overwritten.
+        raise GridLensError(
+            "ComStatsim.results is bound to '{}', a kept result object of an earlier GridLens run; the QDS would "
+            "overwrite it. No calculation was started.".format(object_name(original_result)),
+            details=["Bound result object: " + object_key(original_result)],
+            hint="Bind ComStatsim.results to another result object, or run the quasi-dynamic simulation once by hand "
+                 "so that PowerFactory binds its own, then run GridLens again.")
     option_found, original_option = _read_setting(qds, PLANNED_OUTAGE_OPTION)
     if not option_found:
         raise GridLensError(
@@ -8748,7 +8782,7 @@ def execute_gridlens(app):
     evaluate_stamp = request.get("evaluate_stamp")
     try:
         if evaluate_stamp:
-            runs, n1_runs = kept_runs(study_case, evaluate_stamp, request, ready, logger)
+            runs, n1_runs = kept_runs(study_case, evaluate_stamp, request, ready, logger, qds_grid(qds))
         else:
             if setting_value('run_reference'):
                 runs.append(_calculate_reference(app, study_case, qds, request, records, original_result, logger,
@@ -8800,11 +8834,10 @@ def execute_gridlens(app):
         state_errors.extend(_restore_study_time(study_time_state, logger))
         state_errors.extend(
             _restore_planned_outage_option(qds, original_option, logger))
-        state_errors.extend(_restore_results_binding(qds, original_result))
+        _log_results_binding(qds, original_result, logger)
         _log_kept_results(result_objects, logger)
         RUN_CONTEXT['restore'] = ("NOT fully restored: " + "; ".join(state_errors)) if state_errors else (
-            "restored and verified (Study Case time, 'Planned Outages' option, result object binding, every value "
-            "GridLens wrote)")
+            "restored and verified (Study Case time, 'Planned Outages' option, every value GridLens wrote)")
         RUN_STATS.add("restore PowerFactory state", time.monotonic() - restoring)
     if state_errors:
         raise GridLensError(

@@ -187,26 +187,34 @@ def test_a_study_time_missing_in_the_scenario_is_failed():
 
 # --- the run against an artificial contingency analysis -------------------------------------------
 class Analysis(Obj):
-    """A ComSimoutage that calculates like PowerFactory: the studyTime vector decides the study times, every
-    planned outage not Ignored applies inside its window, a contingency on switched-off equipment has no row."""
+    """A ComSimoutage that calculates like PowerFactory 2026 (probe of 24 October 2026): with calcPeriod 4 the
+    period startTime..endTime (exclusive) decides the study times and studyTime is ignored; every planned outage
+    not Ignored applies inside its window; a contingency on switched-off equipment has no row."""
 
     def __init__(self, outages, planned, lines, fail=False):
+        # As found in the project: a period elsewhere, and a studyTime list the sweep does not follow.
         super().__init__("CA", "ComSimoutage", isPlannedOutages=1, studyTime=[START], bIgnoreTime=[0.0], loadmax=80.0,
-                         vlmin=0.95, vlmax=1.05)
+                         vlmin=0.95, vlmax=1.05, calcPeriod=4, startTime=int(START + 10 * H),
+                         endTime=int(START + 14 * H), stepSize=1, stepUnit=2, stepNumber=4)
         self._outages, self._planned, self._lines, self._fail, self.runs = outages, planned, lines, fail, []
         self.p_rescnt = Folder([])
 
     def GetContents(self, pattern="*"):
         return list(self._outages) if pattern in ("*", "*.ComOutage") else []
 
+    def study_times(self):
+        if self.calcPeriod != 4:
+            return [moment for moment, skip in zip(self.studyTime, self.bIgnoreTime) if not skip]
+        step = self.stepSize * {0: 1, 1: 60, 2: 3600, 3: 86400}[self.stepUnit]
+        return [float(moment) for moment in range(int(self.startTime), int(self.endTime), int(step))]
+
     def Execute(self):
-        self.runs.append((self.isPlannedOutages, tuple(self.studyTime)))
+        times = self.study_times()
+        self.runs.append((self.isPlannedOutages, tuple(times)))
         if self._fail:
             return 1
         subs = []
-        for moment, skip in zip(self.studyTime, self.bIgnoreTime):
-            if skip:
-                continue
+        for moment in times:
             active = [fs for fs in self._planned if self.isPlannedOutages and fs.outserv == 0
                       and fs.starttime <= moment < fs.endtime]
             off = {gl.object_key(item) for fs in active for item in fs.components}
@@ -272,7 +280,28 @@ def test_a_case_runs_n1_and_n1_prime_on_the_qds_steps_of_its_windows_and_restore
     assert entry["comparison"]["counts"] == {"NEW": 8, "NOT_APPLICABLE": 4}
     assert entry["summary"] == "(n-1)' against n-1: NEW 8, NOT_APPLICABLE 4"
     assert (analysis.isPlannedOutages, analysis.studyTime, analysis.bIgnoreTime) == (1, [START], [0.0])
+    # The period GridLens wrote for the run is undone: the sweep settings are those found before.
+    assert (analysis.calcPeriod, analysis.startTime, analysis.endTime, analysis.stepNumber) == (
+        4, int(START + 10 * H), int(START + 14 * H), 4)
     assert (fs.outserv, other.outserv) == (1, 0), "only the case's outage was active, and both are restored"
+
+
+def test_windows_that_lie_apart_are_calculated_as_one_period_and_only_the_windows_are_assessed():
+    analysis, records, plan, *_ = _scenario()
+    second = {"key": "late", "name": "Late", "_object": records[0]["_object"], "component_keys": []}
+    plan = dict(plan, members=plan["members"] + [second],
+                windows=dict(plan["windows"], late=(START + 7 * H, START + 8 * H)))
+    entry = gl.run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, False, {})
+    # 02:00 to 07:00 calculated (6 steps), 02:00, 03:00 and 07:00 assessed.
+    assert analysis.runs == [(0, tuple(START + hour * H for hour in range(2, 8)))]
+    assert entry["times"] == 3
+
+
+def test_a_period_longer_than_the_n1_limit_is_refused_with_the_window_times():
+    with pytest.raises(gl.GridLensError, match="covers 25 QDS steps, more than 10") as raised:
+        gl.sweep_period([START, START + 24 * H], H, limit=10)
+    assert raised.value.details[0].startswith("Study times inside the windows: ")
+    assert gl.step_setting(3600.0) == (1, 2) and gl.step_setting(900.0) == (15, 1) and gl.step_setting(86400.0) == (1, 3)
 
 
 def test_cases_with_the_same_study_times_share_one_reference_sweep():
@@ -293,8 +322,15 @@ def test_a_failed_calculation_or_other_study_times_are_errors_and_settings_are_r
 
     analysis, records, plan, *_ = _scenario()
     analysis.Execute = lambda: (setattr(analysis, "p_rescnt", Folder([])), 0)[1]
-    with pytest.raises(gl.GridLensError, match="0 study time"):
+    with pytest.raises(gl.GridLensError, match="did not calculate 2 of the 2 study times inside the outage") as raised:
         gl.run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, False, {})
+    # The report names the wanted, missing and calculated times, the written period and the settings read back.
+    wanted, missing, period, calculated, before, _ = raised.value.details
+    assert wanted.startswith("Wanted (QDS steps inside the outage windows): ") and wanted.endswith("(2)")
+    assert missing.endswith("(2)") and period.endswith("2 step(s)")
+    assert calculated == "Calculated by PowerFactory (cnttime of the sub-results): none (0)"
+    assert "calcPeriod = 4" in before and "isPlannedOutages = 0" in before
+    assert analysis.startTime == int(START + 10 * H), "restored after the error"
 
 
 def test_contingencies_outside_the_contingency_grids_are_not_analysed_for_the_run_only():
@@ -303,7 +339,7 @@ def test_contingencies_outside_the_contingency_grids_are_not_analysed_for_the_ru
     assert [outage.loc_name for outage in excluded] == ["C1", "C2"]
     assert gl.contingencies_outside(gl.contingency_equipment(analysis), ()) == []
 
-    gl.run_n1_sweep(analysis, [START], set(), records, excluded, "test")
+    gl.run_n1_sweep(analysis, [START], H, set(), records, excluded, "test")
     assert all(outage.outserv == 0 for outage in outages), "'Not analysed' is restored"
 
 

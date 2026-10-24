@@ -426,7 +426,7 @@ def test_production_script_has_no_obsolete_runtime_dependencies():
     text = SCRIPT.read_text(encoding="utf-8")
     forbidden = (
         "gridlens_pf", "IntScenario", "IntScheme", "GetActiveScenario",
-        "SCAN_VARIATIONS", ".Activate(", ".Deactivate(", "traceback",
+        "SCAN_VARIATIONS", ".Activate(", ".Deactivate(", "import traceback", "print_exc",
     )
     assert not [value for value in forbidden if value in text]
 
@@ -1216,26 +1216,45 @@ def test_emitted_schema_check_catches_missing_tables_and_fields_from_export_log(
 
 
 
-def test_leftover_gridlens_result_is_used_as_configured_with_a_warning(monkeypatch):
-    # A run aborted mid-calculation can leave ComStatsim.results bound to one
-    # of its own result objects. That object is a full copy of the variable
-    # selection, and every run calculates into a fresh copy, so GridLens
-    # calculates with the stored settings instead of refusing to run.
+def test_powerfactory_writes_into_its_own_result_object_and_gridlens_keeps_a_copy_after_each_run():
+    # As probed on 24 October 2026: the bound object is a temporary one without variable selection; on Execute
+    # PowerFactory binds its own result object of the study case and writes into it, every run into the same one.
+    app = App((PlannedOutage("Outage A"),))
+    temporary, own = app.original_result, ElmRes("Quasi-Dynamic Simulation AC")
+    execute = app.qds.Execute
+
+    def execute_like_powerfactory():
+        app.qds.results = own
+        return execute()
+    app.qds.Execute = execute_like_powerfactory
+    copied = []
+    add_copy = app.study.AddCopy
+    app.study.AddCopy = lambda result: (copied.append(result), add_copy(result))[1]
+
+    gl.execute_gridlens(app)
+
+    assert app.qds.execute_calls == 2 and copied == [own, own], "each run is copied from the object written into"
+    assert [copy.loc_name.rsplit("_", 1)[-1] for copy in app.study.copies] == ["REF", "OUT01"]
+    assert app.qds.results is own, "PowerFactory's own binding is left as a run by hand leaves it"
+    assert temporary.deleted is False
+    text = "\n".join(app.messages)
+    assert "PowerFactory wrote REF into 'Quasi-Dynamic Simulation AC'; kept as 'GridLens_" in text
+    assert "PowerFactory bound its own result object 'Quasi-Dynamic Simulation AC'" in text
+
+
+def test_a_binding_to_a_kept_gridlens_result_stops_before_any_calculation(monkeypatch):
+    # The QDS writes into the bound result object; a kept run must not be overwritten.
     app = App((PlannedOutage("Outage"),))
     leftover = app.original_result
     leftover.loc_name = "GridLens_260928-145610_REF"
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
 
-    counts = gl.execute_gridlens(app)
+    with pytest.raises(gl.GridLensError, match="kept result object of an earlier GridLens run") as raised:
+        gl.execute_gridlens(app)
 
-    assert app.qds.execute_calls == 2
-    assert counts["ScriptedCases"] == 2
-    assert app.qds.results is leftover, "the stored binding must come back"
-    assert leftover.deleted is False, "GridLens deletes no result object"
-    warnings = [line for line in app.messages
-                if "WARNING" in line and "GridLens_260928-145610_REF" in line]
-    assert len(warnings) == 1
-    assert "not changed" in warnings[0]
+    assert app.qds.execute_calls == 0
+    assert app.qds.results is leftover and leftover.deleted is False
+    assert "run the quasi-dynamic simulation once by hand" in raised.value.hint
 
 
 
@@ -1515,6 +1534,18 @@ def test_a_run_without_publication_says_that_the_report_cannot_be_generated(monk
     failed = [line for line in app.messages if "FAILED" in line]
     assert failed and "No report tables were published" in failed[-1] and "ReportsNet.log" in failed[-1]
     assert app.report.tables == {}, "nothing was published"
+    # The failure report says what, where, why, which state PowerFactory holds and what to do.
+    text = "\n".join(app.messages)
+    report = text[text.index("FAILURE REPORT"):text.index("RUN SUMMARY")]
+    for heading in ("Error:", "Where:", "Details:", "Code location in gridlens_report.py", "PowerFactory state:",
+                    "Result objects kept in the study case:", "What to do:"):
+        assert heading in report, heading
+    assert "RecordingError: REF was calculated" in report
+    assert "STEP 4/7" in report and "case: Case REF" in report
+    assert "restored and verified" in report
+    assert "GridLens_" in report.split("Result objects kept in the study case:")[1]
+    assert "check_recording() line" in report
+    assert "Send this" in report.split("What to do:")[1]
 
 
 def test_cancel_or_a_failure_ends_the_script_with_an_error_code_so_no_report_is_rendered(monkeypatch):
@@ -1687,8 +1718,20 @@ def test_an_unusable_result_object_is_named_in_the_run_error():
     with pytest.raises(gl.GridLensError) as raised:
         gl.execute_gridlens(app)
 
-    assert "was calculated, but GridLens cannot use its result object GridLens_" in str(raised.value)
-    assert "records none of the results GridLens assesses" in str(raised.value)
+    # Found right after REF, before any other run, with what the copy and the configured object record.
+    error = raised.value
+    assert isinstance(error, gl.RecordingError)
+    assert "REF was calculated, but its kept result object 'GridLens_" in str(error)
+    assert "records none of the variables GridLens assesses" in str(error)
+    assert app.qds.execute_calls == 1
+    assert any(line.startswith("Recorded in the kept result object: 2 column(s): ") and "m:phiu x1" in line
+               for line in error.details)
+    assert any(line.startswith("Its variable selection: ") for line in error.details)
+    # PowerFactory's own result object records the loading, the copy made after the run does not.
+    assert any(line.startswith("Recorded there: ") and "c:loading" in line for line in error.details)
+    assert any(line.startswith("Probable cause: PowerFactory's result object records the assessed variables")
+               for line in error.details)
+    assert "Send this report" in error.hint
 
 
 # ---------------------------------------------------------------------------

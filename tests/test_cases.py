@@ -446,3 +446,32 @@ def test_applied_text_reads_the_option_and_the_flags_back():
     text = gl.applied_text(Obj("QDS", "ComStatsim", iopt_maint=1), records)
     assert "[iopt_maint] = 1" in text and "applied: Outage A." in text
     assert "= unreadable" in gl.applied_text(Obj("QDS", "ComStatsim"), records[1:])
+
+
+# ---------------------------------------------------------------------------
+# Variable selection of the kept result object
+# ---------------------------------------------------------------------------
+class Folder(Obj):
+    def __init__(self, name, children=()):
+        super().__init__(name, "ElmRes")
+        self.children = list(children)
+
+    def GetContents(self, pattern):
+        kind = pattern.split(".")[-1]
+        return [child for child in self.children if child.GetClassName() == kind]
+
+
+
+def test_monitor_text_names_class_wide_and_object_monitors():
+    line = Obj("L-220 Nordring")
+    result = Folder("QDS AC", [Obj("Lines", "IntMon", obj_id=line, vars=["c:loading"]),
+                               Obj("Nodes", "IntMon", obj_id=None, classnm="ElmTerm", vars=["m:u"])])
+    assert gl.monitor_text(result) == ("2 variable set(s) (IntMon): L-220 Nordring (ElmLne): c:loading; "
+                                       "ElmTerm: m:u")
+    assert gl.monitor_text(Folder("empty")) == "no variable selection (no IntMon inside)"
+
+
+def test_recorded_text_lists_the_assessed_variables_first():
+    assert gl.recorded_text({"b:noconv": 1, "b:number": 1}) == "2 column(s): b:noconv x1, b:number x1"
+    assert gl.recorded_text({"b:noconv": 1, "m:u": 3}) == "4 column(s): m:u x3, b:noconv x1"
+    assert gl.recorded_text(None).startswith("not readable")

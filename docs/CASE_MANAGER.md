@@ -268,8 +268,8 @@ is drawn as a short light band, so far-apart outages stay readable
 - **n-1 – reference contingency analysis** and **(n-1)' – contingency analysis
   with planned-outage scenarios**: calculated with the contingency analysis
   (ComSimoutage) of the active study case, at the QDS time steps inside the
-  outage windows of each case (GridLens writes them into `studyTime` for the
-  run). n-1 runs with the fixed outages only, (n-1)' with the outages of the
+  outage windows of each case (GridLens writes the period from the first to
+  the last of them, `calcPeriod` 4 with `startTime`/`endTime`, for the run). n-1 runs with the fixed outages only, (n-1)' with the outages of the
   case; every result of (n-1)' is classified against n-1 at the same study time
   and contingency. Without a contingency analysis in the active study case
   (e.g. the QDS study case) GridLens creates `GridLens_<stamp>_N1` there, with

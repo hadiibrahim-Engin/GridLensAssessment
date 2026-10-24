@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of powerfactory/gridlens_report.py, written by tools/sync_case_manager_copy.py - do not edit >>>
-# GridLens 8.0.0: 161 definitions.
+# GridLens 8.0.0: 163 definitions.
 import re
 import hashlib
 import math
@@ -562,7 +562,20 @@ QDS_CORE_SETTINGS = (
 
 
 class GridLensError(RuntimeError):
-    """Expected runtime error with an actionable user-facing message."""
+    """Expected runtime error with an actionable user-facing message.
+
+    `details` are the facts behind it (objects, values read back, what was
+    found), one line each; `hint` is what the engineer can do. Both appear in
+    the failure report.
+    """
+
+    def __init__(self, message='', details=(), hint=''):
+        super().__init__(message)
+        self.details = [str(line) for line in details or ()]
+        self.hint = hint
+
+
+RUN_CONTEXT = {}
 
 
 class RunLogger:
@@ -598,6 +611,8 @@ class RunLogger:
         if step is not None:
             position = "{:02d}/{}".format(step, TOTAL_STEPS)
         elapsed = time.monotonic() - self.started
+        if level in ("WARNING", "ERROR") and stage != "FAILED":
+            _remember_warning(message)
         self._emit("[GridLens][{}][{}][{}][{:7.1f}s] {}".format(
             position, level, stage, elapsed, message))
 
@@ -612,13 +627,18 @@ class RunLogger:
         self._plain("=" * self.WIDTH)
 
     def step(self, number, title):
-        self.section("STEP {}/{} \u00b7 {}".format(number, TOTAL_STEPS, title))
+        RUN_CONTEXT['step'] = "STEP {}/{} \u00b7 {}".format(number, TOTAL_STEPS, title)
+        RUN_CONTEXT['case'] = ''
+        self.section(RUN_CONTEXT['step'])
 
     def case(self, title):
+        RUN_CONTEXT['case'] = title
         head = ".. " + title + " "
         self._plain(head + "." * max(3, self.WIDTH - len(head)))
 
     def detail(self, message, level="INFO"):
+        if level == "WARNING":
+            _remember_warning(message)
         self._plain("    " + message, level)
 
     def table(self, header, rows, level="INFO"):
@@ -636,6 +656,12 @@ class RunLogger:
                 self.detail("  ".join(
                     "-" * widths[i] if i < len(line) - 1 else "-" * min(widths[i], 40)
                     for i in range(len(line))))
+
+
+def _remember_warning(message):
+    warnings = RUN_CONTEXT.setdefault('warnings', [])
+    if len(warnings) < 200:
+        warnings.append(((RUN_CONTEXT.get('case') or '') + ': ' if RUN_CONTEXT.get('case') else '') + message.strip())
 
 
 class RunStats:
