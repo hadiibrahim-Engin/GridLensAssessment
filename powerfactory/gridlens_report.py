@@ -1,19 +1,39 @@
-"""GridLens single-file runtime for DIgSILENT PowerFactory 2026."""
+"""GridLens assessment and report publication for DIgSILENT PowerFactory 2026.
+
+Run this file as a ComPython in an active study case with a configured
+ComStatsim and result variables. As a child of an IntReport it publishes
+the report tables; a standalone run builds the tables without publishing.
+PDF rendering is handled by PowerFactory.
+
+The runtime uses Python's standard library, PowerFactory's Python module
+and tkinter for the optional case manager. No repository modules are required.
+Configuration defaults are defined below and can be overridden in the case
+manager or the saved case configuration.
+
+Calculation, state restoration, result evaluation and report publication
+run sequentially on the PowerFactory thread. Kept ElmRes copies support
+subsequent evaluation without recalculation.
+"""
 
 from __future__ import annotations
 
 import bisect
-import json
-import re
-from array import array
 import getpass
 import hashlib
 import heapq
+import json
 import math
 import os
+import re
 import textwrap
 import time
+from array import array
 from datetime import datetime
+
+
+# ---------------------------------------------------------------------------
+# Runtime configuration and report data contract
+# ---------------------------------------------------------------------------
 
 HOST_TABLE_PREFIX = 'Scripted'
 TOP_N = 10
@@ -48,18 +68,16 @@ RUN_REFERENCE_CASE = True
 #   'gui'        open the case manager; without tkinter use the saved
 #                configuration, without one fall back to 'per_outage'
 #   'saved'      the configuration saved for this project, no dialog
-#   'per_outage' one case per planned outage in the simulated period (7.x)
+#   'per_outage' one case per planned outage in the simulated period
 CASE_SOURCE = 'gui'
 # Folder of the saved case configurations; '' is ~/GridLens/cases.
 CASE_CONFIG_DIR = ''
-# At most this many planning cases in the case manager and in a saved
-# configuration. Cases get generated IDs C1 ... C5; the engineer only names them.
+# Default planning-case limit, adjustable in Settings -> Report and run.
+# Cases receive IDs C1, C2, ...; the engineer supplies their names.
 MAX_CASES = 5
 CASE_CONFIG_SCHEMA = 'gridlens.cases'
 CASE_CONFIG_SCHEMA_VERSION = 2
-# Assessments a configuration may ask for. Only the quasi-dynamic n-0
-# assessment exists in the calculation pipeline; n-1 is named so that the
-# case manager can show it as unavailable instead of hiding the question.
+# Available assessments; (n-1)' requires the n-1 reference.
 N1_REFERENCE, N1_PRIME = 'n-1', "(n-1)'"
 ASSESSMENTS = ('n-0', N1_REFERENCE, N1_PRIME)
 AVAILABLE_ASSESSMENTS = ASSESSMENTS
@@ -76,8 +94,17 @@ ALLOW_OUTAGE_TIME_OVERRIDE = False
 # network, e.g. 'D7' for the Europe model. Grids chosen in the case manager
 # (Settings -> Network scope) take precedence over this text.
 GRID_NAME_FILTER = ''
-VARIABLES = {'line': ('c:loading', 'm:loading'), 'transformer': ('c:loading', 'm:loading'), 'voltage': ('m:u', 'm:u1')}
-CLASS_CATEGORIES = {'ElmLne': ('line',), 'ElmTr2': ('transformer',), 'ElmTr3': ('transformer',), 'ElmTerm': ('voltage',)}
+VARIABLES = {
+    'line': ('c:loading', 'm:loading'),
+    'transformer': ('c:loading', 'm:loading'),
+    'voltage': ('m:u', 'm:u1'),
+}
+CLASS_CATEGORIES = {
+    'ElmLne': ('line',),
+    'ElmTr2': ('transformer',),
+    'ElmTr3': ('transformer',),
+    'ElmTerm': ('voltage',),
+}
 MAX_RESULT_ROWS = 35040
 MAX_RESULT_CELLS = 20000000
 MAX_RUN_CELLS = 120000000
@@ -91,10 +118,15 @@ MAX_TEXT_LENGTH = 500
 MAX_DIAGNOSTIC_LENGTH = 4000
 ABSOLUTE_TIME_THRESHOLD_HOURS = 87600.0
 _LABEL_SUFFIXES = ('_id', '_name', '_label', '_type', '_level', '_time')
-_LABEL_FIELDS = ('unit', 'variable', 'status', 'reason', 'action', 'timestamp', 'metric_name', 'check_name', 'ranking_type', 'simulation_status', 'simulation_start', 'simulation_end', 'simulation_time_step', 'generation_date', 'assessment_status')
+_LABEL_FIELDS = (
+    'unit', 'variable', 'status', 'reason', 'action', 'timestamp', 'metric_name',
+    'check_name', 'ranking_type', 'simulation_status', 'simulation_start',
+    'simulation_end', 'simulation_time_step', 'generation_date', 'assessment_status',
+)
 
 # Lists of names that must stay readable in full.
 _LONG_LABEL_FIELDS = ('equipment_name',)
+
 
 def text_limit(field):
     if field in _LONG_LABEL_FIELDS:
@@ -102,14 +134,16 @@ def text_limit(field):
     if field in _LABEL_FIELDS or field.endswith(_LABEL_SUFFIXES):
         return MAX_LABEL_LENGTH
     return MAX_TEXT_LENGTH
+
+
 CASE_SLOTS = 6
 # The detail report shows three scenarios per block (repeated element and n-1 columns).
 DETAIL_SLOTS = 3
 SERIES_SLOTS = CASE_SLOTS + 1
 
 
-# Field names carry the slot as letters, never digits: the tables whose fields contained digits (c1_text, s0_name,
-# v0) were missing from the PowerFactory report database (Stimulsoft designer, October 2026). Slot 0 is REF.
+# Slot names use letters to keep the tables visible in the PowerFactory report
+# database. Numeric slot names are incompatible with that interface. Slot 0 is REF.
 SLOT_KEYS = ('ref', 'a', 'b', 'c', 'd', 'e', 'f')
 
 
@@ -342,6 +376,11 @@ TABLES = tuple((name, tuple(item for item in fields if item[0] not in UNPUBLISHE
 REQUIRED_FIELDS = {name: tuple(field for field in fields if field not in UNPUBLISHED_FIELDS.get(name, ()))
                    for name, fields in REQUIRED_FIELDS.items()}
 
+# ---------------------------------------------------------------------------
+# PowerFactory object access, result extraction and time-series utilities
+# ---------------------------------------------------------------------------
+
+
 def safe_attr(obj, name, default=None):
     try:
         value = getattr(obj, name)
@@ -349,12 +388,16 @@ def safe_attr(obj, name, default=None):
     except Exception:
         return default
 
+
+
 def clip_text(value, limit):
     """Shorten to `limit` characters with a visible ellipsis, nothing else."""
     text = str(value)
     if len(text) <= limit:
         return text
     return text[:max(0, limit - 1)] + '\u2026'
+
+
 
 def object_key(obj):
     try:
@@ -365,12 +408,18 @@ def object_key(obj):
         pass
     return str(safe_attr(obj, 'loc_name', 'unknown'))
 
+
+
 def object_name(obj):
     value = safe_attr(obj, 'loc_name', '')
     return str(value) if value else object_key(obj).rsplit('\\', 1)[-1]
 
+
+
 def object_id(obj):
     return object_name(obj)
+
+
 
 def object_description(obj):
     value = safe_attr(obj, 'desc', '')
@@ -378,11 +427,15 @@ def object_description(obj):
         return ' '.join((str(item) for item in value if item))
     return str(value or '')
 
+
+
 def class_name(obj):
     try:
         return str(obj.GetClassName())
     except Exception:
         return ''
+
+
 
 def element_grid_name(obj):
     """Name of the grid an element belongs to; '' when it has none.
@@ -399,6 +452,8 @@ def element_grid_name(obj):
         if part.endswith('.ElmNet'):
             return part[:-len('.ElmNet')]
     return ''
+
+
 
 def grid_in_scope(grid_name):
     """Whether equipment of this grid is assessed: the grids chosen in Settings, else GRID_NAME_FILTER."""
@@ -417,8 +472,12 @@ def grid_scope_text():
         return 'elements in grids named *{}*'.format(GRID_NAME_FILTER)
     return 'all elements'
 
+
+
 def element_in_scope(obj):
     return grid_in_scope(element_grid_name(obj))
+
+
 
 def result_category(obj, variable):
     for category in CLASS_CATEGORIES.get(class_name(obj), ()):
@@ -426,7 +485,10 @@ def result_category(obj, variable):
             return category
     return None
 
+
+
 def finite_number(value):
+    """Return a finite float, accepting decimal commas; invalid values return None."""
     if isinstance(value, (tuple, list)):
         return None
     if value is None or type(value) is bool:
@@ -443,7 +505,10 @@ def finite_number(value):
         return None
     return result if math.isfinite(result) else None
 
+
+
 def return_code(value):
+    """Normalize a PowerFactory return code; None means success, invalid codes remain unknown."""
     if value is None:
         return 0.0
     if isinstance(value, (tuple, list)):
@@ -454,7 +519,10 @@ def return_code(value):
         return None
     return finite_number(value)
 
+
+
 def result_value(elmres, row, column):
+    """Read one finite result value; read errors and nonzero cell codes return None."""
     try:
         raw = elmres.GetValue(row, column)
     except Exception:
@@ -468,10 +536,29 @@ def result_value(elmres, row, column):
         raw = raw[1]
     return finite_number(raw)
 
+
+
 def normalize_time_unit(unit):
     text = str(unit or '').strip().lower().replace(' ', '')
-    aliases = {'s': 's', 'sec': 's', 'second': 's', 'seconds': 's', 'min': 'min', 'minute': 'min', 'minutes': 'min', 'h': 'h', 'hr': 'h', 'hour': 'h', 'hours': 'h', 'd': 'd', 'day': 'd', 'days': 'd'}
+    aliases = {
+        's': 's',
+        'sec': 's',
+        'second': 's',
+        'seconds': 's',
+        'min': 'min',
+        'minute': 'min',
+        'minutes': 'min',
+        'h': 'h',
+        'hr': 'h',
+        'hour': 'h',
+        'hours': 'h',
+        'd': 'd',
+        'day': 'd',
+        'days': 'd',
+    }
     return aliases.get(text, text or TIME_UNIT_FALLBACK)
+
+
 
 def time_in_hours(value, unit, row):
     numeric = finite_number(value)
@@ -479,6 +566,8 @@ def time_in_hours(value, unit, row):
         return float(row)
     factor = {'s': 1.0 / 3600.0, 'min': 1.0 / 60.0, 'h': 1.0, 'd': 24.0}.get(normalize_time_unit(unit), 1.0)
     return numeric * factor
+
+
 
 def format_clock(hours):
     sign = '-' if hours < 0 else ''
@@ -493,6 +582,8 @@ def format_clock(hours):
         return '{}{} d {}'.format(sign, days, clock)
     return sign + clock
 
+
+
 def is_absolute_time_axis(hours):
     """True when the axis holds absolute epoch time instead of elapsed time.
 
@@ -502,11 +593,15 @@ def is_absolute_time_axis(hours):
     """
     return bool(hours) and hours[0] >= ABSOLUTE_TIME_THRESHOLD_HOURS
 
+
+
 def format_absolute_time(hours):
     try:
         return time.strftime('%Y-%m-%d %H:%M', time.localtime(hours * 3600.0))
     except (ValueError, OverflowError, OSError):
         return format_clock(hours)
+
+
 
 def format_time(value, row, unit):
     if isinstance(value, (tuple, list)):
@@ -517,6 +612,8 @@ def format_time(value, row, unit):
         return str(value)
     return 'Time step {}'.format(row)
 
+
+
 def format_time_step(hours):
     if hours < 1.0 / 60.0:
         return '{:g} s'.format(hours * 3600.0)
@@ -525,6 +622,8 @@ def format_time_step(hours):
     if hours < 24.0:
         return '{:g} h'.format(hours)
     return '{:g} d'.format(hours / 24.0)
+
+
 
 def time_column(elmres, column_count, row_count):
     candidates = ('b:tnow', 't', 'time')
@@ -555,6 +654,8 @@ def time_column(elmres, column_count, row_count):
         'nor a readable implicit time scale at column -1. Inspected result '
         'variables: {}.'.format(variables))
 
+
+
 def nominal_voltage(obj):
     """Nominal voltage in kV of the element or of the terminal it connects to."""
     candidates = [obj]
@@ -569,13 +670,18 @@ def nominal_voltage(obj):
             return nominal
     return None
 
+
+
 def voltage_level(obj):
     nominal = nominal_voltage(obj)
     return '{:g} kV'.format(nominal) if nominal is not None else ''
 
+
+
 def is_dc_terminal(obj):
     """ElmTerm.systype 1 marks a DC terminal; its voltage is no AC magnitude."""
     return class_name(obj) == 'ElmTerm' and finite_number(safe_attr(obj, 'systype')) == 1.0
+
 
 # An IntVec that ElmRes.GetColumnValues(vector, column) fills with a whole column in one call; without it
 # every value is one GetValue call. Created in the running ComPython for the run and deleted afterwards.
@@ -622,10 +728,20 @@ def read_column(elmres, column, rows, buffer=None):
     RUN_STATS.count('values_cellwise', rows)
     return [result_value(elmres, row, column) for row in range(rows)]
 
+
+
 def _is_sequence(value):
     return isinstance(value, (list, tuple))
 
+
+
 def collect_series(elmres, counters=None):
+    """Read supported in-scope series from an already loaded ElmRes.
+
+    Keep full-resolution arrays for assessment and sampled points for plots.
+    Validate the time axis and result size before extracting series. The caller
+    owns Load/Release; optional counters receive extraction diagnostics.
+    """
     rows = int(elmres.GetNumberOfRows())
     columns = int(elmres.GetNumberOfColumns())
     if rows <= 0:
@@ -752,9 +868,22 @@ def collect_series(elmres, counters=None):
         # reference at the same instant; only the plot is sampled, and only
         # the plotted points are built as (label, time, value) tuples.
         array_values = value_array(values)
-        series.append({'category': category, 'object': obj, 'key': object_key(obj), 'element_id': object_id(obj), 'element_name': object_name(obj), 'voltage_level': voltage_level(obj), 'nominal_kv': nominal, 'limits': voltage_band(nominal) if category == 'voltage' else None, 'variable_id': variable, 'variable': 'Voltage magnitude' if category == 'voltage' else 'Loading', 'unit': unit,
-                       'points': [(labels[row], plot_times[row], values[row]) for row in plot_rows],
-                       'statistics': array_statistics(array_values, labels), 'values': array_values})
+        series.append({
+            'category': category,
+            'object': obj,
+            'key': object_key(obj),
+            'element_id': object_id(obj),
+            'element_name': object_name(obj),
+            'voltage_level': voltage_level(obj),
+            'nominal_kv': nominal,
+            'limits': voltage_band(nominal) if category == 'voltage' else None,
+            'variable_id': variable,
+            'variable': 'Voltage magnitude' if category == 'voltage' else 'Loading',
+            'unit': unit,
+            'points': [(labels[row], plot_times[row], values[row]) for row in plot_rows],
+            'statistics': array_statistics(array_values, labels),
+            'values': array_values,
+        })
     if not series:
         raise RuntimeError(missing_series_message(recorded, dark_series))
     return (series, labels, plot_times, time_unit, absolute, origin)
@@ -777,9 +906,13 @@ def missing_series_message(recorded, dark_series=0):
             '"Result Variables") or choose a study case that records them, then run GridLens again.'.format(
                 needed, found or 'no result variables at all'))
 
+
+
 def _grid_listing(grids):
     ordered = sorted(grids.items(), key=lambda entry: (-entry[1][0], entry[0]))
     return '; '.join('{!r} ({} series)'.format(name, value[0]) for name, value in ordered[:8]) or 'none'
+
+
 
 def check_run_budget(results):
     """Cells held in memory; a reused case shares its source's data and costs nothing."""
@@ -794,6 +927,8 @@ def check_run_budget(results):
         raise GridLensError('The run contains {} result cells across {} cases and exceeds the limit of {} (MAX_RUN_CELLS). Reduce cases, time range or model scope.'.format(cells, len(results), MAX_RUN_CELLS))
     return cells
 
+
+
 def sampled_plot_points(item):
     """Every point up to MAX_PLOT_POINTS, otherwise an evenly spaced grid.
 
@@ -807,12 +942,16 @@ def sampled_plot_points(item):
         return points
     return [points[index] for index in sample_rows(len(points))]
 
+
+
 def sample_rows(count):
     """Row indices of the plot: all up to MAX_PLOT_POINTS, otherwise a grid that depends only on `count`."""
     limit = setting_value('max_plot_points')
     if count <= limit:
         return list(range(count))
     return sorted({int(round(sample * (count - 1) / float(max(limit - 1, 1)))) for sample in range(limit)})
+
+
 
 def unique_time_labels(hours):
     """Calendar labels; where a clock change repeats a local time, with the UTC offset."""
@@ -824,17 +963,23 @@ def unique_time_labels(hours):
     except (ValueError, OverflowError, OSError):
         return ['{} #{}'.format(label, row) for row, label in enumerate(labels)]
 
+
 # A missing value (de-energised node) inside a value array. -inf compares equal
 # to itself, so two identical arrays compare equal at C speed; no measured
 # value can be -inf because finite_number rejects it.
 MISSING = float('-inf')
 
+
 def value_array(values):
     return array('d', (MISSING if value is None else value for value in values))
+
+
 
 def array_value(values, row):
     value = values[row]
     return None if value == MISSING else value
+
+
 
 def merge_intervals(intervals):
     """Sorted, non-overlapping union of half-open (start, end) intervals."""
@@ -845,6 +990,8 @@ def merge_intervals(intervals):
         else:
             merged.append((start, end))
     return merged
+
+
 
 def window_rows(hours, windows):
     """Rows whose time lies in at least one half-open window [start, end).
@@ -859,10 +1006,14 @@ def window_rows(hours, windows):
         rows.update(range(lo, hi))
     return sorted(rows)
 
+
+
 def row_steps(hours):
     """Duration in hours each time step stands for: up to the next step; the last repeats the one before."""
     steps = [later - earlier for earlier, later in zip(hours, hours[1:])]
     return steps + steps[-1:] if steps else [0.0]
+
+
 
 def window_coverage(hours, steps, windows):
     """Share of the window time that result rows stand for; None for an empty or unknown window."""
@@ -881,6 +1032,8 @@ def window_coverage(hours, steps, windows):
             covered += max(0.0, min(steps[row], end - hours[row]))
     return min(1.0, covered / total)
 
+
+
 def row_statistics(values, labels, rows):
     """min, max, mean and their times over the given rows; None without a value."""
     chunk = [(labels[row], values[row]) for row in rows if values[row] != MISSING]
@@ -892,6 +1045,8 @@ def row_statistics(values, labels, rows):
             'time_min': next(label for label, value in chunk if value == minimum),
             'time_max': next(label for label, value in chunk if value == maximum)}
 
+
+
 def statistics(series):
     points = [(label, value) for label, _, value in series['points'] if value is not None]
     if not points:
@@ -899,7 +1054,15 @@ def statistics(series):
     values = [value for _, value in points]
     minimum = min(values)
     maximum = max(values)
-    return {'min': minimum, 'max': maximum, 'mean': sum(values) / len(values), 'time_min': next((label for label, value in points if value == minimum)), 'time_max': next((label for label, value in points if value == maximum))}
+    return {
+        'min': minimum,
+        'max': maximum,
+        'mean': sum(values) / len(values),
+        'time_min': next((label for label, value in points if value == minimum)),
+        'time_max': next((label for label, value in points if value == maximum)),
+    }
+
+
 
 def array_statistics(values, labels):
     """statistics() of a value array: the same numbers and first times of the extremes, at C speed."""
@@ -911,8 +1074,12 @@ def array_statistics(values, labels):
     return {'min': minimum, 'max': maximum, 'mean': sum(present) / len(present),
             'time_min': labels[values.index(minimum)], 'time_max': labels[values.index(maximum)]}
 
+
+
 def format_limit(value):
     return '{:g}'.format(value)
+
+
 
 def has_time_variation(item):
     stats = item.get('statistics')
@@ -926,15 +1093,23 @@ def has_time_variation(item):
     tolerance = {'line': 0.1, 'transformer': 0.1, 'voltage': 0.001}.get(item['category'], 1e-06)
     return spread > tolerance
 
+
+
 def empty_payload():
     return {name: [] for name, _ in TABLES}
+
+
 
 def voltage_band(nominal_kv=None):
     """Permitted voltage in p.u. of the nominal voltage (lower, upper): one band for every voltage level."""
     return default_voltage_limits()
 
+
+
 def voltage_limits(item):
     return item.get('limits') or default_voltage_limits()
+
+
 
 def is_critical(item, stats):
     if stats is None:
@@ -950,12 +1125,10 @@ def is_critical(item, stats):
 # ---------------------------------------------------------------------------
 # Settings: limits, restrictions and classification parameters
 #
-# Category A (evaluation) only interprets calculated results and never
-# changes a load flow. Category B (calculation) would change what PowerFactory
-# calculates; it stays read only until its PowerFactory interface is verified
-# (tools/probe_contingency.py). Only overrides are stored, in the case
-# configuration under 'settings'. That JSON file is a provisional store until
-# a native storage inside the PowerFactory project is verified.
+# Category A changes result evaluation only. Category B affects calculation
+# scope or describes PowerFactory calculation settings. Settings marked
+# editable=False are read only. Overrides are stored in the case configuration
+# under 'settings'; native storage in the PowerFactory project is not verified.
 # ---------------------------------------------------------------------------
 SETTINGS_VERSION = '1.0'
 SOURCE_GRIDLENS, SOURCE_POWERFACTORY, SOURCE_USER = 'GridLens', 'PowerFactory', 'user'
@@ -968,8 +1141,9 @@ COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'ma
 # The most planning cases a run can have: the templates hold a band pair for every block up to this number.
 MAX_PLANNING_CASES = COUNT_LIMITS['max_cases']
 NOT_VERIFIED = 'not verified yet'
-PART3_NOTE = ('Read only: set in the contingency analysis (ComSimoutage) of the study case; GridLens reads it '
-              'and does not change it.')
+CONTINGENCY_SETTINGS_NOTE = (
+    'Read only: set in the contingency analysis (ComSimoutage) of the study case; GridLens reads it '
+    'and does not change it.')
 # A floating-point result that lies this close to a limit is treated as on the limit: PowerFactory writes
 # results in single or double precision, and 1e-9 is far below any meaningful %-point or p.u. difference.
 NUMERIC_TOLERANCE = 1e-9
@@ -984,7 +1158,7 @@ def _setting(key, section, label, unit, default, kind, category=CATEGORY_EVALUAT
 
 def _contingency_setting(key, label):
     return _setting(key, 'Contingency analysis', label, '', None, 'text', CATEGORY_CALCULATION, False, "n-1, (n-1)'",
-                    SOURCE_POWERFACTORY, PART3_NOTE)
+                    SOURCE_POWERFACTORY, CONTINGENCY_SETTINGS_NOTE)
 
 
 SETTINGS = (
@@ -1013,7 +1187,7 @@ SETTINGS = (
     _setting('energized_min_pu', 'Voltage limits', 'De-energised below', 'p.u.', ENERGIZED_MIN_PU, 'pu',
              note='a node below this voltage counts as de-energised at that time step, not as a value'),
     _setting('post_fault_voltage', 'Voltage limits', 'Post-fault voltage limits', '', None, 'text', editable=False,
-             applies="n-1, (n-1)'", source=SOURCE_POWERFACTORY, note=PART3_NOTE),
+             applies="n-1, (n-1)'", source=SOURCE_POWERFACTORY, note=CONTINGENCY_SETTINGS_NOTE),
     _setting('loading_change_tolerance', 'Classification', 'n-0 change tolerance, loading', '%-points',
              LOADING_DELTA_TOLERANCE, 'tolerance'),
     _setting('voltage_change_tolerance', 'Classification', 'n-0 change tolerance, voltage', 'p.u.',
@@ -1206,13 +1380,17 @@ def settings_snapshot(overrides=None):
     """
     overrides = dict(overrides or {})
     values = effective_settings(overrides)
-    return {'settings_version': SETTINGS_VERSION, 'classification_version': CLASSIFICATION_VERSION,
-            'values': values, 'sources': {key: setting_source(key, overrides) for key in values},
-            'overrides': clean_overrides(dict((key, values[key]) for key in overrides)),
-            'calculation_parameters': {setting['key']: NOT_VERIFIED if not setting['editable'] else
+    return {
+        'settings_version': SETTINGS_VERSION,
+        'classification_version': CLASSIFICATION_VERSION,
+        'values': values,
+        'sources': {key: setting_source(key, overrides) for key in values},
+        'overrides': clean_overrides(dict((key, values[key]) for key in overrides)),
+        'calculation_parameters': {setting['key']: NOT_VERIFIED if not setting['editable'] else
                                        setting_text(setting['key'], values[setting['key']]) + ' (stored, not applied yet)'
                                        for setting in SETTINGS if setting['category'] == CATEGORY_CALCULATION},
-            'storage': 'provisional: case configuration file (JSON); native PowerFactory storage not verified yet'}
+        'storage': 'provisional: case configuration file (JSON); native PowerFactory storage not verified yet',
+    }
 
 
 # The settings of the running assessment; None means the GridLens defaults.
@@ -1238,9 +1416,16 @@ def active_overrides():
 
 
 # Settings whose default is a script constant: setting_value() reads the user override, else the constant.
-_SETTING_CONSTANTS = {'top_n': 'TOP_N', 'max_plot_points': 'MAX_PLOT_POINTS', 'energized_min_pu': 'ENERGIZED_MIN_PU',
-                      'loading_appendix_delta': 'LOADING_APPENDIX_DELTA', 'voltage_appendix_delta': 'VOLTAGE_APPENDIX_DELTA',
-                      'run_reference': 'RUN_REFERENCE_CASE', 'max_cases': 'MAX_CASES', 'max_n1_times': 'MAX_N1_TIMES'}
+_SETTING_CONSTANTS = {
+    'top_n': 'TOP_N',
+    'max_plot_points': 'MAX_PLOT_POINTS',
+    'energized_min_pu': 'ENERGIZED_MIN_PU',
+    'loading_appendix_delta': 'LOADING_APPENDIX_DELTA',
+    'voltage_appendix_delta': 'VOLTAGE_APPENDIX_DELTA',
+    'run_reference': 'RUN_REFERENCE_CASE',
+    'max_cases': 'MAX_CASES',
+    'max_n1_times': 'MAX_N1_TIMES',
+}
 
 
 def setting_value(key, overrides=None):
@@ -1293,9 +1478,18 @@ def loading_limits_text():
 # nothing here changes them. Codes are GridLens codes, not PowerFactory values.
 # ---------------------------------------------------------------------------
 CLASSIFICATION_VERSION = '1.0'
-CLASSIFICATION_STATUSES = ((0, 'OK'), (1, 'NEW'), (2, 'WORSENED'), (3, 'PRE_EXISTING'), (4, 'IMPROVED'),
-                           (5, 'RESOLVED'), (90, 'FAILED'), (91, 'NOT_EVALUATED'), (92, 'NOT_APPLICABLE'),
-                           (93, 'NOT_COMPARABLE'))
+CLASSIFICATION_STATUSES = (
+    (0, 'OK'),
+    (1, 'NEW'),
+    (2, 'WORSENED'),
+    (3, 'PRE_EXISTING'),
+    (4, 'IMPROVED'),
+    (5, 'RESOLVED'),
+    (90, 'FAILED'),
+    (91, 'NOT_EVALUATED'),
+    (92, 'NOT_APPLICABLE'),
+    (93, 'NOT_COMPARABLE'),
+)
 CLASSIFICATION_CODES = {status: code for code, status in CLASSIFICATION_STATUSES}
 INDICATOR_MARGIN_REDUCED = 'MARGIN_REDUCED'
 # What must be identical for a comparison; 'limit' is compared separately.
@@ -1450,11 +1644,10 @@ def classify_comparison(reference, scenario, parameters=None):
 
 
 # ---------------------------------------------------------------------------
-# n-1 and (n-1)' with the native contingency analysis (part 3)
+# n-1 and (n-1)' with the native contingency analysis
 #
-# Verified on a project copy (tools/test_contingency.py, 23 October 2026):
-# ComSimoutage.Execute() runs the time sweep; the written studyTime vector
-# (bIgnoreTime 0) decides the study times, also non-contiguous ones;
+# ComSimoutage.Execute() runs the time sweep. With calcPeriod=4, startTime,
+# endTime and stepSize/stepUnit define its time grid; studyTime is ignored.
 # p_rescnt holds one ElmRes per study time (cnttime) with one row per
 # contingency (GetObjectValue -> ComOutage) and one column per element and
 # variable; GetValue code 3 means "not written, inside the recording limits".
@@ -1469,7 +1662,7 @@ MAX_CONTINGENCY_ELEMENTS = 200
 N1_PLANNED_OPTION = 'isPlannedOutages'
 N1_TIMES_ATTRIBUTE, N1_IGNORE_ATTRIBUTE = 'studyTime', 'bIgnoreTime'
 # The time sweep as a period: with calcPeriod 4 PowerFactory 2026 calculates from startTime to endTime (exclusive)
-# in steps of stepSize/stepUnit and ignores studyTime (probe of 24 October 2026). GridLens writes that period.
+# in steps of stepSize/stepUnit and ignores studyTime. GridLens writes that period.
 N1_PERIOD_ATTRIBUTE, N1_PERIOD_MODE = 'calcPeriod', 4
 N1_RESULT_ATTRIBUTE = 'p_rescnt'
 N1_VARIABLES = {'loading': ('c:loading',), 'voltage': ('m:u',)}
@@ -1537,7 +1730,15 @@ def read_n1_results(source, in_scope=element_in_scope, recording_limits=None):
     variables of N1_VARIABLES of elements in scope are read; a value that is
     neither written nor marked code 3 is left out (no artificial zero).
     """
-    found = {'times': {}, 'elements': {}, 'contingencies': {}, 'categories': {}, 'nominal_kv': {}, 'grids': {}, 'present': {}}
+    found = {
+        'times': {},
+        'elements': {},
+        'contingencies': {},
+        'categories': {},
+        'nominal_kv': {},
+        'grids': {},
+        'present': {},
+    }
     from_command = class_name(source) == N1_COMMAND_CLASS
     result = safe_attr(source, N1_RESULT_ATTRIBUTE) if from_command else source
     subs = [item for item in (_contents(result, '*.ElmRes') if result is not None else []) if class_name(item) == 'ElmRes']
@@ -1767,7 +1968,13 @@ def classify_n1(reference, scenario, parameters=None, recording=None):
 
 
 def _n1_side(values, moment, contingency, element, quantity, limit, applicable=True):
-    identity = {'time': moment, 'contingency': contingency, 'element': element, 'quantity': quantity, 'phase': 'post-fault'}
+    identity = {
+        'time': moment,
+        'contingency': contingency,
+        'element': element,
+        'quantity': quantity,
+        'phase': 'post-fault',
+    }
     if not applicable:
         return dict(identity, state=STATE_NOT_APPLICABLE, limit=limit,
                     reason='the planned outages of the case already switch off its equipment')
@@ -1830,7 +2037,7 @@ def n1_summary(comparison):
 
 
 # ---------------------------------------------------------------------------
-# Reporting core (reporting assignment, gate B): criteria, streaming n-1
+# Reporting core: criteria, streaming n-1
 # comparison and the statistics of the main and the detail report.
 #
 # n-0 is the QDS of the base network, n-1 the time-sweep contingency analysis
@@ -2187,11 +2394,23 @@ class ScenarioAggregate:
 
     def _key(self, moment, contingency, element, criterion, threshold, ref_value, scen_value, outcome):
         """A finding with its complete comparison key, for extremes and the event register."""
-        return {'run_id': self.run_id, 'scenario_id': self.scenario_id, 'time': moment, 'contingency': contingency,
-                'phase': POST_FAULT_PHASE, 'element': element, 'criterion': criterion, 'unit': CRITERION_UNIT[criterion],
-                'threshold': threshold, 'reference_value': ref_value, 'scenario_value': scen_value,
-                'violation': outcome.get('scenario_violation'), 'change': outcome.get('change'),
-                'delta': outcome.get('delta'), 'status': outcome['status']}
+        return {
+            'run_id': self.run_id,
+            'scenario_id': self.scenario_id,
+            'time': moment,
+            'contingency': contingency,
+            'phase': POST_FAULT_PHASE,
+            'element': element,
+            'criterion': criterion,
+            'unit': CRITERION_UNIT[criterion],
+            'threshold': threshold,
+            'reference_value': ref_value,
+            'scenario_value': scen_value,
+            'violation': outcome.get('scenario_violation'),
+            'change': outcome.get('change'),
+            'delta': outcome.get('delta'),
+            'status': outcome['status'],
+        }
 
     # --- episodes: consecutive examined study times with the same finding ---------------------
     def _episode(self, index, moment, contingency, element, criterion, status, violation):
@@ -2248,14 +2467,19 @@ class ScenarioAggregate:
             'critical_times': len(self.critical_times), 'episodes': len(self.episodes),
             'max_violation': dict(self.max_violation), 'max_worsening': dict(self.max_worsening),
             'coverage': {
-                'times_requested': len(self.requested_times), 'times_calculated': len(self.times_calculated),
+                'times_requested': len(self.requested_times),
+                'times_calculated': len(self.times_calculated),
                 'times_missing': sorted(set(self.requested_times) - set(self.times_calculated)),
                 'contingencies_defined': len(self.contingencies),
                 'contingencies_applicable': len(self.contingencies_applicable),
-                'pairs_examined': self.examined_pairs, 'pairs_not_applicable': self.pairs_not_applicable,
-                'pairs_failed': self.pairs_failed, 'pairs_missing_time': self.pairs_missing_time,
-                'cells_required': required, 'cells_evaluated': sum(self.events[s] for s in VIOLATION_STATUSES + ('RESOLVED', 'OK')),
-                'cells_quality': {status: self.events[status] for status in QUALITY_STATUSES}},
+                'pairs_examined': self.examined_pairs,
+                'pairs_not_applicable': self.pairs_not_applicable,
+                'pairs_failed': self.pairs_failed,
+                'pairs_missing_time': self.pairs_missing_time,
+                'cells_required': required,
+                'cells_evaluated': sum(self.events[s] for s in VIOLATION_STATUSES + ('RESOLVED', 'OK')),
+                'cells_quality': {status: self.events[status] for status in QUALITY_STATUSES},
+            },
             'scope': scope,
             'element_status': self.element_status, 'element_extremes': self.element_extremes,
             'element_pairs': {'examined': self.examined_pairs, 'not_applicable': self.pairs_not_applicable,
@@ -2358,11 +2582,22 @@ def level_statistics(run_id, level, reader, requested_times=None, parameters=Non
         for element in elements:
             counted[REPORT_CATEGORY.get(categories.get(element), 'line')] += 1
         return counted
-    return {'run_id': run_id, 'level': level, 'monitored': by_category(monitored), 'critical': by_category(critical),
-            'critical_contingencies': len(contingencies), 'critical_times': len(critical_times), 'violation_events': events,
-            'max_violation': maximum, 'times_requested': len(times), 'times_calculated': calculated,
-            'critical_set': critical, 'contingency_set': contingencies, 'time_set': critical_times,
-            'monitored_set': monitored}
+    return {
+        'run_id': run_id,
+        'level': level,
+        'monitored': by_category(monitored),
+        'critical': by_category(critical),
+        'critical_contingencies': len(contingencies),
+        'critical_times': len(critical_times),
+        'violation_events': events,
+        'max_violation': maximum,
+        'times_requested': len(times),
+        'times_calculated': calculated,
+        'critical_set': critical,
+        'contingency_set': contingencies,
+        'time_set': critical_times,
+        'monitored_set': monitored,
+    }
 
 
 def qds_level_statistics(run_id, result):
@@ -2392,10 +2627,18 @@ def qds_level_statistics(run_id, result):
                     critical_rows.add(row)
                     best = maximum.get(criterion)
                     if best is None or size > best['violation']:
-                        maximum[criterion] = {'run_id': run_id, 'level': 'n-0', 'time': labels[row] if row < len(labels) else row,
-                                              'element': item['key'], 'name': item['element_name'], 'criterion': criterion,
-                                              'unit': CRITERION_UNIT[criterion], 'threshold': threshold, 'value': value,
-                                              'violation': size}
+                        maximum[criterion] = {
+                            'run_id': run_id,
+                            'level': 'n-0',
+                            'time': labels[row] if row < len(labels) else row,
+                            'element': item['key'],
+                            'name': item['element_name'],
+                            'criterion': criterion,
+                            'unit': CRITERION_UNIT[criterion],
+                            'threshold': threshold,
+                            'value': value,
+                            'violation': size,
+                        }
     counted = {category: 0 for category in ('line', 'transformer', 'node')}
     for category in ('line', 'transformer', 'voltage'):
         for item, _stats in result['by_category'].get(category, ()):
@@ -2405,11 +2648,16 @@ def qds_level_statistics(run_id, result):
             'critical_times': len(critical_rows), 'max_violation': maximum, 'times_calculated': len(labels)}
 
 
+# ---------------------------------------------------------------------------
+# QDS case results, reference comparison and assessment
+# ---------------------------------------------------------------------------
+
 REFERENCE_ID = 'REF'
 CONVERGED = 'CONVERGED'
 AXIS_MISMATCH = 'NOT EVALUATED'
 CASE_FAILED = 'FAILED'
 DELTA_KEYS = (('ref_min', 'delta_min', 'min'), ('ref_max', 'delta_max', 'max'), ('ref_mean', 'delta_mean', 'mean'))
+
 
 def case_result(case, series, labels, plot_times, time_unit):
     by_category = {category: [] for category in VARIABLES}
@@ -2423,25 +2671,48 @@ def case_result(case, series, labels, plot_times, time_unit):
         by_category[item['category']].append((item, stats))
         stats_by_key[item['category'], item['key']] = stats
         item_by_key[item['category'], item['key']] = item
-    return {'id': case['id'], 'name': case['name'], 'kind': case.get('kind', 'case'), 'description': case.get('description', ''),
-            'status': case.get('status', CONVERGED), 'error_code': case.get('error_code'), 'message': case.get('message', ''),
-            'counters': dict(case.get('counters') or {}), 'is_reference': 1 if case['id'] == REFERENCE_ID else 0,
-            'labels': list(labels), 'plot_times': list(plot_times), 'hours': list(case.get('hours') or plot_times),
-            'absolute': bool(case.get('absolute')), 'time_unit': time_unit, 'by_category': by_category,
-            'stats_by_key': stats_by_key, 'item_by_key': item_by_key, 'plan': case.get('plan'),
-            'comparison': None, 'assessment': None, 'provenance': case.get('provenance', 'CALCULATED'),
-            'elapsed': case.get('elapsed'), 'result_object': case.get('result_object', '')}
+    return {
+        'id': case['id'],
+        'name': case['name'],
+        'kind': case.get('kind', 'case'),
+        'description': case.get('description', ''),
+        'status': case.get('status', CONVERGED),
+        'error_code': case.get('error_code'),
+        'message': case.get('message', ''),
+        'counters': dict(case.get('counters') or {}),
+        'is_reference': 1 if case['id'] == REFERENCE_ID else 0,
+        'labels': list(labels),
+        'plot_times': list(plot_times),
+        'hours': list(case.get('hours') or plot_times),
+        'absolute': bool(case.get('absolute')),
+        'time_unit': time_unit,
+        'by_category': by_category,
+        'stats_by_key': stats_by_key,
+        'item_by_key': item_by_key,
+        'plan': case.get('plan'),
+        'comparison': None,
+        'assessment': None,
+        'provenance': case.get('provenance', 'CALCULATED'),
+        'elapsed': case.get('elapsed'),
+        'result_object': case.get('result_object', ''),
+    }
+
+
 
 def failed_case(case, message):
     """A case that produced no usable result; it stays in the report with its reason."""
     result = case_result(dict(case, status=CASE_FAILED, error_code=-1, message=message), [], [], [], '')
     return result
 
+
+
 def find_reference(results, reference_id=REFERENCE_ID):
     for result in results:
         if result['id'] == reference_id and result['status'] == CONVERGED:
             return result
     return None
+
+
 
 def _same_time_axis(anchor, result):
     if anchor['time_unit'] != result['time_unit']:
@@ -2451,6 +2722,8 @@ def _same_time_axis(anchor, result):
     left = anchor['plot_times']
     right = result['plot_times']
     return len(left) == len(right) and all((abs(a - b) <= 1e-09 for a, b in zip(left, right)))
+
+
 
 def enforce_common_time_axis(results, reference_id=REFERENCE_ID):
     """Whole-period tables put cases side by side, so every case needs the reference axis."""
@@ -2465,6 +2738,8 @@ def enforce_common_time_axis(results, reference_id=REFERENCE_ID):
         result['error_code'] = -4
         result['message'] = 'Time axis differs from case {}; metrics and deltas were not evaluated.'.format(anchor['id'])
     return results
+
+
 
 def apply_reference(results, reference_id=REFERENCE_ID):
     """Whole-period statistics of every case next to the reference: a difference of maxima, not a coincident delta."""
@@ -2484,16 +2759,24 @@ def apply_reference(results, reference_id=REFERENCE_ID):
                 stats[delta_key] = stats[source] - reference_stats[source]
     return results
 
+
+
 def converged(results):
     return [result for result in results if result['status'] == CONVERGED]
+
+
 
 def outage_cases(results):
     """The calculated planning cases in run order."""
     return [result for result in converged(results) if result['id'] != REFERENCE_ID]
 
+
+
 def case_blocks(cases):
     """Cases in groups of CASE_SLOTS; always at least one (possibly empty) block."""
     return [cases[start:start + CASE_SLOTS] for start in range(0, len(cases), CASE_SLOTS)] or [[]]
+
+
 
 def critical_keys(results, category):
     keys = set()
@@ -2503,8 +2786,11 @@ def critical_keys(results, category):
                 keys.add((category, item['key']))
     return keys
 
+
+
 def evaluated_keys(results, category):
     return {item['key'] for result in converged(results) for item, _ in result['by_category'][category]}
+
 
 # Each element is only ever compared with itself (same full PowerFactory path).
 STATUS_NEW = 'NEW'
@@ -2521,6 +2807,7 @@ EXCEEDED_STATUSES = CAUSED_STATUSES + (STATUS_PREEXISTING, STATUS_IMPROVED)
 # The status of an element is the most severe status of any of its time steps.
 STATUS_PRECEDENCE = (STATUS_NEW, STATUS_WORSENED, STATUS_EXCEEDED, STATUS_DEENERGIZED, STATUS_PREEXISTING,
                      STATUS_IMPROVED, STATUS_RESOLVED, STATUS_OUT_OF_SERVICE, STATUS_OK)
+
 
 def paired(results, category, case=None, windowed=False):
     """One record per element with its REF and case statistics.
@@ -2544,9 +2831,13 @@ def paired(results, category, case=None, windowed=False):
             record[side] = stats
     return list(records.values())
 
+
+
 def primary(record):
     """The case where it was calculated, otherwise REF."""
     return record['outage'] if record['outage'] is not None else record['ref']
+
+
 
 def excess_function(item):
     """excess() of one element with its limits looked up once."""
@@ -2556,18 +2847,26 @@ def excess_function(item):
     lower, upper = voltage_limits(item)
     return lambda value: lower - value if value < lower else value - upper if value > upper else 0.0
 
+
+
 def excess(item, value):
     """How far a value lies beyond its limit; 0 on or inside the limit."""
     return excess_function(item)(value)
 
+
+
 def _tolerance(item):
     return change_tolerance(item['category'])
+
+
 
 def step_status(item, ref_value, case_value):
     """Classify one time step; both values belong to the same element at the same instant."""
     measure = excess_function(item)
     return _classify(item['category'] == 'voltage', None if ref_value is None else measure(ref_value),
                      None if case_value is None else measure(case_value), _tolerance(item))
+
+
 
 def _classify(is_voltage, in_ref, in_case, tolerance):
     """Status of one time step from the two excesses; None stands for a missing value."""
@@ -2585,9 +2884,13 @@ def _classify(is_voltage, in_ref, in_case, tolerance):
         return STATUS_PREEXISTING
     return STATUS_RESOLVED if in_ref > 0 else STATUS_OK
 
+
+
 def _worst_status(statuses):
     present = set(statuses)
     return next((status for status in STATUS_PRECEDENCE if status in present), STATUS_OK)
+
+
 
 def compare_element(item, case_values, ref_values, rows, steps, labels, out_of_service=False):
     """Time-aligned comparison of one element over `rows`.
@@ -2641,6 +2944,8 @@ def compare_element(item, case_values, ref_values, rows, steps, labels, out_of_s
             'ref_violation_hours': ref_violated, 'deenergized_hours': dark, 'out_of_service': out_of_service,
             'caused_rows': caused_rows if status != STATUS_OUT_OF_SERVICE else []}
 
+
+
 def _spill_rows(case_items, ref_items, inside, row_count):
     """Rows outside the outage windows where the case differs from the reference.
 
@@ -2673,6 +2978,8 @@ def _spill_rows(case_items, ref_items, inside, row_count):
                 if (left == MISSING) != (right == MISSING) or (left != MISSING and abs(left - right) > tolerance):
                     spill.add(row)
     return sorted(spill)
+
+
 
 def compare_case(result, reference, windows, out_of_service_keys=()):
     """Compare a case with its reference at identical instants and judge it.
@@ -2727,6 +3034,7 @@ def compare_case(result, reference, windows, out_of_service_keys=()):
     result['comparison'] = comparison
     result['assessment'] = assessment
     return result
+
 
 # Loading in % below which an outaged branch counts as switched off; above it in REF it carried load.
 OFF_LOADING = 0.5
@@ -2817,6 +3125,8 @@ def release_values(result):
     for item in result['item_by_key'].values():
         item.pop('values', None)
 
+
+
 def _worse(item, ref, outage):
     tolerance = change_tolerance(item['category'])
     if item['category'] in LOADING_CATEGORIES:
@@ -2825,12 +3135,16 @@ def _worse(item, ref, outage):
     return ((outage['min'] < lower and outage['min'] < ref['min'] - tolerance)
             or (outage['max'] > upper and outage['max'] > ref['max'] + tolerance))
 
+
+
 def _better(item, ref, outage):
     tolerance = change_tolerance(item['category'])
     if item['category'] in LOADING_CATEGORIES:
         return ref['max'] - outage['max'] > tolerance
     lower, upper = voltage_limits(item)
     return max(lower - outage['min'], outage['max'] - upper) < max(lower - ref['min'], ref['max'] - upper) - tolerance
+
+
 
 def limit_status(record):
     """What the planning case did to this element's limit.
@@ -2853,12 +3167,18 @@ def limit_status(record):
         return STATUS_IMPROVED if _better(item, ref, outage) else STATUS_PREEXISTING
     return STATUS_RESOLVED if in_ref else STATUS_OK
 
+
+
 def highlight(status):
     """1 marks a violation caused or worsened by the case, 2 one already in REF."""
     return 1 if status in CAUSED_STATUSES else 2 if status in (STATUS_PREEXISTING, STATUS_IMPROVED) else 0
 
+
+
 def _by_name(record):
     return record['item']['element_name'].casefold()
+
+
 
 def _loading_delta(record):
     """Coincident delta of a time-aligned record, else the difference of the maxima."""
@@ -2868,6 +3188,8 @@ def _loading_delta(record):
         return None
     return record['outage']['max'] - record['ref']['max']
 
+
+
 def _maxima_difference(record):
     if record.get('maxima_difference') is not None:
         return record['maxima_difference']
@@ -2875,8 +3197,12 @@ def _maxima_difference(record):
         return None
     return record['outage']['max'] - record['ref']['max']
 
+
+
 def hours_text(value):
     return '-' if value is None else '{:.2f} h'.format(value) if value < 10 else '{:.1f} h'.format(value)
+
+
 
 def percent_text(fraction):
     """Coverage as text; '100 %' only where the verdict treats it as complete."""
@@ -2888,17 +3214,27 @@ def percent_text(fraction):
         return '0 %'
     return '{:.1f} %'.format(min(99.9, max(0.1, 100.0 * fraction)))
 
+
+
 def loading_text(value):
     return 'n/a' if value is None else '{:.1f} %'.format(value)
+
+
 
 def voltage_text(value):
     return 'n/a' if value is None else '{:.3f}'.format(value)
 
+
+
 def delta_text(value):
     return '-' if value is None else '{:+.1f} pp'.format(value)
 
+
+
 def _counted(count, singular, plural):
     return '{} {}'.format(count, singular if count == 1 else plural)
+
+
 
 def _status_breakdown(statuses, both_cases):
     """'1 new, 2 already in REF' for the exceeded statuses."""
@@ -2912,14 +3248,20 @@ def _status_breakdown(statuses, both_cases):
             parts.append('{} {}'.format(count, label))
     return ': ' + ', '.join(parts) if parts else ''
 
+
+
 def _voltage_excess(record):
     lower, upper = voltage_limits(record['item'])
     stats = primary(record)
     return max(lower - stats['min'], stats['max'] - upper)
 
+
+
 def _primary_counters(results):
     reference = find_reference(results)
     return reference.get('counters', {}) if reference else {}
+
+
 
 def loading_classes(category):
     """The loading classes of the pie charts: up to the warning, up to the limit, above the limit."""
@@ -2927,38 +3269,58 @@ def loading_classes(category):
     return (('up to {} %'.format(format_limit(warning)), lambda value: value <= warning),
             ('{} to {} %'.format(format_limit(warning), format_limit(limit)), lambda value: value <= limit),
             ('above {} %'.format(format_limit(limit)), lambda value: True))
+
+
 CATEGORY_LABELS = (('line', 'Line loading', 'line', 'lines'), ('transformer', 'Transformer loading', 'transformer', 'transformers'), ('voltage', 'Voltage magnitude', 'node', 'nodes'))
 REFERENCE_NAME = 'Reference'
+
 
 def voltage_limits_text():
     lower, upper = default_voltage_limits()
     return ('Permitted voltage band: {} to {} p.u. of the nominal voltage, for every voltage level. Values on the band '
             'limit are no violation.'.format(format_limit(lower), format_limit(upper)))
 
+
+
 def _result_name(result):
     return REFERENCE_NAME if result['id'] == REFERENCE_ID else result['name']
+
+
 
 def _matrix_tables(payload, results, table, entries):
     """Write entries (name, REF text, {case id: text}, violation) as blocks of CASE_SLOTS cases."""
     cases = outage_cases(results)
     for block_number, block in enumerate(case_blocks(cases), 1):
         for order, (name, ref_text, texts, violation) in enumerate(entries, 1):
-            row = {'block': block_number, 'row_order': order, 'element_name': name, 'ref_text': ref_text, 'col_count': len(block), 'violation': violation}
+            row = {
+                'block': block_number,
+                'row_order': order,
+                'element_name': name,
+                'ref_text': ref_text,
+                'col_count': len(block),
+                'violation': violation,
+            }
             for slot, case in enumerate(block, 1):
                 row[case_name_field(slot)] = case['name']
                 row[case_text_field(slot)] = texts.get(case['id'], 'n/a')
             payload[table].append(row)
+
+
 
 def _stats_by_result(results, category):
     """{result id: {element key: (item, stats)}} for REF and every calculated case."""
     ok = converged(results)
     return {result['id']: {item['key']: (item, stats) for item, stats in result['by_category'][category]} for result in ok}
 
+
+
 def _violation_flag(item, ref_stats, case_stats_list):
     flags = [highlight(limit_status({'item': item, 'ref': ref_stats, 'outage': stats})) for stats in case_stats_list]
     if not flags:
         flags = [highlight(limit_status({'item': item, 'ref': ref_stats, 'outage': None}))]
     return 1 if 1 in flags else 2 if 2 in flags else 0
+
+
 
 def _loading_appendix(payload, results, category, table):
     by_result = _stats_by_result(results, category)
@@ -2978,6 +3340,8 @@ def _loading_appendix(payload, results, category, table):
         texts = {case['id']: loading_text(by_result[case['id']][key][1]['max']) if key in by_result[case['id']] else 'n/a' for case in cases}
         listed.append((-max(peaks), item['element_name'].casefold(), item['element_name'], loading_text(ref_stats['max'] if ref_stats else None), texts, _violation_flag(item, ref_stats, case_stats)))
     _matrix_tables(payload, results, table, [entry[2:] for entry in sorted(listed, key=lambda entry: entry[:2])])
+
+
 
 def _voltage_appendix(payload, results):
     by_result = _stats_by_result(results, 'voltage')
@@ -3000,6 +3364,8 @@ def _voltage_appendix(payload, results):
         listed.append((-excess, item['element_name'].casefold(), item['element_name'], voltage_text(ref_stats['min'] if ref_stats else None), texts, _violation_flag(item, ref_stats, case_stats)))
     _matrix_tables(payload, results, 'ScriptedAppendixVoltage', [entry[2:] for entry in sorted(listed, key=lambda entry: entry[:2])])
 
+
+
 def _top_lines_by_case(payload, results):
     by_result = _stats_by_result(results, 'line')
     ranked = {}
@@ -3016,18 +3382,30 @@ def _top_lines_by_case(payload, results):
         rows.append((str(rank), reference[rank - 1] if rank <= len(reference) else 'n/a', texts, 0))
     _matrix_tables(payload, results, 'ScriptedTopLinesByCase', rows)
 
+
+
 def _violation_counts(result):
     lines = sum(1 for item, stats in result['by_category']['line'] if is_critical(item, stats))
     transformers = sum(1 for item, stats in result['by_category']['transformer'] if is_critical(item, stats))
     nodes = sum(1 for item, stats in result['by_category']['voltage'] if is_critical(item, stats))
     return lines, transformers, nodes
 
+
+
 def _case_counts(payload, results):
     reference = find_reference(results)
     ordered = ([reference] if reference else []) + outage_cases(results)
     for order, result in enumerate(ordered):
         lines, transformers, nodes = _violation_counts(result)
-        payload['ScriptedCaseCounts'].append({'case_order': order, 'case_name': _result_name(result), 'line_count': lines, 'transformer_count': transformers, 'node_count': nodes})
+        payload['ScriptedCaseCounts'].append({
+            'case_order': order,
+            'case_name': _result_name(result),
+            'line_count': lines,
+            'transformer_count': transformers,
+            'node_count': nodes,
+        })
+
+
 
 def _pies(payload, results):
     reference = find_reference(results)
@@ -3040,6 +3418,8 @@ def _pies(payload, results):
         for order, ((label, _), count) in enumerate(zip(classes, counts), 1):
             payload[table].append({'sort_order': order, 'class_label': label, 'element_count': count})
 
+
+
 def _line_bars(payload, results):
     best = {}
     for result in converged(results):
@@ -3050,8 +3430,12 @@ def _line_bars(payload, results):
     for rank, (name, value, case_name) in enumerate(sorted(best.values(), key=lambda entry: (-entry[1], entry[0].casefold()))[:setting_value('top_n')], 1):
         payload['ScriptedLineLoadingBars'].append({'rank': rank, 'element_name': name, 'max_value': value, 'case_name': case_name})
 
+
+
 def _line_pairs(results, case):
     return [record for record in paired(results, 'line', case, True) if record['ref'] is not None and record['outage'] is not None]
+
+
 
 def _case_metrics(payload, results):
     reference = find_reference(results)
@@ -3059,9 +3443,18 @@ def _case_metrics(payload, results):
     if reference is not None and reference['by_category']['line']:
         top = max(reference['by_category']['line'], key=lambda entry: (entry[1]['max'], -len(entry[0]['element_name'])))
         voltages = [stats for _, stats in reference['by_category']['voltage']]
-        rows.append({'order': 0, 'name': REFERENCE_NAME, 'max': top[1]['max'], 'element': top[0]['element_name'], 'delta': None,
-                     'delta_element': '', 'difference': None, 'hours': None, 'coverage': None,
-                     'voltage': voltages and (min(s['min'] for s in voltages), max(s['max'] for s in voltages))})
+        rows.append({
+            'order': 0,
+            'name': REFERENCE_NAME,
+            'max': top[1]['max'],
+            'element': top[0]['element_name'],
+            'delta': None,
+            'delta_element': '',
+            'difference': None,
+            'hours': None,
+            'coverage': None,
+            'voltage': voltages and (min(s['min'] for s in voltages), max(s['max'] for s in voltages)),
+        })
     for order, case in enumerate(outage_cases(results), 1):
         pairs = _line_pairs(results, case)
         lines = [record for record in paired(results, 'line', case, True) if record['outage'] is not None]
@@ -3069,34 +3462,51 @@ def _case_metrics(payload, results):
         rising = max((record for record in pairs if _loading_delta(record) is not None), key=_loading_delta, default=None)
         nodes = [record['outage'] for record in paired(results, 'voltage', case, True) if record['outage'] is not None]
         assessment = case.get('assessment') or {}
-        rows.append({'order': order, 'name': case['name'], 'max': top['outage']['max'] if top else None,
-                     'element': top['item']['element_name'] if top else '-', 'delta': _loading_delta(rising) if rising else None,
-                     'delta_element': rising['item']['element_name'] if rising else '',
-                     'difference': _maxima_difference(rising) if rising else None, 'hours': assessment.get('caused_hours'),
-                     'coverage': assessment.get('coverage'),
-                     'voltage': nodes and (min(s['min'] for s in nodes), max(s['max'] for s in nodes))})
+        rows.append({
+            'order': order,
+            'name': case['name'],
+            'max': top['outage']['max'] if top else None,
+            'element': top['item']['element_name'] if top else '-',
+            'delta': _loading_delta(rising) if rising else None,
+            'delta_element': rising['item']['element_name'] if rising else '',
+            'difference': _maxima_difference(rising) if rising else None,
+            'hours': assessment.get('caused_hours'),
+            'coverage': assessment.get('coverage'),
+            'voltage': nodes and (min(s['min'] for s in nodes), max(s['max'] for s in nodes)),
+        })
     for row in rows:
         payload['ScriptedCaseMetrics'].append({
-            'case_order': row['order'], 'case_name': row['name'], 'max_line_text': loading_text(row['max']), 'max_line_element': row['element'],
+            'case_order': row['order'],
+            'case_name': row['name'],
+            'max_line_text': loading_text(row['max']),
+            'max_line_element': row['element'],
             'coincident_delta_text': '-' if row['delta'] is None else '{} - {}'.format(delta_text(row['delta']), row['delta_element']),
-            'maxima_difference_text': delta_text(row['difference']), 'violation_hours_text': hours_text(row['hours']),
+            'maxima_difference_text': delta_text(row['difference']),
+            'violation_hours_text': hours_text(row['hours']),
             'voltage_range_text': '{:.3f}-{:.3f} p.u.'.format(*row['voltage']) if row['voltage'] else 'n/a',
-            'coverage_text': percent_text(row['coverage']) if row['order'] else 'full period'})
+            'coverage_text': percent_text(row['coverage']) if row['order'] else 'full period',
+        })
     named = [row for row in rows if row['max'] is not None]
     if named:
         top = max(named, key=lambda row: row['max'])
         pair = max((row for row in rows if row['delta'] is not None and row['delta'] > change_tolerance('line')), key=lambda row: row['delta'], default=None)
         payload['ScriptedKpis'].append({
-            'highest_text': '{} · {}'.format(loading_text(top['max']), top['element']), 'highest_caption': 'Highest observed line loading across all cases',
+            'highest_text': '{} · {}'.format(loading_text(top['max']), top['element']),
+            'highest_caption': 'Highest observed line loading across all cases',
             'highest_violation': 1 if top['max'] > loading_limit('line') else 0,
             'delta_text': '{} · {}'.format(delta_text(pair['delta']), pair['name']) if pair else 'no increase',
             'delta_caption': 'Largest coincident loading increase compared with Reference at the same time step' if pair
-            else 'No line loads more than in Reference at the same time step'})
+            else 'No line loads more than in Reference at the same time step',
+        })
+
+
 
 def _quality(payload, check_id, check_name, status, message, affected_element='-'):
     """One row of the model quality page."""
     payload['ScriptedModelQuality'].append({'check_id': check_id, 'check_name': check_name, 'status': status,
                                             'message': message, 'affected_element': affected_element})
+
+
 
 def _model_quality(payload, results, request=None):
     request = request or {}
@@ -3186,6 +3596,7 @@ def _model_quality(payload, results, request=None):
     persistence_quality(payload, results)
     n1_quality(payload, results)
 
+
 QDS_TIME_BASE_TEXT = ('Complete ComStatsim period: every run covers the whole simulated period with the ComStatsim time step; '
                       'GridLens shortens no window, adds no time step and changes no time step.')
 
@@ -3193,11 +3604,15 @@ QDS_TIME_BASE_TEXT = ('Complete ComStatsim period: every run covers the whole si
 def qds_mode_text(request=None):
     return QDS_TIME_BASE_TEXT
 
+
+
 def _key_discriminator(key):
     digest = hashlib.sha256(str(key).encode('utf-8')).hexdigest()
     return digest[:6]
 
+
 COVERAGE_COMPLETE = 0.999
+
 
 def assess_case(results, case):
     """Judge one planning case by what it changes against Reference at the same time steps."""
@@ -3263,21 +3678,29 @@ def assess_case(results, case):
         'both_cases': find_reference(results) is not None,
     }
 
+
+
 def judge_cases(results):
     """Store the verdict of every calculated case once, so log, case table and summary agree."""
     for case in outage_cases(results):
         case['judged'] = assess_case(results, case)
     return results
 
+
+
 def judged(results, case):
     """The stored verdict of a case, or a fresh one where none is stored."""
     return case['judged'] if 'judged' in case else assess_case(results, case)
+
+
 
 def _violation_text(statuses, singular, plural, both):
     exceeded = [status for status in statuses if status in EXCEEDED_STATUSES]
     if not exceeded:
         return 'no {}'.format(singular)
     return _counted(len(exceeded), singular, plural) + _status_breakdown(statuses, both)
+
+
 
 def assessment_detail(values):
     """Readable sentences with the numbers behind the verdict, loading first."""
@@ -3313,6 +3736,8 @@ def assessment_detail(values):
         parts.append("Outage windows could not be placed on the time axis; the complete period was assessed")
     return ". ".join(parts) + "." if parts else ""
 
+
+
 def _reference_detail(reference):
     lines = reference['by_category']['line']
     nodes = [stats for _, stats in reference['by_category']['voltage']]
@@ -3324,6 +3749,8 @@ def _reference_detail(reference):
         parts.append('node voltage {:.3f}-{:.3f} p.u'.format(min(s['min'] for s in nodes), max(s['max'] for s in nodes)))
     return '; '.join(parts) + '.' if parts else ''
 
+
+
 def period_text(start, end):
     """'2026-10-15 00:00 - 05:00' when both ends lie on the same day."""
     if not start and not end:
@@ -3332,6 +3759,8 @@ def period_text(start, end):
         return '{} - {}'.format(start, end[11:])
     return '{} - {}'.format(start, end)
 
+
+
 def _plan_period(plan):
     texts = []
     for record in plan['members']:
@@ -3339,8 +3768,12 @@ def _plan_period(plan):
         texts.append(period_text(_format_pf_time(start), _format_pf_time(end)) or 'unknown window')
     return '; '.join(texts)
 
+
+
 def _plan_equipment(plan):
     return '; '.join(record.get('equipment_name') or '-' for record in plan['members']) or '-'
+
+
 
 def states_text(plan):
     """'2026-03-02 08:00 FS1 | 10:00 FS1 + FS2 | ...' for the network states of a case."""
@@ -3355,14 +3788,20 @@ def states_text(plan):
         parts.append('{} {}'.format(label, ' + '.join(sorted(names.get(key, key) for key in active)) if active else 'none'))
     return ' | '.join(parts)
 
+
+
 def _windows_text(plan, request):
     return 'QDS: complete ComStatsim period'
+
+
 
 def _reference_text(request):
     background = (request or {}).get('background') or []
     if not background:
         return 'R0: no planned outage'
     return 'Rfix: fixed outages ' + ', '.join(record['name'] for record in background)
+
+
 
 def _case_rows(payload, results, request):
     reference = find_reference(results)
@@ -3372,14 +3811,25 @@ def _case_rows(payload, results, request):
         labels = reference_result['labels']
         background = request.get('background') or []
         payload['ScriptedCases'].append({
-            'case_order': 0, 'case_id': REFERENCE_ID, 'case_name': REFERENCE_NAME, 'is_reference': 1,
-            'simulation_status': reference_result['status'], 'period_text': period_text(labels[0], labels[-1]) if labels else '', 'priority': 0,
+            'case_order': 0,
+            'case_id': REFERENCE_ID,
+            'case_name': REFERENCE_NAME,
+            'is_reference': 1,
+            'simulation_status': reference_result['status'],
+            'period_text': period_text(labels[0], labels[-1]) if labels else '',
+            'priority': 0,
             'equipment_name': 'No planned outage' if not background else 'Fixed outages: ' + ', '.join(record['name'] for record in background),
             'assessment': 'BASELINE' if reference is not None else ASSESSMENT_NO_DATA,
-            'assessment_detail': _reference_detail(reference) if reference is not None else reference_result['message'], 'violation': 0,
-            'case_description': 'Comparison basis of every case.', 'outage_names': ', '.join(record['name'] for record in background) or '-',
-            'reference_text': ref_text, 'states_text': '', 'windows_text': 'QDS: complete ComStatsim period',
-            'coverage_text': 'full period', 'provenance_text': reference_result.get('provenance', 'CALCULATED')})
+            'assessment_detail': _reference_detail(reference) if reference is not None else reference_result['message'],
+            'violation': 0,
+            'case_description': 'Comparison basis of every case.',
+            'outage_names': ', '.join(record['name'] for record in background) or '-',
+            'reference_text': ref_text,
+            'states_text': '',
+            'windows_text': 'QDS: complete ComStatsim period',
+            'coverage_text': 'full period',
+            'provenance_text': reference_result.get('provenance', 'CALCULATED'),
+        })
     by_case = {result['id']: result for result in results}
     order = 0
     for plan in request.get('cases') or ():
@@ -3406,21 +3856,48 @@ def _case_rows(payload, results, request):
                     detail = assessment_detail(verdict)
                     coverage = percent_text(verdict['coverage']) if verdict['coverage'] is not None else 'whole axis'
         payload['ScriptedCases'].append({
-            'case_order': order, 'case_id': plan['id'], 'case_name': plan['name'], 'is_reference': 0, 'simulation_status': status,
-            'period_text': _plan_period(plan), 'priority': int(max([record.get('priority') or 0 for record in plan['members']] or [0])),
-            'equipment_name': _plan_equipment(plan), 'assessment': values['assessment'], 'assessment_detail': detail,
-            'violation': values.get('violation', 0), 'case_description': plan.get('description') or '-',
-            'outage_names': ', '.join(record['name'] for record in plan['members']) or '-', 'reference_text': ref_text,
-            'states_text': states_text(plan) or '-', 'windows_text': _windows_text(plan, request), 'coverage_text': coverage,
-            'provenance_text': provenance})
+            'case_order': order,
+            'case_id': plan['id'],
+            'case_name': plan['name'],
+            'is_reference': 0,
+            'simulation_status': status,
+            'period_text': _plan_period(plan),
+            'priority': int(max([record.get('priority') or 0 for record in plan['members']] or [0])),
+            'equipment_name': _plan_equipment(plan),
+            'assessment': values['assessment'],
+            'assessment_detail': detail,
+            'violation': values.get('violation', 0),
+            'case_description': plan.get('description') or '-',
+            'outage_names': ', '.join(record['name'] for record in plan['members']) or '-',
+            'reference_text': ref_text,
+            'states_text': states_text(plan) or '-',
+            'windows_text': _windows_text(plan, request),
+            'coverage_text': coverage,
+            'provenance_text': provenance,
+        })
     for record in request.get('skipped') or ():
         order += 1
         payload['ScriptedCases'].append({
-            'case_order': order, 'case_id': 'N/A', 'case_name': record['name'], 'is_reference': 0, 'simulation_status': record['status'],
-            'period_text': period_text(record.get('start_time', ''), record.get('end_time', '')), 'priority': int(record.get('priority') or 0),
-            'equipment_name': record.get('equipment_name') or '-', 'assessment': ASSESSMENT_SKIPPED,
-            'assessment_detail': record.get('skip_reason', ''), 'violation': 0, 'case_description': '-', 'outage_names': record['name'],
-            'reference_text': ref_text, 'states_text': '-', 'windows_text': '-', 'coverage_text': '-', 'provenance_text': 'NOT CALCULATED'})
+            'case_order': order,
+            'case_id': 'N/A',
+            'case_name': record['name'],
+            'is_reference': 0,
+            'simulation_status': record['status'],
+            'period_text': period_text(record.get('start_time', ''), record.get('end_time', '')),
+            'priority': int(record.get('priority') or 0),
+            'equipment_name': record.get('equipment_name') or '-',
+            'assessment': ASSESSMENT_SKIPPED,
+            'assessment_detail': record.get('skip_reason', ''),
+            'violation': 0,
+            'case_description': '-',
+            'outage_names': record['name'],
+            'reference_text': ref_text,
+            'states_text': '-',
+            'windows_text': '-',
+            'coverage_text': '-',
+            'provenance_text': 'NOT CALCULATED',
+        })
+
 
 COMPARISON_ROWS = (
     ('New overloads', 'loading', (STATUS_NEW,)), ('Worsened overloads', 'loading', (STATUS_WORSENED,)),
@@ -3428,6 +3905,7 @@ COMPARISON_ROWS = (
     ('Max. coincident loading increase', 'delta', None), ('New or worsened voltage violations', 'voltage', (STATUS_NEW, STATUS_WORSENED)),
     ('Nodes de-energised by the case', 'voltage', (STATUS_DEENERGIZED,)), ('Duration of caused violations', 'hours', None),
     ('Outage time covered by results', 'coverage', None), ('Assessment', 'verdict', None))
+
 
 def _case_comparison(payload, results):
     """Key figures of every case side by side, REF in the first column."""
@@ -3463,6 +3941,8 @@ def _case_comparison(payload, results):
         entries.append((label, ref_text, texts, 1 if caused else 0))
     _matrix_tables(payload, results, 'ScriptedCaseComparison', entries)
 
+
+
 def _calculation_runs(payload, results, request):
     """Evidence of every calculation: what ran, against which reference, for how long, and what was reused."""
     order = 0
@@ -3473,20 +3953,37 @@ def _calculation_runs(payload, results, request):
         kind = 'REFERENCE' if result['id'] == REFERENCE_ID else 'CASE'
         provenance = result.get('provenance', 'CALCULATED')
         payload['ScriptedCalculationRuns'].append({
-            'run_order': order, 'run_id': result['id'], 'run_kind': kind if provenance == 'CALCULATED' else kind + ' (reused)',
-            'case_name': _result_name(result), 'reference_text': _reference_text(request) if kind == 'REFERENCE' else REFERENCE_ID if find_reference(results) else 'none',
-            'period_text': period_text(labels[0], labels[-1]) if labels else '-', 'time_steps': len(labels),
+            'run_order': order,
+            'run_id': result['id'],
+            'run_kind': kind if provenance == 'CALCULATED' else kind + ' (reused)',
+            'case_name': _result_name(result),
+            'reference_text': _reference_text(request) if kind == 'REFERENCE' else REFERENCE_ID if find_reference(results) else 'none',
+            'period_text': period_text(labels[0], labels[-1]) if labels else '-',
+            'time_steps': len(labels),
             'elapsed_text': '{:.1f} s'.format(result['elapsed']) if result.get('elapsed') is not None and provenance == 'CALCULATED' else '-',
-            'status': result['status'], 'provenance_text': provenance, 'result_object': result.get('result_object') or '-',
-            'note': result.get('run_note') or result.get('message') or '-'})
+            'status': result['status'],
+            'provenance_text': provenance,
+            'result_object': result.get('result_object') or '-',
+            'note': result.get('run_note') or result.get('message') or '-',
+        })
     for plan in request.get('cases') or ():
         if plan['id'] in by_id:
             continue
         order += 1
         payload['ScriptedCalculationRuns'].append({
-            'run_order': order, 'run_id': plan['id'], 'run_kind': 'NOT RUN', 'case_name': plan['name'], 'reference_text': '-',
-            'period_text': '-', 'time_steps': 0, 'elapsed_text': '-', 'status': plan['status'], 'provenance_text': 'NOT CALCULATED',
-            'result_object': '-', 'note': plan.get('reason') or '-'})
+            'run_order': order,
+            'run_id': plan['id'],
+            'run_kind': 'NOT RUN',
+            'case_name': plan['name'],
+            'reference_text': '-',
+            'period_text': '-',
+            'time_steps': 0,
+            'elapsed_text': '-',
+            'status': plan['status'],
+            'provenance_text': 'NOT CALCULATED',
+            'result_object': '-',
+            'note': plan.get('reason') or '-',
+        })
 
 
 
@@ -3506,7 +4003,9 @@ def n1_limit_text(limit):
     return '{}-{} p.u.'.format(format_limit(limit['min']), format_limit(limit['max']))
 
 
-# --- data contract 7.0: the main and the detail report from the reporting core -------------------------
+# ---------------------------------------------------------------------------
+# Main and detail report tables
+# ---------------------------------------------------------------------------
 # Both templates read the same tables; each shows its chapters. Every count is taken from the complete
 # statistics before any display limit, and both reports print the same numbers for the same run ID.
 MAIN_ELEMENT_LIMITS = (('line', 20), ('transformer', 15), ('node', 20))
@@ -3676,18 +4175,31 @@ def _statistics_row(order, name, level, critical, new, worsened, events, conting
     violation = (1 if new or worsened or events.get('NEW') or events.get('WORSENED') else
                  2 if any(critical.values()) or quality or verdict in ('INCOMPLETE COVERAGE', ASSESSMENT_NOT_EVALUATED) else 0)
     return {
-        'case_order': order, 'case_name': name, 'level': level, 'assessment': verdict,
-        'critical_lines': critical['line'], 'critical_transformers': critical['transformer'], 'critical_nodes': critical['node'],
-        'new_elements': new, 'worsened_elements': worsened,
-        'new_events': events.get('NEW', 0), 'worsened_events': events.get('WORSENED', 0),
-        'preexisting_events': events.get('PRE_EXISTING', 0), 'improved_events': events.get('IMPROVED', 0),
-        'resolved_events': events.get('RESOLVED', 0), 'quality_events': quality,
-        'critical_contingencies': contingencies or 0, 'critical_times': times or 0, 'episodes': 0,
-        'events_text': ('{} NEW · {} WORSENED'.format(events.get('NEW', 0), events.get('WORSENED', 0)) if events else
-                        'time steps, see the n-0 chapters' if level == LEVEL_N0 else '-'),
+        'case_order': order,
+        'case_name': name,
+        'level': level,
+        'assessment': verdict,
+        'critical_lines': critical['line'],
+        'critical_transformers': critical['transformer'],
+        'critical_nodes': critical['node'],
+        'new_elements': new,
+        'worsened_elements': worsened,
+        'new_events': events.get('NEW', 0),
+        'worsened_events': events.get('WORSENED', 0),
+        'preexisting_events': events.get('PRE_EXISTING', 0),
+        'improved_events': events.get('IMPROVED', 0),
+        'resolved_events': events.get('RESOLVED', 0),
+        'quality_events': quality,
+        'critical_contingencies': contingencies or 0,
+        'critical_times': times or 0,
+        'episodes': 0,
+        'events_text': '{} NEW · {} WORSENED'.format(events.get('NEW', 0), events.get('WORSENED', 0)) if events else
+                        'time steps, see the n-0 chapters' if level == LEVEL_N0 else '-',
         'contingencies_text': '-' if contingencies is None else str(contingencies),
         'times_text': '-' if times is None else str(times),
-        'completeness_text': completeness or '-', 'violation': violation}
+        'completeness_text': completeness or '-',
+        'violation': violation,
+    }
 
 
 def coverage_text_of(case):
@@ -3729,19 +4241,27 @@ def _coverage_row(order, name, level, requested, calculated, coverage, text):
     quality = coverage.get('cells_quality') or {}
     missing = (coverage.get('times_requested', requested or 0) - coverage.get('times_calculated', calculated or 0))
     return {
-        'case_order': order, 'case_name': name, 'level': level,
+        'case_order': order,
+        'case_name': name,
+        'level': level,
         'times_requested': coverage.get('times_requested', requested or 0),
         'times_calculated': coverage.get('times_calculated', calculated or 0),
         'contingencies_defined': coverage.get('contingencies_defined', 0),
         'contingencies_applicable': coverage.get('contingencies_applicable', 0),
-        'pairs_examined': coverage.get('pairs_examined', 0), 'pairs_not_applicable': coverage.get('pairs_not_applicable', 0),
-        'pairs_failed': coverage.get('pairs_failed', 0), 'pairs_missing': coverage.get('pairs_missing_time', 0),
-        'cells_required': coverage.get('cells_required', 0), 'cells_evaluated': coverage.get('cells_evaluated', 0),
-        'failed_cells': quality.get('FAILED', 0), 'not_evaluated_cells': quality.get('NOT_EVALUATED', 0),
-        'not_applicable_cells': quality.get('NOT_APPLICABLE', 0), 'not_comparable_cells': quality.get('NOT_COMPARABLE', 0),
+        'pairs_examined': coverage.get('pairs_examined', 0),
+        'pairs_not_applicable': coverage.get('pairs_not_applicable', 0),
+        'pairs_failed': coverage.get('pairs_failed', 0),
+        'pairs_missing': coverage.get('pairs_missing_time', 0),
+        'cells_required': coverage.get('cells_required', 0),
+        'cells_evaluated': coverage.get('cells_evaluated', 0),
+        'failed_cells': quality.get('FAILED', 0),
+        'not_evaluated_cells': quality.get('NOT_EVALUATED', 0),
+        'not_applicable_cells': quality.get('NOT_APPLICABLE', 0),
+        'not_comparable_cells': quality.get('NOT_COMPARABLE', 0),
         'coverage_text': text,
         'violation': 2 if missing > 0 or text.startswith('not evaluated') or any(
-            quality.get(status) for status in ('FAILED', 'NOT_EVALUATED', 'NOT_COMPARABLE')) else 0}
+            quality.get(status) for status in ('FAILED', 'NOT_EVALUATED', 'NOT_COMPARABLE')) else 0,
+    }
 
 
 def _scope(payload, results):
@@ -3760,15 +4280,31 @@ def _scope(payload, results):
                 entry[1] += bool(stats is not None and is_critical(item, stats))
                 entry[2] += stats is None
         for (grid, level_text, category), (monitored, critical, incomplete) in sorted(n0.items()):
-            table.append({'case_order': 0, 'case_name': REFERENCE_NAME, 'level': LEVEL_N0, 'grid_name': grid,
-                          'voltage_level': level_text, 'element_class': CATEGORY_TYPES[category], 'monitored': monitored,
-                          'critical': critical, 'incomplete': incomplete})
+            table.append({
+                'case_order': 0,
+                'case_name': REFERENCE_NAME,
+                'level': LEVEL_N0,
+                'grid_name': grid,
+                'voltage_level': level_text,
+                'element_class': CATEGORY_TYPES[category],
+                'monitored': monitored,
+                'critical': critical,
+                'incomplete': incomplete,
+            })
     for order, case, entry in _n1_cases(results):
         stats = entry['statistics']
         for (grid, level_text, category), counts in sorted(stats['scope'].items()):
-            table.append({'case_order': order, 'case_name': case['name'], 'level': stats['level'], 'grid_name': grid or '-',
-                          'voltage_level': level_text, 'element_class': CATEGORY_TYPES[category],
-                          'monitored': counts['monitored'], 'critical': counts['critical'], 'incomplete': counts['incomplete']})
+            table.append({
+                'case_order': order,
+                'case_name': case['name'],
+                'level': stats['level'],
+                'grid_name': grid or '-',
+                'voltage_level': level_text,
+                'element_class': CATEGORY_TYPES[category],
+                'monitored': counts['monitored'],
+                'critical': counts['critical'],
+                'incomplete': counts['incomplete'],
+            })
 
 
 def _outage_windows(payload, request):
@@ -3806,10 +4342,18 @@ def _element_view(results):
             group = _element_group(meta, element)
             for criterion in (('loading',) if group != 'node' else ('voltage_low', 'voltage_high')):
                 record = view.setdefault((element, criterion), {
-                    'element': element, 'criterion': criterion, 'group': group, 'name': meta['elements'].get(element, element),
-                    'grid': meta['grids'].get(element) or '-', 'voltage_level': _voltage_level_text(meta, element),
-                    'threshold': element_thresholds(meta, element).get(criterion), 'reference': None, 'cases': {},
-                    'statuses': set(), 'quality': False})
+                    'element': element,
+                    'criterion': criterion,
+                    'group': group,
+                    'name': meta['elements'].get(element, element),
+                    'grid': meta['grids'].get(element) or '-',
+                    'voltage_level': _voltage_level_text(meta, element),
+                    'threshold': element_thresholds(meta, element).get(criterion),
+                    'reference': None,
+                    'cases': {},
+                    'statuses': set(),
+                    'quality': False,
+                })
                 extremes = stats['element_extremes'].get(element, {})
                 found = extremes.get((criterion, 'reference'))
                 if found is not None and (record['reference'] is None or found[0] > record['reference'][0]):
@@ -3916,8 +4460,14 @@ def _block_rows(payload, table, columns, entries, slots, priority=None):
         entries = [entry for index, entry in enumerate(entries) if index in keep]
     for number, block in enumerate(blocks, 1):
         for order, (name, ref_text, texts, violation) in enumerate(entries, 1):
-            row = {'block': number, 'row_order': order, 'element_name': name, 'ref_text': ref_text, 'col_count': len(block),
-                   'violation': violation}
+            row = {
+                'block': number,
+                'row_order': order,
+                'element_name': name,
+                'ref_text': ref_text,
+                'col_count': len(block),
+                'violation': violation,
+            }
             for slot, column in enumerate(block, 1):
                 row[case_name_field(slot)] = column[1]
                 row[case_text_field(slot)] = texts.get(column[0], 'n/a')
@@ -4078,12 +4628,20 @@ def _reference_findings(payload, results):
                         continue
                     status = 'VIOLATED' if size is not None and size > NUMERIC_TOLERANCE else 'WARNING'
                     rows.append((LEVEL_N0, criterion, size or 0.0, {
-                        'level': LEVEL_N0, 'element_name': item['element_name'], 'element_type': CATEGORY_TYPES[category],
-                        'grid_name': element_grid_name(item.get('object')) or '-', 'criterion': CRITERION_LABELS[criterion],
-                        'value_text': criterion_value_text(criterion, value), 'limit_text': criterion_limit_text(criterion, threshold),
-                        'violation_text': violation_amount_text(criterion, size), 'time_label': moment or '-',
-                        'contingency_name': '-', 'status': status, 'source_text': reference.get('result_object') or REFERENCE_ID,
-                        'violation': 2 if status == 'VIOLATED' else 0}))
+                        'level': LEVEL_N0,
+                        'element_name': item['element_name'],
+                        'element_type': CATEGORY_TYPES[category],
+                        'grid_name': element_grid_name(item.get('object')) or '-',
+                        'criterion': CRITERION_LABELS[criterion],
+                        'value_text': criterion_value_text(criterion, value),
+                        'limit_text': criterion_limit_text(criterion, threshold),
+                        'violation_text': violation_amount_text(criterion, size),
+                        'time_label': moment or '-',
+                        'contingency_name': '-',
+                        'status': status,
+                        'source_text': reference.get('result_object') or REFERENCE_ID,
+                        'violation': 2 if status == 'VIOLATED' else 0,
+                    }))
     view = _element_view(results)
     sources = {}
     for _order, _case, entry in _n1_cases(results):
@@ -4098,12 +4656,20 @@ def _reference_findings(payload, results):
             continue
         status = 'VIOLATED' if found[0] > NUMERIC_TOLERANCE else 'WARNING'
         rows.append((N1_REFERENCE, criterion, found[0], {
-            'level': N1_REFERENCE, 'element_name': record['name'], 'element_type': CATEGORY_TYPES[record['group']],
-            'grid_name': record['grid'], 'criterion': CRITERION_LABELS[criterion],
-            'value_text': criterion_value_text(criterion, found[1]), 'limit_text': criterion_limit_text(criterion, record['threshold']),
-            'violation_text': violation_amount_text(criterion, found[0]), 'time_label': _time_text(found[2]),
-            'contingency_name': element_label(found[3]) if found[3] else '-', 'status': status,
-            'source_text': sources.get('n-1', '-'), 'violation': 2 if status == 'VIOLATED' else 0}))
+            'level': N1_REFERENCE,
+            'element_name': record['name'],
+            'element_type': CATEGORY_TYPES[record['group']],
+            'grid_name': record['grid'],
+            'criterion': CRITERION_LABELS[criterion],
+            'value_text': criterion_value_text(criterion, found[1]),
+            'limit_text': criterion_limit_text(criterion, record['threshold']),
+            'violation_text': violation_amount_text(criterion, found[0]),
+            'time_label': _time_text(found[2]),
+            'contingency_name': element_label(found[3]) if found[3] else '-',
+            'status': status,
+            'source_text': sources.get('n-1', '-'),
+            'violation': 2 if status == 'VIOLATED' else 0,
+        }))
     rows.sort(key=lambda row: (row[0] != LEVEL_N0, CRITERIA.index(row[1]), -row[2], row[3]['element_name'].casefold()))
     ranks, order = {}, 0
     for level, criterion, _size, row in rows:
@@ -4124,8 +4690,13 @@ def _case_status_counts(payload, results):
             continue
         events = stats['events']
         payload['ScriptedCaseStatusCounts'].append({
-            'case_order': order, 'case_name': case['name'], 'new_count': events['NEW'], 'worsened_count': events['WORSENED'],
-            'improved_count': events['IMPROVED'], 'resolved_count': events['RESOLVED']})
+            'case_order': order,
+            'case_name': case['name'],
+            'new_count': events['NEW'],
+            'worsened_count': events['WORSENED'],
+            'improved_count': events['IMPROVED'],
+            'resolved_count': events['RESOLVED'],
+        })
 
 
 def _contingency_register(payload, results):
@@ -4149,14 +4720,23 @@ def _contingency_register(payload, results):
                                                         CRITERION_LABELS[criterion].lower(),
                                                         violation_amount_text(criterion, violation), _time_text(moment))
             rows.append((-events, name.casefold(), {
-                'case_order': order, 'case_name': case['name'], 'level': stats['level'], 'contingency_name': name,
+                'case_order': order,
+                'case_name': case['name'],
+                'level': stats['level'],
+                'contingency_name': name,
                 'equipment_name': ', '.join(sorted(meta['elements'].get(key, element_label(key)) for key in outaged.get(contingency, ()))) or '-',
-                'examined_times': register['examined'], 'not_applicable_times': register['not_applicable'],
-                'failed_times': register['failed'], 'missing_times': register['missing'],
-                'affected_elements': len(register['elements']), 'critical_times': len(register['critical_times']),
-                'new_events': register['events']['NEW'], 'worsened_events': register['events']['WORSENED'],
-                'violation_events': events, 'worst_text': worst_text,
-                'violation': 1 if register['events']['NEW'] + register['events']['WORSENED'] else 2 if events or register['failed'] else 0}))
+                'examined_times': register['examined'],
+                'not_applicable_times': register['not_applicable'],
+                'failed_times': register['failed'],
+                'missing_times': register['missing'],
+                'affected_elements': len(register['elements']),
+                'critical_times': len(register['critical_times']),
+                'new_events': register['events']['NEW'],
+                'worsened_events': register['events']['WORSENED'],
+                'violation_events': events,
+                'worst_text': worst_text,
+                'violation': 1 if register['events']['NEW'] + register['events']['WORSENED'] else 2 if events or register['failed'] else 0,
+            }))
             if stats['level'] == N1_PRIME or not _prime_columns(results):
                 totals[name] = totals.get(name, 0) + events
         for row_order, (_events, _name, row) in enumerate(sorted(rows, key=lambda item: item[:2]), 1):
@@ -4180,18 +4760,28 @@ def _contingency_events(payload, results, notes):
         for row_order, event in enumerate(stats['events_top'], 1):
             criterion = event['criterion']
             row = {
-                'case_order': order, 'case_name': case['name'], 'row_order': row_order, 'level': stats['level'],
-                'time_label': _time_text(event['time']), 'contingency_name': meta['contingencies'].get(event['contingency'], event['contingency']),
-                'phase': event['phase'], 'element_name': meta['elements'].get(event['element'], event['element']),
-                'element_type': _element_type(meta, event['element']), 'criterion': CRITERION_LABELS[criterion],
-                'criterion_order': CRITERIA.index(criterion), 'unit': event['unit'],
+                'case_order': order,
+                'case_name': case['name'],
+                'row_order': row_order,
+                'level': stats['level'],
+                'time_label': _time_text(event['time']),
+                'contingency_name': meta['contingencies'].get(event['contingency'], event['contingency']),
+                'phase': event['phase'],
+                'element_name': meta['elements'].get(event['element'], event['element']),
+                'element_type': _element_type(meta, event['element']),
+                'criterion': CRITERION_LABELS[criterion],
+                'criterion_order': CRITERIA.index(criterion),
+                'unit': event['unit'],
                 'reference_text': criterion_value_text(criterion, event['reference_value']) if event['reference_value'] is not None else 'inside recording limits',
                 'scenario_text': criterion_value_text(criterion, event['scenario_value']) if event['scenario_value'] is not None else 'inside recording limits',
                 'limit_text': criterion_limit_text(criterion, event['threshold']),
                 'violation_text': violation_amount_text(criterion, event['violation']),
-                'change_text': change_amount_text(criterion, event['change']), 'status': status_text(event['status']),
-                'source_text': source, 'main_rank': 0,
-                'violation': status_violation(event['status'])}
+                'change_text': change_amount_text(criterion, event['change']),
+                'status': status_text(event['status']),
+                'source_text': source,
+                'main_rank': 0,
+                'violation': status_violation(event['status']),
+            }
             payload['ScriptedContingencyEvents'].append(row)
             main.append(row)
     ranks = {}
@@ -4219,14 +4809,24 @@ def _episodes(payload, results):
         for row_order, episode in enumerate(stats['episode_list'], 1):
             criterion = episode['criterion']
             payload['ScriptedContingencyEpisodes'].append({
-                'case_order': order, 'case_name': case['name'], 'row_order': row_order, 'level': stats['level'],
+                'case_order': order,
+                'case_name': case['name'],
+                'row_order': row_order,
+                'level': stats['level'],
                 'contingency_name': meta['contingencies'].get(episode['contingency'], episode['contingency']),
                 'element_name': meta['elements'].get(episode['element'], episode['element']),
-                'element_type': _element_type(meta, episode['element']), 'criterion': CRITERION_LABELS[criterion],
-                'phase': episode['phase'], 'status': status_text(episode['status']), 'first_text': _time_text(episode['first']),
-                'last_text': _time_text(episode['last']), 'points': episode['points'],
-                'peak_text': violation_amount_text(criterion, episode['peak']), 'peak_time': _time_text(episode['peak_time']),
-                'source_text': source, 'violation': status_violation(episode['status'])})
+                'element_type': _element_type(meta, episode['element']),
+                'criterion': CRITERION_LABELS[criterion],
+                'phase': episode['phase'],
+                'status': status_text(episode['status']),
+                'first_text': _time_text(episode['first']),
+                'last_text': _time_text(episode['last']),
+                'points': episode['points'],
+                'peak_text': violation_amount_text(criterion, episode['peak']),
+                'peak_time': _time_text(episode['peak_time']),
+                'source_text': source,
+                'violation': status_violation(episode['status']),
+            })
 
 
 def _quality_register(payload, results):
@@ -4245,17 +4845,32 @@ def _quality_register(payload, results):
             order += 1
             times = sorted(found['times'], key=lambda value: (value is None, value))
             payload['ScriptedQualityRegister'].append({
-                'row_order': order, 'case_order': case_order, 'case_name': case['name'], 'level': stats['level'],
-                'status': status_text(status), 'cause': cause,
+                'row_order': order,
+                'case_order': case_order,
+                'case_name': case['name'],
+                'level': stats['level'],
+                'status': status_text(status),
+                'cause': cause,
                 'contingency_name': 'every contingency' if contingency == '*' else meta['contingencies'].get(contingency, contingency),
                 'time_text': '{} to {} ({})'.format(_time_text(times[0]), _time_text(times[-1]), _count_text(len(times), 'study time'))
-                if times else '-', 'cells': found['cells'], 'violation': 0 if status == 'NOT_APPLICABLE' else 2})
+                if times else '-',
+                'cells': found['cells'],
+                'violation': 0 if status == 'NOT_APPLICABLE' else 2,
+            })
     for case_order, case, entry in _n1_failed(results):
         order += 1
         payload['ScriptedQualityRegister'].append({
-            'row_order': order, 'case_order': case_order, 'case_name': case['name'], 'level': entry.get('kind') or N1_REFERENCE,
-            'status': 'NOT-EVALUATED', 'cause': entry.get('reason') or 'not evaluated', 'contingency_name': 'every contingency',
-            'time_text': 'every study time of the case', 'cells': 0, 'violation': 2})
+            'row_order': order,
+            'case_order': case_order,
+            'case_name': case['name'],
+            'level': entry.get('kind') or N1_REFERENCE,
+            'status': 'NOT-EVALUATED',
+            'cause': entry.get('reason') or 'not evaluated',
+            'contingency_name': 'every contingency',
+            'time_text': 'every study time of the case',
+            'cells': 0,
+            'violation': 2,
+        })
     for case_order, case in planning_results(results):
         if case['status'] != CONVERGED:
             order += 1
@@ -4283,9 +4898,15 @@ def _time_criticality(payload, results, notes):
     for moment in sorted(per_time):
         found = per_time[moment]
         payload['ScriptedTimeCriticality'].append({
-            'time_label': _time_text(moment), 'timestamp': float(moment), 'chart_title': 'Distinct critical elements per study time',
-            'unit': 'elements', series_name_field(0): 'n-1 reference', series_value_field(0): float(len(found['reference'])),
-            series_name_field(1): "(n-1)' all scenarios", series_value_field(1): float(len(found['scenario']))})
+            'time_label': _time_text(moment),
+            'timestamp': float(moment),
+            'chart_title': 'Distinct critical elements per study time',
+            'unit': 'elements',
+            series_name_field(0): 'n-1 reference',
+            series_value_field(0): float(len(found['reference'])),
+            series_name_field(1): "(n-1)' all scenarios",
+            series_value_field(1): float(len(found['scenario'])),
+        })
         texts = {}
         for case_id, _name in columns:
             row = found['cases'].get(case_id)
@@ -4319,17 +4940,26 @@ def _result_provenance(payload, results):
     for result in results:
         order += 1
         payload['ScriptedResultProvenance'].append({
-            'row_order': order, 'level': LEVEL_N0, 'case_name': _result_name(result), 'object_name': result.get('result_object') or '-',
-            'object_path': result.get('result_path') or '-', 'content_text': '{} QDS time steps'.format(len(result.get('labels') or ())),
-            'status': result['status']})
+            'row_order': order,
+            'level': LEVEL_N0,
+            'case_name': _result_name(result),
+            'object_name': result.get('result_object') or '-',
+            'object_path': result.get('result_path') or '-',
+            'content_text': '{} QDS time steps'.format(len(result.get('labels') or ())),
+            'status': result['status'],
+        })
     for _order, case, entry in _n1_cases(results):
         for kind, obj in entry.get('result_objects') or ():
             order += 1
             payload['ScriptedResultProvenance'].append({
-                'row_order': order, 'level': kind, 'case_name': case['name'],
+                'row_order': order,
+                'level': kind,
+                'case_name': case['name'],
                 'object_name': object_name(obj) if obj is not None else 'read at once (not kept)',
                 'object_path': object_key(obj) if obj is not None else '-',
-                'content_text': '{} study times requested'.format(len(entry.get('requested_times') or ())), 'status': 'EVALUATED'})
+                'content_text': '{} study times requested'.format(len(entry.get('requested_times') or ())),
+                'status': 'EVALUATED',
+            })
 
 
 def _reporting_tables(payload, results, request):
@@ -4353,9 +4983,13 @@ def _reporting_tables(payload, results, request):
     _assessment_settings(payload)
     _result_provenance(payload, results)
     # Long registers are cut fairly between the cases, never by case order; the statistics above stay complete.
-    by_case = lambda row: row['case_order']  # noqa: E731
-    severity = lambda row: (STATUS_RANK.get(row['status'].replace('-', '_'), len(STATUS_RANK)), -_amount(  # noqa: E731
-        row.get('peak_text') or row.get('violation_text') or '0'), row['row_order'])
+    def by_case(row):
+        return row['case_order']
+
+    def severity(row):
+        return (STATUS_RANK.get(row['status'].replace('-', '_'), len(STATUS_RANK)),
+                -_amount(row.get('peak_text') or row.get('violation_text') or '0'), row['row_order'])
+
     _fair_cut(payload, 'ScriptedContingencyEpisodes', by_case, severity)
     _fair_cut(payload, 'ScriptedContingencyEvents', by_case, lambda row: row['row_order'])
     _fair_cut(payload, 'ScriptedContingencyRegister', by_case, lambda row: row['row_order'])
@@ -4438,6 +5072,8 @@ def _enforce_table_limits(payload):
         _quality(payload, 'table_limit_' + name, 'Table limit ' + name, 'FAIL',
                  '{} rows generated, {} published. The report is incomplete; reduce the number of cases or the model scope (MAX_TABLE_ROWS).'.format(total, limit))
 
+
+
 def coverage_statement(results, request):
     start_end = ''
     reference = find_reference(results)
@@ -4447,6 +5083,8 @@ def coverage_statement(results, request):
             'differs from it; a case with results for less than its outage time is never reported free of violations. '
             'Statement B, absolute network state over the simulated period{}: only Reference describes it. A case that adds no '
             'violation does not prove the network permissible over the whole period.'.format(start_end))
+
+
 
 def build_cases_payload(study_case, results, project_name, result_name, request, generated_by, run_mode):
     payload = empty_payload()
@@ -4463,16 +5101,32 @@ def build_cases_payload(study_case, results, project_name, result_name, request,
     reference = find_reference(results)
     cases = outage_cases(results)
     payload['ScriptedReportMeta'].append({
-        'run_id': request.get('run_id') or '-', 'study_name': object_name(study_case), 'study_description': object_description(study_case),
-        'model_name': project_name, 'model_version': 'PowerFactory 2026', 'simulation_start': start, 'simulation_end': end,
-        'simulation_time_step': time_step or 'ElmRes row interval', 'generation_date': datetime.now().astimezone().strftime('%Y-%m-%d %H:%M'),
-        'generated_by': generated_by, 'run_mode': run_mode, 'template_name': TEMPLATE_NAME, 'template_version': TEMPLATE_VERSION,
-        'data_contract_version': DATA_CONTRACT_VERSION, 'result_name': result_name,
+        'run_id': request.get('run_id') or '-',
+        'study_name': object_name(study_case),
+        'study_description': object_description(study_case),
+        'model_name': project_name,
+        'model_version': 'PowerFactory 2026',
+        'simulation_start': start,
+        'simulation_end': end,
+        'simulation_time_step': time_step or 'ElmRes row interval',
+        'generation_date': datetime.now().astimezone().strftime('%Y-%m-%d %H:%M'),
+        'generated_by': generated_by,
+        'run_mode': run_mode,
+        'template_name': TEMPLATE_NAME,
+        'template_version': TEMPLATE_VERSION,
+        'data_contract_version': DATA_CONTRACT_VERSION,
+        'result_name': result_name,
         'assessment_scope': '{} planning case(s); reference: {}; {}'.format(len(request.get('cases') or ()), reference['name'] if reference else 'none', grid_scope_text()),
-        'assessment_status': 'PRE-ASSESSMENT - NOT AN OPERATIONAL RELEASE', 'voltage_limits': voltage_limits_text(),
-        'has_cases': '1' if cases else '0', 'case_source_text': request.get('source_text') or 'not stated', 'reference_text': _reference_text(request),
-        'qds_mode_text': qds_mode_text(request), 'coverage_statement': coverage_statement(results, request),
-        'has_contingency': n1_meta_text(results)[0], 'contingency_text': n1_meta_text(results)[1]})
+        'assessment_status': 'PRE-ASSESSMENT - NOT AN OPERATIONAL RELEASE',
+        'voltage_limits': voltage_limits_text(),
+        'has_cases': '1' if cases else '0',
+        'case_source_text': request.get('source_text') or 'not stated',
+        'reference_text': _reference_text(request),
+        'qds_mode_text': qds_mode_text(request),
+        'coverage_statement': coverage_statement(results, request),
+        'has_contingency': n1_meta_text(results)[0],
+        'contingency_text': n1_meta_text(results)[1],
+    })
     _case_rows(payload, results, request)
     records = request.get('records') or []
     used = {record['key'] for plan in request.get('cases') or () for record in plan['members']}
@@ -4496,6 +5150,8 @@ def build_cases_payload(study_case, results, project_name, result_name, request,
     meta['empty_tables'] = empty_tables(payload)
     return payload
 
+
+
 def coerce_value(value, kind, where, field=None):
     if value is None:
         return None
@@ -4518,6 +5174,8 @@ def coerce_value(value, kind, where, field=None):
         return result
     raise ValueError(where + ': unsupported type ' + repr(kind))
 
+
+
 def api_error_code(value):
     if value is None:
         return None
@@ -4527,6 +5185,12 @@ def api_error_code(value):
     if code is None or code == 0.0:
         return None
     return code
+
+
+# ---------------------------------------------------------------------------
+# Report validation and PowerFactory publication
+# ---------------------------------------------------------------------------
+
 
 def validate_payload(payload):
     expected = {name for name, _ in TABLES}
@@ -4558,10 +5222,14 @@ def validate_payload(payload):
                 if kind == 'string' and (not str(value).strip()):
                     raise ValueError(where + ': required text is empty')
 
+
+
 def _check(returned, context):
     code = api_error_code(returned)
     if code is not None:
         raise RuntimeError('{} returned error code {:g}'.format(context, code))
+
+
 
 def publish_report(report, payload, log=None):
     started = time.monotonic()
@@ -4666,6 +5334,10 @@ def publish_report(report, payload, log=None):
         len(TABLES), total_rows, total_cells, time.monotonic() - started))
     return {name: len(rows) for name, rows in payload.items()}
 
+
+# ---------------------------------------------------------------------------
+# Runtime errors, diagnostics and PowerFactory outage discovery
+# ---------------------------------------------------------------------------
 
 TOTAL_STEPS = 7
 # Only planned outages are read. IntOutage is PowerFactory's obsolete outage
@@ -5387,8 +6059,7 @@ def classify_planned_outages(app, logger, period=(None, None)):
 # would read as the class separator of a PowerFactory name.
 CASE_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,16}$')
 RULE_KINDS = ('not_overlap', 'order', 'together')
-# Two occurrences of a case, (start, end) half-open; the code names the
-# sequence of active sets in the documentation (docs/ARCHITECTURE.md).
+# Allen interval relations between two half-open outage windows [start, end).
 INTERVAL_RELATIONS = {
     'T01': 'first ends before second starts', 'T02': 'second ends before first starts',
     'T03': 'first ends when second starts', 'T04': 'second ends when first starts',
@@ -5665,9 +6336,19 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
     for case in config.get('cases') or ():
         if case['id'] in disabled:
             continue
-        plan = {'id': case['id'], 'name': str(case.get('name') or case['id']), 'description': str(case.get('description') or ''),
-                'members': [], 'windows': {}, 'status': PLAN_READY, 'reason': '', 'warnings': [], 'states': [],
-                'relations': [], 'overridden': []}
+        plan = {
+            'id': case['id'],
+            'name': str(case.get('name') or case['id']),
+            'description': str(case.get('description') or ''),
+            'members': [],
+            'windows': {},
+            'status': PLAN_READY,
+            'reason': '',
+            'warnings': [],
+            'states': [],
+            'relations': [],
+            'overridden': [],
+        }
         errors = []
         for key in case.get('outages') or ():
             record = lookup(key)
@@ -5738,14 +6419,24 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
         plan['states'] = network_states(windows)
         plan['fingerprint'] = plan_fingerprint(plan, background)
         plans.append(plan)
-    return {'source': source, 'source_text': source_text or source, 'revision': config.get('revision'),
-            'background': background, 'cases': plans, 'skipped': [], 'records': list(records), 'config': config,
-            'warnings': request_warnings, 'disabled': disabled, 'assessments': list(config.get('assessments') or ['n-0']),
-            'settings': dict(config.get('settings') or {})}
+    return {
+        'source': source,
+        'source_text': source_text or source,
+        'revision': config.get('revision'),
+        'background': background,
+        'cases': plans,
+        'skipped': [],
+        'records': list(records),
+        'config': config,
+        'warnings': request_warnings,
+        'disabled': disabled,
+        'assessments': list(config.get('assessments') or ['n-0']),
+        'settings': dict(config.get('settings') or {}),
+    }
 
 
 def per_outage_config(candidates, project_key=''):
-    """The 7.x behaviour as a configuration: one case per planned outage in the simulated period."""
+    """One case per planned outage in the simulated period."""
     config = empty_case_config(project_key)
     for number, record in enumerate(candidates, 1):
         config['cases'].append({'id': '{}{:02d}'.format(OUTAGE_CASE_PREFIX, number), 'name': record['name'],
@@ -5908,10 +6599,9 @@ SETTINGS_INTRO = ('Limits and classification parameters (category A) only interp
                   'in the case configuration file of this project, not yet inside the PowerFactory project.')
 CONTINGENCIES_NOT_READ = 'not read'
 N1_NOTE = ("Calculated with the contingency analysis (ComSimoutage) of the active study case, at the QDS time steps "
-           "inside the outage windows of each case. Until the report chapters for n-1 exist (part 4), the result "
-           "appears in the log and on the Model Quality Assurance page.")
-# Hover texts of the case manager. They explain what a control does to the
-# calculation; the operating guide (docs/CASE_MANAGER.md) says the same.
+           "inside the outage windows of each case. Results appear in the log and in the contingency and quality "
+           "sections of the reports.")
+# Case-manager help texts describing each control's effect on the calculation.
 HELP_TEXTS = {
     'description': "Double-click to write or change the description of the case: Enter or a click elsewhere "
                    "applies, Escape cancels.",
@@ -6042,7 +6732,7 @@ SETTING_HELP = {
               "change the physical network model.",
     'classification': "Compares n-1 and (n-1)' at the same point in time, for the same contingency and the same "
                       "monitored equipment. Rules version " + CLASSIFICATION_VERSION + ".",
-    'calculation_parameters': "Category B: these parameters can change what PowerFactory calculates. " + PART3_NOTE,
+    'calculation_parameters': "Category B: these parameters can change what PowerFactory calculates. " + CONTINGENCY_SETTINGS_NOTE,
     'restore_defaults': "Removes the user overrides and loads the valid default values of GridLens (and of PowerFactory, "
                         "once those are read).",
     'apply_settings': "Checks the entries and uses the settings for the next selected calculations.",
@@ -6267,8 +6957,14 @@ class CaseEditor:
         if problem:
             return None, problem
         identifier = self.next_case_id()
-        self.config['cases'].append({'id': identifier, 'name': name.strip() or 'Case ' + identifier[1:], 'description': '',
-                                     'enabled': True, 'outages': [], 'overrides': {}})
+        self.config['cases'].append({
+            'id': identifier,
+            'name': name.strip() or 'Case ' + identifier[1:],
+            'description': '',
+            'enabled': True,
+            'outages': [],
+            'overrides': {},
+        })
         return identifier, None
 
     def rename_case(self, case_id, name):
@@ -7730,7 +8426,7 @@ class CaseManagerDialog:
         options.bind('<Configure>', lambda event: [widget.configure(wraplength=max(180, event.width - 58))
                                                    for widget in (n1, prime)], add='+')
         self.tip(prime, HELP_TEXTS['n1_prime'])
-        note = self._wrapped_label(options, "n-1 and (n-1)': results in the log and on the QA page until part 4",
+        note = self._wrapped_label(options, "n-1 and (n-1)': results in the log and reports",
                                    row=4, column=0, padx=(22, 0))
         self.tip(note, N1_NOTE)
         results = ttk.Frame(options, style='Card.TFrame')
@@ -8866,6 +9562,11 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
     return dialog.outcome
 
 
+# ---------------------------------------------------------------------------
+# QDS execution, kept results and state restoration
+# ---------------------------------------------------------------------------
+
+
 def qds_period(qds):
     """The simulated period in epoch seconds, as ComStatsim declares it."""
     for start_name, end_name in QDS_PERIOD_ATTRIBUTES:
@@ -9721,6 +10422,11 @@ def _reused_result(source, plan, request):
     return result
 
 
+# ---------------------------------------------------------------------------
+# Native contingency calculation and evaluation
+# ---------------------------------------------------------------------------
+
+
 def contingency_analysis(study_case):
     """The ComSimoutage of the study case, read with GetContents (never created); None if there is not exactly one."""
     commands = [item for item in _contents(study_case, '*.' + N1_COMMAND_CLASS) if class_name(item) == N1_COMMAND_CLASS]
@@ -10135,7 +10841,7 @@ def calculate_n1_case(command, plan, request, records, grid, excluded, prime, re
 def evaluate_n1_case(entry, plan, elements_of, run_id=''):
     """Phase 2 for one planning case: read the kept n-1 results and classify (n-1)' against n-1.
 
-    Besides the 6.2 comparison (logs, model quality) the entry carries the
+    Besides the comparison used by logs and model quality, the entry carries the
     statistics of the reporting core: 'statistics' (compare_scenario of the
     case, or of n-1 with itself when only n-1 was calculated) and
     'reference_statistics' (level_statistics of the n-1 reference), both over
@@ -10187,6 +10893,11 @@ def run_n1_case(command, plan, request, records, grid, excluded, elements_of, pr
     """Both phases at once for one case (no kept copies): used where nothing has to be kept."""
     return evaluate_n1_case(calculate_n1_case(command, plan, request, records, grid, excluded, prime, references,
                                               label=label), plan, elements_of)
+
+
+# ---------------------------------------------------------------------------
+# Network scope, calculation requests and run logging
+# ---------------------------------------------------------------------------
 
 
 def project_grids(app):
@@ -10252,12 +10963,15 @@ def read_contingencies(study_case):
             if element is None:
                 break
             elements.append(element)
-        found.append({'name': object_name(outage), 'number': safe_attr(outage, 'number'),
-                      'analysed': safe_attr(outage, 'outserv', 0) in (0, False),
-                      'elements': [object_name(element) for element in elements],
-                      'element_items': [(object_key(element), object_name(element), class_name(element),
+        found.append({
+            'name': object_name(outage),
+            'number': safe_attr(outage, 'number'),
+            'analysed': safe_attr(outage, 'outserv', 0) in (0, False),
+            'elements': [object_name(element) for element in elements],
+            'element_items': [(object_key(element), object_name(element), class_name(element),
                                          element_grid_name(element)) for element in elements],
-                      'grids': sorted({element_grid_name(element) or '(no grid)' for element in elements}, key=str.casefold)})
+            'grids': sorted({element_grid_name(element) or '(no grid)' for element in elements}, key=str.casefold),
+        })
     return {'command': object_name(command), 'contingencies': found}
 
 
@@ -10582,6 +11296,11 @@ def _equipment_map(commands):
     return found
 
 
+# ---------------------------------------------------------------------------
+# Calculation and evaluation orchestration
+# ---------------------------------------------------------------------------
+
+
 def calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state, result_objects):
     """Phase 1 of n-1 and, if requested, (n-1)' for every ready planning case: {case id: entry}.
 
@@ -10695,6 +11414,10 @@ def evaluate_runs(runs, request, logger):
         check_run_budget(results)
     return results
 
+
+# ---------------------------------------------------------------------------
+# Kept-run lookup and result quality checks
+# ---------------------------------------------------------------------------
 
 RESULTS_CALCULATE = 'Calculate now'
 
@@ -10813,7 +11536,7 @@ def persistence_quality(payload, results):
 
 
 def n1_quality(payload, results):
-    """One Model Quality row per case with an n-1 entry, until the report has n-1 chapters (part 4)."""
+    """One Model Quality row per case with an n-1 entry."""
     for result in results:
         entry = result.get('n1')
         if not entry:
@@ -10840,7 +11563,19 @@ def _element_name(item, entry):
     return entry['comparison']['elements'].get((element, item['identity']['quantity']), {}).get('name', element)
 
 
+# ---------------------------------------------------------------------------
+# Application entry points
+# ---------------------------------------------------------------------------
+
+
 def execute_gridlens(app):
+    """Execute one assessment in the active PowerFactory study case.
+
+    Resolve and validate the request before calculation. Keep native results,
+    restore written settings, then evaluate and publish the report tables.
+    Return table row counts; a standalone run returns the built counts without
+    publication. Cancellation and runtime failures propagate to the entry point.
+    """
     global RUN_STATS
     RUN_STATS = RunStats()
     reset_run_context()
@@ -11076,6 +11811,7 @@ NO_REPORT_EXIT_CODE = 1
 
 
 def main():
+    """Connect to PowerFactory, report failures and reset the active settings."""
     try:
         import powerfactory
     except ImportError:
