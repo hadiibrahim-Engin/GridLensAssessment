@@ -784,7 +784,7 @@ def test_settings_tab_shows_every_setting_with_source_and_hover_text(monkeypatch
 
     assert seen["pages"] == ["Network scope", "Limits", "Classification", "Report and run", "Contingency analysis",
                              "QDS time base", "Fixed background & rules"]
-    assert seen["keys"] == {key for key, setting in gl.SETTINGS_BY_KEY.items() if setting["kind"] != "grids"}
+    assert seen["keys"] == {key for key, setting in gl.SETTINGS_BY_KEY.items() if setting["kind"] not in ("grids", "elements")}
     assert seen["line_limit"] == ("110", gl.SOURCE_USER) and seen["warning"] == gl.SOURCE_GRIDLENS
     assert seen["read_only"] and all(seen["read_only"].values()), "category B and post-fault fields are read only"
     assert all(len(text) > 40 for text in seen["tips"].values()), seen["tips"]
@@ -899,9 +899,10 @@ def test_network_scope_lists_the_grids_of_the_model_for_selection(monkeypatch, r
                                   grids=grids, contingencies=contingencies)
 
     assert seen["listed"] == ["Grid A", "Grid B", "Grid C  (inactive)"], "every grid of the model is offered"
-    assert seen["contingency_state"] == "disabled", "contingencies follow the assessed grids by default"
-    assert seen["monitoring"] == ("Grid A",) and seen["follows"] == [0]
-    assert seen["preview"].startswith("1 of 2 contingencies") and "Applied to the n-1 run" in seen["preview"]
+    assert seen["contingency_state"] == "disabled", "every grid by default: no n-1 grid filter"
+    # The report filter does not select contingencies.
+    assert seen["monitoring"] == ("Grid A",) and seen["follows"] == []
+    assert seen["preview"].startswith("2 of 2 contingencies") and "Applied to the n-1 run" in seen["preview"]
     assert seen["own"] == ("Grid B",) and seen["own_preview"].startswith("1 of 2 contingencies")
     assert all("grid" in tip for tip in seen["tips"])
     assert not seen["problems"]
@@ -927,7 +928,7 @@ def test_grid_search_preserves_hidden_selections_and_saved_grid_names(monkeypatc
         dialog.grid_search['monitoring_grids'].set('')
         root.update()
         assert list(box.curselection()) == [0, 2]
-        assert list(dialog.grid_lists['contingency_grids'].curselection()) == [0, 2]
+        assert list(dialog.grid_lists['contingency_grids'].curselection()) == [], 'independent of the report filter'
         dialog.start()
     monkeypatch.setattr(tk.Tk, 'mainloop', mainloop)
     outcome = gl.run_case_manager(records, config, PERIOD, '/nonexistent/cases.json', grids=['East', 'North', 'South'])

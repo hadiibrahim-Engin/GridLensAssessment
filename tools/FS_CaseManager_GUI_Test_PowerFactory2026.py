@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of powerfactory/gridlens_report.py, written by tools/sync_case_manager_copy.py - do not edit >>>
-# GridLens 8.0.0: 166 definitions.
+# GridLens 8.0.0: 168 definitions.
 import re
 import hashlib
 import math
@@ -264,11 +264,16 @@ def _contingency_setting(key, label):
 
 
 SETTINGS = (
-    _setting('monitoring_grids', 'Network scope', 'Assessed equipment: grids', '', (), 'grids', applies="n-0, n-1, (n-1)'",
-             note='no grid selected: every grid (or GRID_NAME_FILTER in the script)'),
-    _setting('contingency_grids', 'Network scope', 'Contingencies: grids of the outaged equipment', '', None, 'grids',
+    _setting('monitoring_grids', 'Network scope', 'Report filter: assessed equipment, grids', '', (), 'grids',
+             applies="n-0, n-1, (n-1)'",
+             note='evaluation only, also in a re-evaluation; no grid selected: every grid (or GRID_NAME_FILTER)'),
+    _setting('contingency_grids', 'Network scope', 'n-1 filter: grids of the outaged equipment', '', None, 'grids',
              CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_GRIDLENS,
-             note='applied to the n-1 run by setting ComOutage "Not analysed" (outserv) for the run and restoring it'),
+             note='calculation: the other contingencies are "Not analysed" (outserv) for the run; none: every grid'),
+    _setting('contingency_elements', 'Network scope', 'n-1 filter: outaged elements', '', (), 'elements',
+             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_GRIDLENS,
+             note='calculation: only contingencies outaging a selected element are analysed, the others are "Not '
+                  'analysed" for the run; none selected: every element'),
     _setting('line_warning', 'Thermal limits', 'Warning threshold, lines', '%', LOADING_WARNING, 'limit'),
     _setting('transformer_warning', 'Thermal limits', 'Warning threshold, transformers', '%', LOADING_WARNING, 'limit'),
     _setting('line_limit', 'Thermal limits', 'Maximum loading for n-0, lines', '%', LOADING_MAX, 'limit'),
@@ -333,7 +338,7 @@ SETTINGS = (
 SETTINGS_BY_KEY = {setting['key']: setting for setting in SETTINGS}
 
 
-SAME_AS_ASSESSMENT = 'same grids as the assessed equipment'
+SAME_AS_ASSESSMENT = 'every grid (no n-1 grid filter)'
 
 
 _ORDERED_PAIRS = (('energized_min_pu', 'voltage_min_pu'), ('voltage_min_pu', 'voltage_max_pu'))
@@ -356,6 +361,8 @@ def parse_setting(key, text):
         return None, '{} is read only: {}'.format(setting['label'], setting['note'] or NOT_VERIFIED)
     if setting['kind'] == 'grids':
         return parse_grids(key, text)
+    if setting['kind'] == 'elements':
+        return parse_elements(key, text)
     if setting['kind'] == 'choice':
         return (text, None) if any(text == value and type(text) is type(value) for value, _ in setting['choices']) else (
             None, '{}: choose one of {}'.format(setting['label'], ', '.join(label for _, label in setting['choices'])))
@@ -376,8 +383,18 @@ def parse_setting(key, text):
     return value, None
 
 
+def parse_elements(key, value):
+    """An element selection: a list of distinct element keys (full PowerFactory names)."""
+    if not isinstance(value, (list, tuple)) or not all(isinstance(name, str) and name.strip() for name in value):
+        return None, '{}: a list of elements is needed'.format(SETTINGS_BY_KEY[key]['label'])
+    names = tuple(name.strip() for name in value)
+    if len(set(names)) != len(names):
+        return None, '{}: an element is selected twice'.format(SETTINGS_BY_KEY[key]['label'])
+    return tuple(sorted(names, key=str.casefold)), None
+
+
 def parse_grids(key, value):
-    """A grid selection: a list of distinct grid names; None for the contingencies means 'as the assessment'."""
+    """A grid selection: a list of distinct grid names; None for the contingencies means every grid (no filter)."""
     if value is None and key == 'contingency_grids':
         return None, None
     if not isinstance(value, (list, tuple)) or not all(isinstance(name, str) and name.strip() for name in value):
@@ -443,6 +460,8 @@ def setting_text(key, value):
         if value is None:
             return SAME_AS_ASSESSMENT
         return ', '.join(value) if value else 'every grid'
+    if setting['kind'] == 'elements':
+        return ', '.join(element_label(key) for key in value) if value else 'every element'
     if value is None:
         return NOT_VERIFIED
     if setting['kind'] == 'choice':
@@ -1656,14 +1675,21 @@ SETTING_HELP = {
     'save_settings': "Checks the entries and saves the settings for later use. Provisional: they are written into the "
                      "case configuration file of this project (JSON), not yet into the PowerFactory project; the "
                      "project itself is not touched.",
-    'monitoring_grids': "Only lines, transformers and terminals in the selected grids are assessed: their QDS results "
-                        "and the monitored elements of n-1 and (n-1)'. Every other element is ignored as "
-                        "foreign network. No grid selected: every grid. The selection only filters the assessment; "
-                        "PowerFactory still calculates the whole network.",
-    'contingency_grids': "Only contingencies whose outaged equipment lies in the selected grids are analysed. 'Same "
-                         "grids as the assessed equipment' follows the left selection. This changes what PowerFactory "
-                         "calculates (category B): the other contingencies are set to 'Not analysed' for the n-1 run "
-                         "and restored afterwards.",
+    'monitoring_grids': "Report filter. Only lines, transformers and terminals in the selected grids are assessed: "
+                        "their QDS results and the monitored elements of n-1 and (n-1)'. Every other element is "
+                        "left out of the report. No grid selected: every grid. It never changes the calculation "
+                        "(PowerFactory calculates the whole network) and applies in full when a kept run is "
+                        "re-evaluated.",
+    'contingency_grids': "n-1 filter for the calculation. Only contingencies whose outaged equipment lies in the "
+                         "selected grids are analysed; the others are set to 'Not analysed' for the n-1 run and "
+                         "restored afterwards. 'Every grid' analyses every contingency. In a re-evaluation it leaves "
+                         "contingencies out of the evaluation; it cannot add ones that were not calculated.",
+    'contingency_elements': "n-1 filter for the calculation. Choose the elements that are outaged in n-1 and (n-1)': "
+                            "only contingencies that outage at least one selected element are analysed, every other is "
+                            "set to 'Not analysed' for the n-1 run (or not created when GridLens defines the "
+                            "contingencies). None selected: every element is outaged. The loading of every element is "
+                            "still assessed under the analysed contingencies. In a re-evaluation it leaves the other "
+                            "contingencies out of the evaluation.",
     'contingency_preview': "How many contingencies of the study case's contingency analysis the selection would keep. "
                            "Their equipment is read with ComOutage.GetObject; nothing is changed.",
     'grid_buttons': "Selects every grid, or clears the selection so that every grid is assessed. Takes effect at once.",
@@ -1790,8 +1816,10 @@ class CaseEditor:
     """
 
     def __init__(self, records, config, period, qds_text='', qds_info=None, grids=None, contingencies=CONTINGENCIES_NOT_READ,
-                 kept=()):
+                 kept=(), elements=()):
         self.records = list(records)
+        # [(key, name, class, grid)] the n-1 element filter offers (contingency_element_choices).
+        self.element_choices = [tuple(item) for item in elements or ()]
         # Stamps of earlier runs whose result objects are kept in the study case (kept_stamps), newest first,
         # and the one chosen for a re-evaluation without calculation (None: calculate now).
         self.kept_stamps = list(kept or ())
@@ -2156,6 +2184,30 @@ class CaseEditor:
         value = self.settings_overrides().get(key, SETTINGS_BY_KEY[key]['default'])
         return None if value is None else tuple(value)
 
+    def selected_elements(self):
+        """The element keys of the n-1 element filter."""
+        return tuple(self.settings_overrides().get('contingency_elements', ()))
+
+    def element_text(self, key):
+        """'name (class, grid)' of an element key, from the choices; the short name when it is no longer offered."""
+        for item in self.element_choices:
+            if item[0] == key:
+                return '{} ({}{})'.format(item[1], item[2], ', ' + item[3] if item[3] else '')
+        return element_label(key) + ' (no longer in a contingency)'
+
+    def set_elements(self, keys):
+        """Select the elements outaged in n-1 at once (no Apply needed; none: every element). A problem or None."""
+        value, problem = parse_elements('contingency_elements', list(keys))
+        if problem:
+            return problem
+        try:
+            current = effective_settings(self.settings_overrides())
+        except GridLensError:
+            current = default_settings()
+        current['contingency_elements'] = value
+        self.config['settings'] = clean_overrides(current)
+        return None
+
     def grid_choices(self):
         """The grids to choose from: every grid of the model, plus selected ones the project no longer has."""
         chosen = set(self.selected_grids('monitoring_grids')) | set(self.selected_grids('contingency_grids') or ())
@@ -2193,8 +2245,21 @@ class CaseEditor:
     def contingency_preview(self):
         if self.contingencies == CONTINGENCIES_NOT_READ:
             return 'contingencies not read in this window'
-        return contingency_scope_text(self.contingencies, self.selected_grids('contingency_grids'),
+        text = contingency_scope_text(self.contingencies, self.selected_grids('contingency_grids'),
                                       self.selected_grids('monitoring_grids'))
+        elements = self.selected_elements()
+        if elements:
+            text += ' Outaged elements only: {}.'.format(', '.join(self.element_text(key) for key in elements))
+        return text
+
+    def filter_note(self):
+        """What the filters do for the chosen results: a calculation, or a re-evaluation of a kept run."""
+        if not self.evaluate_stamp:
+            return ('Calculate now: the report filter acts on the evaluation only; the n-1 filters decide which '
+                    'contingencies PowerFactory calculates.')
+        return ('Re-evaluate the kept run of {}: the report filter applies in full. The n-1 filters leave '
+                'contingencies out of the evaluation; contingencies that were not calculated then cannot be added '
+                'without calculating again.'.format(stamp_text(self.evaluate_stamp)))
 
     def monitoring_text(self):
         grids = self.selected_grids('monitoring_grids')
@@ -2302,8 +2367,9 @@ class CaseEditor:
                  'Reference: ' + (('Rfix' if background else 'R0') if setting_value('run_reference', self.settings_overrides())
                                   else 'off'),
                  'Shared background: ' + fixed,
-                 'Assessed equipment: ' + self.monitoring_text(),
+                 'Report filter: ' + self.monitoring_text(),
                  'Contingencies: ' + self.contingency_preview(),
+                 'Filters: ' + self.filter_note(),
                  'Settings: ' + overrides_text(self.settings_overrides())]
         for record in background:
             lines.append('  {}: {}'.format(record['name'], window_text(record['window'])))
@@ -3531,10 +3597,12 @@ class CaseManagerDialog:
             parent.rowconfigure(4, weight=1)
             parent.rowconfigure(5, minsize=60)
             parent.rowconfigure(6, minsize=40)
-        title = ttk.Label(left, text='Assessed equipment', style='Title.TLabel')
+        title = ttk.Label(left, text='Report filter: assessed equipment', style='Title.TLabel')
         title.grid(row=0, column=0, columnspan=2, sticky='w')
         self.tip(title, setting_help('monitoring_grids'))
-        self._wrapped_label(left, 'Choose the grids whose equipment is assessed.', row=1, column=0, columnspan=2, pady=(6, 10))
+        self._wrapped_label(left, 'Choose the grids whose equipment is assessed in the report. No effect on the '
+                            'calculation; also applies when a kept run is re-evaluated.', row=1, column=0, columnspan=2,
+                            pady=(6, 10))
         self._grid_search_field(left, 'monitoring_grids', row=3)
         self._grid_listbox(left, 'monitoring_grids', row=4)
         self.monitoring_note = self._wrapped_label(left, '', row=5, column=0, columnspan=2, pady=(10, 0))
@@ -3546,13 +3614,13 @@ class CaseManagerDialog:
             button.grid(row=0, column=column, sticky='w', padx=(0, 6))
             self.tip(button, SETTING_HELP['grid_buttons'])
         self._flow(buttons, buttons.winfo_children())
-        title = ttk.Label(right, text='Contingencies', style='Title.TLabel')
+        title = ttk.Label(right, text='n-1 filter: contingencies by grid', style='Title.TLabel')
         title.grid(row=0, column=0, columnspan=2, sticky='w')
         self.tip(title, setting_help('contingency_grids'))
         self.contingency_mode = tk.StringVar(value='same')
         choices = ttk.Frame(right, style='Card.TFrame')
         choices.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(6, 10))
-        for row, (value, text) in enumerate((('same', 'Same grids as the assessed equipment'), ('own', 'Own selection'))):
+        for row, (value, text) in enumerate((('same', 'Every grid (no filter)'), ('own', 'Own selection'))):
             radio = ttk.Radiobutton(choices, text=text, value=value, variable=self.contingency_mode,
                                     command=self.on_contingency_mode)
             radio.grid(row=row, column=0, sticky='w')
@@ -3561,7 +3629,77 @@ class CaseManagerDialog:
         self._grid_listbox(right, 'contingency_grids', row=4)
         self.contingency_note = self._wrapped_label(right, '', row=5, column=0, columnspan=2, pady=(10, 0))
         self.tip(self.contingency_note, SETTING_HELP['contingency_preview'])
+        self._build_element_filter(right, first_row=7)
         self.refresh_scope()
+
+    def _build_element_filter(self, card, first_row):
+        """The n-1 element filter below the grid filter of the same card: a searchable list of the elements the
+        contingencies outage. Its list shares the flexible height with the grid list, so the page still fits."""
+        tk, ttk = self.tk, self.ttk
+        row = lambda offset: first_row + offset
+        card.rowconfigure(row(4), weight=1)
+        title = ttk.Label(card, text='n-1 filter: outaged elements', style='Title.TLabel')
+        title.grid(row=row(0), column=0, columnspan=2, sticky='w', pady=(16, 0))
+        self.tip(title, setting_help('contingency_elements'))
+        self._wrapped_label(card, 'Select the elements that are outaged in n-1 and (n-1)\'. Only contingencies that '
+                            'outage a selected element are calculated. None selected: every element.', row=row(1),
+                            column=0, columnspan=2, pady=(6, 10))
+        self.element_search = tk.StringVar()
+        ttk.Label(card, text='Search elements', style='Muted.TLabel').grid(row=row(2), column=0, sticky='w', pady=(0, 4))
+        entry = ttk.Entry(card, textvariable=self.element_search, width=12)
+        entry.grid(row=row(3), column=0, columnspan=2, sticky='ew', pady=(0, 6))
+        self.element_search.trace_add('write', lambda *_args: self.refresh_elements())
+        self.tip(entry, 'Filter the visible elements by name, class or grid. Selected elements remain selected when '
+                        'hidden by the search.')
+        box = tk.Listbox(card, selectmode='multiple', exportselection=False, height=4, width=12, activestyle='dotbox',
+                         background=self.CARD, foreground=self.TEXT, selectbackground=self.SELECTED,
+                         selectforeground=self.TEXT, highlightthickness=1, highlightcolor=self.ACCENT,
+                         highlightbackground=self.BORDER, relief='flat', font=self.body_font, borderwidth=0)
+        box.grid(row=row(4), column=0, sticky='nsew')
+        scroll = ttk.Scrollbar(card, orient='vertical', command=box.yview)
+        scroll.grid(row=row(4), column=1, sticky='ns')
+        box.configure(yscrollcommand=lambda first, last: self._scrollbar(scroll, first, last))
+        box.bind('<<ListboxSelect>>', lambda _event: self.on_element_select(), add='+')
+        self.tip(box, setting_help('contingency_elements'))
+        self.element_list, self.element_visible = box, []
+        self.element_note = self._wrapped_label(card, '', row=row(5), column=0, columnspan=2, pady=(10, 0))
+        button = ttk.Button(card, text='Clear selection', command=lambda: self.select_elements([]))
+        button.grid(row=row(6), column=0, sticky='w', pady=(10, 0))
+        self.tip(button, 'No element selected: every element is outaged in n-1 again. Takes effect at once.')
+
+    def refresh_elements(self):
+        """Render the element list without changing the selection."""
+        box = getattr(self, 'element_list', None)
+        if box is None:
+            return
+        query = self.element_search.get().strip().casefold()
+        selected = set(self.editor.selected_elements())
+        choices = [item[0] for item in self.editor.element_choices]
+        visible = [key for key in choices + sorted(selected - set(choices)) if query in self.editor.element_text(key).casefold()]
+        self.element_visible = visible
+        scroll = box.yview()
+        box.delete(0, 'end')
+        for key in visible:
+            box.insert('end', self.editor.element_text(key))
+            if key in selected:
+                box.selection_set('end')
+        if scroll:
+            box.yview_moveto(scroll[0])
+        count = len(selected)
+        self.element_note.configure(text='Only {} selected element(s) are outaged. {}'.format(count, self.editor.filter_note())
+                                    if count else 'No selection: every element is outaged. ' + self.editor.filter_note())
+
+    def on_element_select(self):
+        visible = self.element_visible
+        selected = [key for key in self.editor.selected_elements() if key not in visible]
+        selected += [visible[index] for index in self.element_list.curselection()]
+        self.select_elements(selected)
+
+    def select_elements(self, keys):
+        problem = self.editor.set_elements(keys)
+        if problem:
+            self.messagebox.showerror('Network scope', problem, parent=self.root)
+        self.after_scope_change()
 
     def _grid_search_field(self, parent, key, row):
         self.grid_search[key] = self.tk.StringVar()
@@ -3607,7 +3745,7 @@ class CaseManagerDialog:
             self.grid_visible[key] = visible
             selected = set(self.editor.selected_grids(key) or ())
             if key == 'contingency_grids' and contingency is None:
-                selected = set(self.editor.selected_grids('monitoring_grids'))
+                selected = set()
             scroll = box.yview()
             box.configure(state='normal', background=self.CARD)
             box.delete(0, 'end')
@@ -3633,6 +3771,7 @@ class CaseManagerDialog:
             self.monitoring_note.configure(text='Assessed: ' + self.editor.monitoring_text() +
                                            '. No grid selected: every grid is assessed.')
         self.contingency_note.configure(text=self.editor.contingency_preview())
+        self.refresh_elements()
 
 
     def on_grid_select(self, key):
@@ -3658,7 +3797,7 @@ class CaseManagerDialog:
         if self.contingency_mode.get() == 'same':
             self.editor.set_grids('contingency_grids', None)
         else:
-            self.editor.set_grids('contingency_grids', self.editor.selected_grids('monitoring_grids'))
+            self.editor.set_grids('contingency_grids', [])
         self.after_scope_change()
 
     def after_scope_change(self):
@@ -4318,7 +4457,7 @@ class CaseManagerDialog:
 
 
 def run_case_manager(records, config, period, config_path, user='', qds_text='', qds_info=None, grids=None,
-                     contingencies=CONTINGENCIES_NOT_READ, kept=()):
+                     contingencies=CONTINGENCIES_NOT_READ, kept=(), elements=()):
     """Show the case manager; the edited configuration on "Start calculation", None on Cancel."""
     try:
         import tkinter as tk
@@ -4327,7 +4466,7 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
         root = tk.Tk()
     except Exception as exc:
         raise CaseManagerUnavailable('The case manager cannot open a window: {}'.format(_friendly_exception(exc))) from None
-    dialog = CaseManagerDialog(root, CaseEditor(records, config, period, qds_text, qds_info, grids, contingencies, kept),
+    dialog = CaseManagerDialog(root, CaseEditor(records, config, period, qds_text, qds_info, grids, contingencies, kept, elements),
                                config_path, user,
                                (tk, ttk, messagebox, simpledialog))
     root.report_callback_exception = dialog.report_error
@@ -4482,18 +4621,20 @@ def read_contingencies(study_case):
         found.append({'name': object_name(outage), 'number': safe_attr(outage, 'number'),
                       'analysed': safe_attr(outage, 'outserv', 0) in (0, False),
                       'elements': [object_name(element) for element in elements],
+                      'element_items': [(object_key(element), object_name(element), class_name(element),
+                                         element_grid_name(element)) for element in elements],
                       'grids': sorted({element_grid_name(element) or '(no grid)' for element in elements}, key=str.casefold)})
     return {'command': object_name(command), 'contingencies': found}
 
 
 def contingency_scope(info, contingency_grids, monitoring_grids=()):
-    """Which contingencies the selection keeps. None for the contingency grids means the assessed grids.
+    """Which contingencies the grid selection keeps. None or empty for the contingency grids means every grid.
 
     A contingency is in scope when all of its equipment lies in the selected
     grids, partly in scope when only some does, outside when none does; with
     no grid selected every contingency is in scope. The n-1 run sets the contingencies outside to 'Not analysed'.
     """
-    grids = tuple(monitoring_grids if contingency_grids is None else contingency_grids)
+    grids = tuple(contingency_grids or ())
     scope = {'grids': grids, 'in': [], 'partly': [], 'outside': [], 'unknown': [], 'not_analysed': []}
     for contingency in (info or {}).get('contingencies') or ():
         if not contingency['analysed']:
@@ -4546,6 +4687,11 @@ def qds_period_text(period):
     if start is None or end is None:
         return 'not readable from ComStatsim'
     return '{} - {}'.format(_format_pf_time(start), _format_pf_time(end))
+
+
+def element_label(key):
+    """The short name of an element key: the last part of its full name, without the class."""
+    return key.split('\\')[-1].rsplit('.', 1)[0] if key else key
 
 
 RESULTS_CALCULATE = 'Calculate now'

@@ -68,15 +68,30 @@ def _charts(root):
 
 
 def _components(root):
-    return list(root.find(".//PageMain").find("Components"))
+    """The bands of every page, in page order."""
+    return [item for page in root.find("Pages") for item in page.find("Components")]
 
 
-def test_the_report_is_one_landscape_page_in_the_order_of_the_template():
+def _page(root):
+    return root.find("Pages")[0]
+
+
+CHAPTER_PAGES = ["PageCover", "PageContents", "PageQuality", "PageCases", "PageCasedef", "PageReference", "PageMetrics",
+                 "PageSummary", "PageComparison", "PageRadar", "PageToplines", "PageTrendmost", "PageTrenddelta",
+                 "PageTopcase", "PageEvidence", "PageAppendix", "PageAppa", "PageAppb", "PageAppc"]
+
+
+def test_the_report_has_one_landscape_page_per_chapter_in_the_order_of_the_template():
     root = _root()
-    assert [page.tag for page in root.find("Pages")] == ["PageMain"]
-    page = root.find(".//PageMain")
-    assert page.findtext("Orientation") == "Landscape"
-    assert float(page.findtext("PageWidth")) > float(page.findtext("PageHeight"))
+    assert [page.tag for page in root.find("Pages")] == CHAPTER_PAGES
+    assert root.find("Pages").get("count") == str(len(CHAPTER_PAGES))
+    for page in root.find("Pages"):
+        assert page.findtext("Orientation") == "Landscape" and page.findtext("Name") == page.tag
+        assert float(page.findtext("PageWidth")) > float(page.findtext("PageHeight"))
+        # Every component of a page refers to that page.
+        refs = {element.get("isRef") for element in page.find("Components").iter("Page")}
+        assert refs == {page.get("Ref")}, page.tag
+    assert len({page.findtext("Guid") for page in root.find("Pages")}) == len(CHAPTER_PAGES)
     order = [item.tag for item in _components(root)]
     sequence = ["BandCover", "BandTableOfContents", "quality_TitleBand", "cases_TitleBand", "casedef_TitleBand",
                 "reference_TitleBand", "metrics_TitleBand", "summary_TitleBand", "comparison_TitleBand", "radar_TitleBand",
@@ -84,18 +99,18 @@ def test_the_report_is_one_landscape_page_in_the_order_of_the_template():
                 "evidence_TitleBand", "appendix_TitleBand", "appa_TitleBand", "appb_TitleBand", "appc_TitleBand"]
     positions = [order.index(name) for name in sequence]
     assert positions == sorted(positions)
-    assert order[0] == "BandPageHeader" and order[-1] == "BandPageFooter"
 
 
-def test_every_chapter_starts_on_its_own_page_and_prints_without_rows():
+def test_every_chapter_is_its_own_page_and_prints_without_rows():
     root = _root()
-    for item in _components(root):
-        if not item.tag.endswith("_TitleBand"):
-            continue
-        assert item.get("type") == "DataBand", item.tag
-        assert item.findtext("DataSourceName") == "ScriptedReportMeta", item.tag
-        assert item.findtext("NewPageBefore") == "True", item.tag
-        assert not list(item.find("Filters")), item.tag
+    for page in list(root.find("Pages"))[2:]:
+        bands = [item for item in page.find("Components") if item.get("type") == "DataBand"]
+        title = bands[0]
+        assert title.tag.endswith("_TitleBand") and title.tag[:-len("_TitleBand")].capitalize() == page.tag[len("Page"):]
+        assert title.findtext("DataSourceName") == "ScriptedReportMeta", title.tag
+        assert not list(title.find("Filters")), title.tag
+        assert sum(1 for item in bands if item.tag.endswith("_TitleBand")) == 1, page.tag
+    assert not list(root.iter("NewPageBefore")), "the pages break the chapters, no band does"
 
 
 def test_header_footer_and_cover_follow_the_template():
@@ -107,7 +122,11 @@ def test_header_footer_and_cover_follow_the_template():
     assert "{ScriptedReportMeta.generated_by}" in texts
     assert "{ScriptedReportMeta.run_mode}" in texts
     assert "Network State and\nPlanned Outage Analysis" in texts
-    assert root.find(".//BandPageHeader").findtext("PrintOn") == "ExceptFirstPage"
+    # Every page has a footer, every page but the cover a header.
+    for index, page in enumerate(root.find("Pages")):
+        kinds = [item.get("type") for item in page.find("Components")]
+        assert kinds.count("PageFooterBand") == 1, page.tag
+        assert kinds.count("PageHeaderBand") == (0 if index == 0 else 1), page.tag
     assert "SYNTHETIC" not in MRT.read_text(encoding="utf-8").upper()
 
 
@@ -118,10 +137,10 @@ def test_table_of_contents_links_to_existing_bookmarks():
     assert len(links) >= 15
     assert set(links) <= bookmarks
     toc = root.find(".//BandTableOfContents")
-    assert toc is not None and toc.findtext("NewPageBefore") == "True"
+    assert toc is not None and toc in list(root.find("Pages/PageContents/Components"))
     last = max(toc.find("Components"), key=lambda item: float(item.findtext("ClientRectangle").split(",")[1]))
     bottom = float(last.findtext("ClientRectangle").split(",")[1]) + float(last.findtext("ClientRectangle").split(",")[3])
-    page = root.find(".//PageMain")
+    page = root.find("Pages/PageContents")
     available = float(page.findtext("PageHeight")) - sum(float(v) for v in page.findtext("Margins").split(",")[1::2])
     assert bottom < available - 1.0, "the table of contents must fit on its page"
 
@@ -151,7 +170,7 @@ def test_cases_table_reads_as_an_assessment_and_highlights_violations():
 
 def test_table_columns_fill_the_page_width_exactly():
     root = _root()
-    page = root.find(".//PageMain")
+    page = _page(root)
     width = float(page.findtext("PageWidth")) - sum(float(v) for v in page.findtext("Margins").split(",")[0::2])
     checked = 0
     for band in root.iter():
@@ -207,8 +226,9 @@ def test_charts_with_case_series_exist_once_per_number_of_drawn_cases():
             assert chart.findtext("DataSourceName") == table
             series = list(chart.find("Series"))
             assert len(series) == count
-            assert [item.findtext("Title") for item in series] == ["{%s.s%d_name}" % (table, i) for i in range(count)]
-            assert [item.findtext("ValueDataColumn") for item in series] == ["%s.v%d" % (table, i) for i in range(count)]
+            assert [item.findtext("Title") for item in series] == ["{%s.%s}" % (table, gl.series_name_field(i)) for i in range(count)]
+            assert [item.findtext("ValueDataColumn") for item in series] == ["%s.%s" % (table, gl.series_value_field(i))
+                                                                             for i in range(count)]
             assert series[0].findtext("LineColor") == "140, 150, 160", "REF is grey"
             decoded = [re.sub(r"_x([0-9A-Fa-f]{4})_", lambda m: chr(int(m[1], 16)), v.text) for v in band.find("Filters")]
             assert decoded[0] == 'ScriptedReportMeta.chart_cases == "{}"'.format(count)

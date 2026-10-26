@@ -124,7 +124,8 @@ def test_contingency_scope_keeps_contingencies_whose_equipment_lies_in_the_grids
     scope = gl.contingency_scope(info, ("Grid A",))
     assert scope["in"] == ["Line A1"] and scope["partly"] == ["Tie A-B"] and scope["outside"] == ["Line B1"]
     assert scope["unknown"] == ["Empty"] and scope["not_analysed"] == ["Skipped"]
-    assert gl.contingency_scope(info, None, ("Grid B",))["in"] == ["Line B1"], "None follows the assessed grids"
+    # The n-1 grid filter is independent of the report filter: None means every grid.
+    assert gl.contingency_scope(info, None, ("Grid B",))["in"] == gl.contingency_scope(info, ())["in"]
     assert len(gl.contingency_scope(info, ())["in"]) == 3, "no grid: every readable contingency"
     text = gl.contingency_scope_text(info, ("Grid A",))
     assert text.startswith("1 of 5 contingencies of 'Contingency Analysis' in scope (Grid A)")
@@ -144,8 +145,9 @@ def test_editor_selects_grids_at_once_and_warns_about_missing_or_inactive_ones()
     assert any("'Gone'" in text and "no longer exists" in text for text in warnings)
     assert any("'Grid C'" in text and "not active" in text for text in warnings)
     assert edit.grid_choices() == ["Gone", "Grid A", "Grid C"]
-    assert "Assessed equipment: Gone, Grid A, Grid C" in edit.calculation_preview()
-    assert "Contingencies: 1 of 5 contingencies" in edit.calculation_preview()
+    assert "Report filter: Gone, Grid A, Grid C" in edit.calculation_preview()
+    assert "Filters: Calculate now: the report filter acts on the evaluation only" in edit.calculation_preview()
+    assert "Contingencies: 3 of 5 contingencies" in edit.calculation_preview(), "the report filter does not filter n-1"
     assert edit.set_grids("contingency_grids", ["Grid B"]) is None
     assert edit.settings_overrides()["contingency_grids"] == ("Grid B",)
     assert edit.set_grids("monitoring_grids", []) is None and "monitoring_grids" not in edit.settings_overrides()
@@ -183,3 +185,39 @@ def test_the_summary_grid_of_a_study_case_is_not_offered():
         assert gl.is_summary_grid(summary) and not gl.is_summary_grid(GA)
     finally:
         del GA.GetParent, GB.GetParent
+
+
+# ---------------------------------------------------------------------------
+# n-1 filters: grids and outaged elements
+# ---------------------------------------------------------------------------
+def _equipment():
+    study = _study_case()
+    command = study.GetContents("*.ComSimoutage")[0]
+    return gl.contingency_equipment(command)
+
+
+def test_n1_filters_leave_out_contingencies_by_grid_and_by_element():
+    equipment = _equipment()
+    keys = {gl.object_name(outage): gl.object_key(outage) for outage, _ in equipment}
+    found = gl.excluded_contingencies(equipment, grids=("Grid A",), elements=())
+    assert found == {keys["Line B1"]: "outside the n-1 grids", keys["Skipped"]: "outside the n-1 grids"}
+    tie_part = next(gl.object_key(item) for outage, items in equipment for item in items if item.loc_name == "Tie part B")
+    found = gl.excluded_contingencies(equipment, grids=(), elements=(tie_part,))
+    # Only contingencies outaging a selected element stay; "Empty" has no readable equipment and stays too.
+    assert found == {keys[name]: "outages no selected element" for name in ("Line A1", "Line B1", "Skipped")}
+    assert gl.excluded_contingencies(equipment, grids=(), elements=()) == {}
+
+
+def test_element_choices_come_from_the_contingencies_and_the_editor_keeps_them():
+    info = gl.read_contingencies(_study_case())
+    choices = gl.contingency_element_choices(None, info)
+    assert [name for _, name, _, _ in choices] == ["Line A1", "Line B1", "Line B2", "Tie A-B", "Tie part B"]
+    edit = gl.CaseEditor([], gl.empty_case_config(), PERIOD, contingencies=info, elements=choices, kept=["261024-122303"])
+    key = choices[1][0]
+    assert edit.set_elements([key]) is None and edit.selected_elements() == (key,)
+    assert edit.element_text(key) == "Line B1 (ElmLne, Grid B)"
+    assert "Outaged elements only: Line B1 (ElmLne, Grid B)." in edit.contingency_preview()
+    assert edit.set_elements([key, key]).endswith("an element is selected twice")
+    assert edit.set_evaluate_stamp("261024-122303") is None
+    assert edit.filter_note().startswith("Re-evaluate the kept run of ")
+    assert "cannot be added without calculating again" in edit.filter_note()

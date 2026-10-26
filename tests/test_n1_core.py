@@ -434,7 +434,9 @@ def test_without_a_contingency_analysis_gridlens_defines_one_for_the_selected_gr
     _, records, plan, _, planned = _scenario()
     study = Creating([])
     study._app, study._planned = app, list(planned)
-    gl.activate_settings({"monitoring_grids": ["Grid A"]})
+    # The n-1 grid filter selects the contingencies; the report filter alone would not.
+    gl.activate_settings({"contingency_grids": ["Grid A"],
+                          "contingency_elements": [gl.object_key(line), gl.object_key(branch)]})
     results = [{"id": "C1"}]
     logger = Logger()
     qds = Obj("QDS", "ComStatsim", startTime=START, endTime=START + 23 * H, stepSize=1, stepUnit=2)
@@ -443,9 +445,9 @@ def test_without_a_contingency_analysis_gridlens_defines_one_for_the_selected_gr
 
     created = study._children[0]
     assert created.loc_name.startswith("GridLens_") and created.loc_name.endswith("_N1") and created.iEnableTS == 1
-    assert [outage.loc_name for outage in created._outages] == ["L1", "Branch", "T1"]
+    assert [outage.loc_name for outage in created._outages] == ["L1", "Branch"], "only the selected elements"
     assert results[0]["n1"]["status"] == "EVALUATED"
-    assert any("GridLens created" in message and "3 contingencies" in message for _, message in logger.lines)
+    assert any("GridLens created" in message and "2 contingencies" in message for _, message in logger.lines)
 
 
 
@@ -513,3 +515,41 @@ def test_n1_results_are_kept_as_copies_and_evaluated_from_them_also_later_withou
     gl.evaluate_n1(n1, request, [plan], again, Logger())
     assert again[0]["n1"]["summary"] == first and len(analysis.runs) == calls
     assert runs[0]["failed"].startswith("the run 261023-120000 kept no result object"), "no QDS object in this study"
+    assert "n-1 filter: grids every grid; outaged elements: every element" in kept[0].desc[0]
+
+    # Re-evaluated with an element selection set afterwards: only L2 and L3 are outaged, C1 is left out.
+    chosen = [gl.object_key(analysis._lines[1]), gl.object_key(analysis._lines[2])]
+    gl.activate_settings({"run_reference": False, "contingency_elements": chosen})
+    try:
+        _, n1 = gl.kept_runs(study, "261023-120000", request, [plan], Logger())
+        narrowed = [{"id": "C1"}]
+        logger = Logger()
+        gl.evaluate_n1(n1, request, [plan], narrowed, logger)
+    finally:
+        gl.reset_settings()
+    assert len(analysis.runs) == calls
+    notes = [message for _, message in logger.lines]
+    assert any(message.startswith("Kept n-1 result calculated with the grids every grid; outaged elements: every "
+                                  "element; now: the n-1 filter: grids every grid; outaged elements: L2, L3.")
+               for message in notes)
+    assert any("Left out of the evaluation by the current n-1 filters: 1 contingency (C1)" in message for message in notes)
+    assert narrowed[0]["n1"]["summary"] != first
+
+
+def test_only_contingencies_outaging_a_selected_element_are_analysed_for_the_run():
+    analysis, records, plan, outages, _ = _scenario()
+    qds = Obj("QDS", "ComStatsim", startTime=START, endTime=START + 23 * H, stepSize=1, stepUnit=2)
+    clock = {"object": Obj("time", "SetTime", cDate=1, cTime=2), "date": 1, "time": 2}
+    seen = []
+    execute = analysis.Execute
+    analysis.Execute = lambda: (seen.append([outage.outserv for outage in outages]), execute())[1]
+    gl.activate_settings({"contingency_elements": [gl.object_key(analysis._lines[0]), gl.object_key(analysis._lines[1])]})
+    try:
+        logger = Logger()
+        _run_n1(App([]), Study([analysis]), qds, {"background": [], "assessments": ["n-0", "n-1"]}, records, [plan],
+                [{"id": "C1"}], logger, clock)
+    finally:
+        gl.reset_settings()
+    assert seen == [[0, 0, 1]], "C3 outages L3: not analysed during the run"
+    assert [outage.outserv for outage in outages] == [0, 0, 0], "restored afterwards"
+    assert any("Not analysed for the run: C3 (outages no selected element)." in message for _, message in logger.lines)

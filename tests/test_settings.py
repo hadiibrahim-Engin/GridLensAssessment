@@ -63,8 +63,8 @@ def test_calculation_parameters_are_category_b_and_read_only():
 
     assert {setting["key"] for setting in calculation} >= {"contingency_set", "post_fault_phases", "remedial_actions",
                                                             "islanding", "unsupplied_load", "calculation_method"}
-    # Only the contingency grid selection can be edited: the n-1 run applies it via "Not analysed".
-    assert [setting["key"] for setting in calculation if setting["editable"]] == ["contingency_grids"]
+    # Only the two n-1 filters can be edited: the n-1 run applies them via "Not analysed".
+    assert [setting["key"] for setting in calculation if setting["editable"]] == ["contingency_grids", "contingency_elements"]
     value, problem = gl.parse_setting("contingency_set", "all lines")
     assert value is None and "read only" in problem
     assert all(gl.setting_help(setting["key"]).count("Category B") == 1 for setting in calculation)
@@ -122,6 +122,7 @@ def test_snapshot_is_fixed_once_and_names_versions_and_sources():
     assert snapshot["settings_version"] == gl.SETTINGS_VERSION and snapshot["classification_version"] == "1.0"
     parameters = snapshot["calculation_parameters"]
     assert parameters.pop("contingency_grids") == gl.SAME_AS_ASSESSMENT + " (stored, not applied yet)"
+    assert parameters.pop("contingency_elements") == "every element (stored, not applied yet)"
     assert set(parameters.values()) == {gl.NOT_VERIFIED}
     assert snapshot["storage"].startswith("provisional")
 

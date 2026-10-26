@@ -187,8 +187,8 @@ def test_matrix_tables_continue_in_blocks_of_six_cases():
     first = [row for row in rows if row["block"] == 1][0]
     last = [row for row in rows if row["block"] == 2][0]
     assert first["col_count"] == 6 and last["col_count"] == 2
-    assert first["h6_name"] == "Outage 6" and last["h1_name"] == "Outage 7"
-    assert last["c3_text"] == "" and last["h3_name"] == ""
+    assert first["case_f_name"] == "Outage 6" and last["case_a_name"] == "Outage 7"
+    assert last["case_c_text"] == "" and last["case_c_name"] == ""
     assert first["ref_text"].endswith(" %")
 
 
@@ -205,7 +205,7 @@ def test_matrix_without_outage_cases_shows_reference_only():
     payload, *_ = _payload(cases=0)
 
     rows = payload["ScriptedAppendixLine"]
-    assert rows and all(row["col_count"] == 0 and row["h1_name"] == "" for row in rows)
+    assert rows and all(row["col_count"] == 0 and row["case_a_name"] == "" for row in rows)
 
 
 def test_out_of_service_elements_read_n_a():
@@ -216,7 +216,7 @@ def test_out_of_service_elements_read_n_a():
     payload = gl.build_cases_payload(Obj("Europe", "IntCase"), results, "BDS", "Result", request, "operator", "RUN")
 
     hafen = [row for row in payload["ScriptedAppendixLine"] if row["element_name"] == "L-110 Hafen"][0]
-    assert hafen["c1_text"] == "n/a"
+    assert hafen["case_a_text"] == "n/a"
 
 
 def test_switched_equipment_is_reported_out_of_service_not_resolved():
@@ -234,9 +234,9 @@ def test_trend_charts_carry_reference_and_every_case_in_fixed_slots():
     payload, *_ = _payload()
 
     row = payload["ScriptedTrendMostLoaded"][0]
-    assert [row["s{}_name".format(slot)] for slot in range(4)] == ["Reference", "Outage 1", "Outage 2", "Outage 3"]
-    assert row["s4_name"] == " " and row["v4"] is None
-    assert row["v0"] is not None and row["v3"] is not None
+    assert [row[gl.series_name_field(slot)] for slot in range(4)] == ["Reference", "Outage 1", "Outage 2", "Outage 3"]
+    assert row["series_d_name"] == " " and row["value_d"] is None
+    assert row["value_ref"] is not None and row["value_c"] is not None
     assert payload["ScriptedReportMeta"][0]["chart_cases"] == "4"
     delta = payload["ScriptedTrendLargestDelta"]
     assert delta and "Largest coincident delta" in delta[0]["chart_title"]
@@ -280,7 +280,7 @@ def test_top_lines_by_case_rank_each_case_on_its_own():
     first = payload["ScriptedTopLinesByCase"][0]
     assert first["element_name"] == "1"
     assert first["ref_text"] == "L-220 Nordring - 88.0 %"
-    assert first["c2_text"].startswith("L-220 West 1")
+    assert first["case_b_text"].startswith("L-220 West 1")
 
 
 def test_calculation_evidence_lists_every_run_and_its_result_object():
@@ -299,9 +299,9 @@ def test_comparison_table_flags_rows_with_caused_violations():
     payload, *_ = _payload()
 
     rows = {row["element_name"]: row for row in payload["ScriptedCaseComparison"]}
-    assert rows["New overloads"]["c2_text"] == "2" and rows["New overloads"]["violation"] == 1
+    assert rows["New overloads"]["case_b_text"] == "2" and rows["New overloads"]["violation"] == 1
     assert rows["Assessment"]["ref_text"] == "BASELINE"
-    assert rows["Outage time covered by results"]["c1_text"] == "100 %"
+    assert rows["Outage time covered by results"]["case_a_text"] == "100 %"
 
 
 def test_report_states_what_the_assessment_does_and_does_not_prove():

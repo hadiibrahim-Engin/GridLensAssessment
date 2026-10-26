@@ -276,8 +276,10 @@ class App:
 
 def test_table_contract_is_single_versioned_19_table_contract():
     assert gl.PUBLISHER_VERSION == "8.0.0"
-    assert gl.TEMPLATE_VERSION == "6.0.0"
-    assert gl.DATA_CONTRACT_VERSION == "6.0"
+    assert gl.TEMPLATE_VERSION == "6.1.0"
+    assert gl.DATA_CONTRACT_VERSION == "6.1"
+    # No field name carries a digit: tables with such fields were missing from the PowerFactory report database.
+    assert not [field for _, fields in gl.TABLES for field, _ in fields if any(char.isdigit() for char in field)]
     assert len(gl.TABLES) == 19
     tables = dict(gl.TABLES)
     for name in ("ScriptedCases", "ScriptedCaseComparison", "ScriptedCalculationRuns",
@@ -1995,7 +1997,7 @@ def test_every_case_is_judged_once_and_all_pages_show_that_verdict(monkeypatch):
     comparison = app.report.tables["CaseComparison"]["values"]
     last = max(row for row, field in comparison if field == "element_name")
     assert comparison[last, "element_name"] == "Assessment"
-    assert [comparison[last, "c1_text"], comparison[last, "c2_text"]] == [cases[1, "assessment"], cases[2, "assessment"]]
+    assert [comparison[last, "case_a_text"], comparison[last, "case_b_text"]] == [cases[1, "assessment"], cases[2, "assessment"]]
 
 
 def test_windows_off_the_time_axis_are_compared_in_full_and_said_so(monkeypatch):
