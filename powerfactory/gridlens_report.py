@@ -331,8 +331,8 @@ UNPUBLISHED_FIELDS = {
                          "cells_evaluated"),
     "ScriptedReferenceFindings": ("status", "source_text"),
     "ScriptedContingencyRegister": ("violation_events",),
-    "ScriptedContingencyEvents": ("phase", "unit", "source_text"),
-    "ScriptedContingencyEpisodes": ("phase", "source_text"),
+    "ScriptedContingencyEvents": ("phase", "unit", "source_text", "element_type"),
+    "ScriptedContingencyEpisodes": ("phase", "source_text", "element_type"),
     "ScriptedTimeCriticality": ("chart_title", "unit"),
     "ScriptedAssessmentSettings": ("setting_key",),
 }
@@ -965,6 +965,8 @@ N1_LIMIT_CHOICES = ((N1_LIMITS_POWERFACTORY, 'use PowerFactory limits'), (N1_LIM
 ON_OFF_CHOICES = ((True, 'on'), (False, 'off'))
 # Upper bounds of the count settings: beyond them a run takes hours or the report gets unreadable.
 COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'max_cases': 20}
+# The most planning cases a run can have: the templates hold a band pair for every block up to this number.
+MAX_PLANNING_CASES = COUNT_LIMITS['max_cases']
 NOT_VERIFIED = 'not verified yet'
 PART3_NOTE = ('Read only: set in the contingency analysis (ComSimoutage) of the study case; GridLens reads it '
               'and does not change it.')
