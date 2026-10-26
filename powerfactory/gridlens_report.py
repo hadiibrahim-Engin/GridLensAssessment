@@ -8,6 +8,7 @@ import re
 from array import array
 import getpass
 import hashlib
+import heapq
 import math
 import os
 import textwrap
@@ -40,8 +41,8 @@ MAX_N1_TIMES = 2000
 TIME_UNIT_FALLBACK = 'h'
 PUBLISHER_VERSION = '8.0.0'
 TEMPLATE_NAME = 'MASTER_GRIDLENS'
-TEMPLATE_VERSION = '6.1.0'
-DATA_CONTRACT_VERSION = '6.1'
+TEMPLATE_VERSION = '7.0.0'
+DATA_CONTRACT_VERSION = '7.0'
 RUN_REFERENCE_CASE = True
 # Where the planning cases come from:
 #   'gui'        open the case manager; without tkinter use the saved
@@ -102,6 +103,8 @@ def text_limit(field):
         return MAX_LABEL_LENGTH
     return MAX_TEXT_LENGTH
 CASE_SLOTS = 6
+# The detail report shows three scenarios per block (repeated element and n-1 columns).
+DETAIL_SLOTS = 3
 SERIES_SLOTS = CASE_SLOTS + 1
 
 
@@ -140,21 +143,22 @@ MATRIX_FIELDS = (
 # Charts that draw REF and up to CASE_SLOTS cases: one fixed series per slot.
 SERIES_NAME_FIELDS = _slot_fields(series_name_field, "string", 0)
 SERIES_VALUE_FIELDS = _slot_fields(series_value_field, "number", 0)
-TREND_FIELDS = (
-    (("time_label", "string"), ("timestamp", "number"), ("element_name", "string"), ("chart_title", "string"),
-     ("unit", "string")) + SERIES_NAME_FIELDS + SERIES_VALUE_FIELDS)
+# The time course of H09 draws two series: the n-1 reference (slot ref) and (n-1)' over every scenario (slot a).
+TIME_COURSE_FIELDS = (
+    (("time_label", "string"), ("timestamp", "number"), ("chart_title", "string"), ("unit", "string"))
+    + SERIES_NAME_FIELDS[:2] + SERIES_VALUE_FIELDS[:2])
 
 TABLES = (
     ("ScriptedReportMeta", (
-        ("study_id", "string"), ("study_name", "string"), ("study_description", "string"),
+        ("run_id", "string"), ("study_name", "string"), ("study_description", "string"),
         ("model_name", "string"), ("model_version", "string"), ("simulation_start", "string"),
         ("simulation_end", "string"), ("simulation_time_step", "string"), ("generation_date", "string"),
         ("generated_by", "string"), ("run_mode", "string"), ("template_name", "string"),
         ("template_version", "string"), ("data_contract_version", "string"), ("result_name", "string"),
         ("assessment_scope", "string"), ("assessment_status", "string"), ("voltage_limits", "string"),
-        ("has_cases", "string"), ("chart_cases", "string"), ("radar_note", "string"),
-        ("case_source_text", "string"), ("reference_text", "string"), ("qds_mode_text", "string"),
-        ("coverage_statement", "string"))),
+        ("has_cases", "string"), ("case_source_text", "string"), ("reference_text", "string"), ("qds_mode_text", "string"),
+        ("coverage_statement", "string"), ("has_contingency", "string"), ("contingency_text", "string"),
+        ("overall_text", "string"), ("critical_note", "string"), ("events_note", "string"), ("empty_tables", "string"))),
     ("ScriptedModelQuality", (
         ("check_id", "string"), ("check_name", "string"), ("status", "string"), ("message", "string"),
         ("affected_element", "string"))),
@@ -175,19 +179,11 @@ TABLES = (
     ("ScriptedPieLines", (("sort_order", "integer"), ("class_label", "string"), ("element_count", "integer"))),
     ("ScriptedPieTransformers", (
         ("sort_order", "integer"), ("class_label", "string"), ("element_count", "integer"))),
-    ("ScriptedReferenceExceeded", (
-        ("rank", "integer"), ("type_label", "string"), ("element_name", "string"), ("grid_name", "string"),
-        ("max_text", "string"))),
     ("ScriptedCaseCounts", (
         ("case_order", "integer"), ("case_name", "string"), ("line_count", "integer"),
         ("transformer_count", "integer"), ("node_count", "integer"))),
-    ("ScriptedRadar", (
-        (("metric_order", "integer"), ("metric_label", "string"), ("note", "string"))
-        + SERIES_NAME_FIELDS + SERIES_VALUE_FIELDS)),
     ("ScriptedLineLoadingBars", (
         ("rank", "integer"), ("element_name", "string"), ("max_value", "number"), ("case_name", "string"))),
-    ("ScriptedTrendMostLoaded", TREND_FIELDS),
-    ("ScriptedTrendLargestDelta", TREND_FIELDS),
     ("ScriptedCaseComparison", MATRIX_FIELDS),
     ("ScriptedCalculationRuns", (
         ("run_order", "integer"), ("run_id", "string"), ("run_kind", "string"), ("case_name", "string"),
@@ -198,13 +194,84 @@ TABLES = (
     ("ScriptedAppendixLine", MATRIX_FIELDS),
     ("ScriptedAppendixTransformer", MATRIX_FIELDS),
     ("ScriptedAppendixVoltage", MATRIX_FIELDS),
+    # --- contract 7.0: statistics of the reporting core (main report H02-H10, detail report D01-D12)
+    ("ScriptedCaseStatistics", (
+        ("case_order", "integer"), ("case_name", "string"), ("level", "string"), ("assessment", "string"),
+        ("critical_lines", "integer"), ("critical_transformers", "integer"), ("critical_nodes", "integer"),
+        ("new_elements", "integer"), ("worsened_elements", "integer"), ("new_events", "integer"), ("worsened_events", "integer"),
+        ("preexisting_events", "integer"), ("improved_events", "integer"), ("resolved_events", "integer"),
+        ("quality_events", "integer"), ("critical_contingencies", "integer"), ("critical_times", "integer"),
+        ("episodes", "integer"), ("events_text", "string"), ("contingencies_text", "string"), ("times_text", "string"),
+        ("completeness_text", "string"), ("violation", "integer"))),
+    ("ScriptedCaseStatusCounts", (
+        ("case_order", "integer"), ("case_name", "string"), ("new_count", "integer"), ("worsened_count", "integer"),
+        ("improved_count", "integer"), ("resolved_count", "integer"))),
+    ("ScriptedCoverage", (
+        ("case_order", "integer"), ("case_name", "string"), ("level", "string"), ("times_requested", "integer"),
+        ("times_calculated", "integer"), ("contingencies_defined", "integer"), ("contingencies_applicable", "integer"),
+        ("pairs_examined", "integer"), ("pairs_not_applicable", "integer"), ("pairs_failed", "integer"),
+        ("pairs_missing", "integer"), ("cells_required", "integer"), ("cells_evaluated", "integer"),
+        ("failed_cells", "integer"), ("not_evaluated_cells", "integer"), ("not_applicable_cells", "integer"),
+        ("not_comparable_cells", "integer"), ("coverage_text", "string"), ("violation", "integer"))),
+    ("ScriptedScope", (
+        ("case_order", "integer"), ("case_name", "string"), ("level", "string"), ("grid_name", "string"),
+        ("voltage_level", "string"), ("element_class", "string"), ("monitored", "integer"), ("critical", "integer"),
+        ("incomplete", "integer"))),
+    ("ScriptedOutageWindows", (
+        ("row_order", "integer"), ("case_order", "integer"), ("case_name", "string"), ("outage_name", "string"),
+        ("outage_path", "string"), ("equipment_name", "string"), ("start_text", "string"), ("end_text", "string"),
+        ("start_hours", "number"), ("end_hours", "number"), ("gantt_label", "string"))),
+    ("ScriptedReferenceFindings", (
+        ("row_order", "integer"), ("level", "string"), ("criterion_order", "integer"), ("main_rank", "integer"),
+        ("element_name", "string"), ("element_type", "string"), ("grid_name", "string"), ("criterion", "string"),
+        ("value_text", "string"), ("limit_text", "string"), ("violation_text", "string"), ("time_label", "string"),
+        ("contingency_name", "string"), ("status", "string"), ("source_text", "string"), ("violation", "integer"))),
+    ("ScriptedCriticalLines", MATRIX_FIELDS),
+    ("ScriptedCriticalTransformers", MATRIX_FIELDS),
+    ("ScriptedCriticalNodes", MATRIX_FIELDS),
+    ("ScriptedDetailLines", MATRIX_FIELDS),
+    ("ScriptedDetailTransformers", MATRIX_FIELDS),
+    ("ScriptedDetailVoltageLow", MATRIX_FIELDS),
+    ("ScriptedDetailVoltageHigh", MATRIX_FIELDS),
+    ("ScriptedClassificationMatrix", MATRIX_FIELDS),
+    ("ScriptedContingencyRegister", (
+        ("case_order", "integer"), ("case_name", "string"), ("row_order", "integer"), ("level", "string"),
+        ("contingency_name", "string"), ("equipment_name", "string"), ("examined_times", "integer"),
+        ("not_applicable_times", "integer"), ("failed_times", "integer"), ("missing_times", "integer"),
+        ("affected_elements", "integer"), ("critical_times", "integer"), ("new_events", "integer"),
+        ("worsened_events", "integer"), ("violation_events", "integer"), ("worst_text", "string"), ("violation", "integer"))),
+    ("ScriptedContingencyRanking", (("rank", "integer"), ("contingency_name", "string"), ("finding_count", "integer"))),
+    ("ScriptedContingencyEvents", (
+        ("case_order", "integer"), ("case_name", "string"), ("row_order", "integer"), ("level", "string"),
+        ("main_rank", "integer"), ("criterion_order", "integer"), ("time_label", "string"), ("contingency_name", "string"),
+        ("phase", "string"), ("element_name", "string"), ("element_type", "string"), ("criterion", "string"), ("unit", "string"),
+        ("reference_text", "string"), ("scenario_text", "string"), ("limit_text", "string"), ("violation_text", "string"),
+        ("change_text", "string"), ("status", "string"), ("source_text", "string"),
+        ("violation", "integer"))),
+    ("ScriptedContingencyEpisodes", (
+        ("case_order", "integer"), ("case_name", "string"), ("row_order", "integer"), ("level", "string"),
+        ("contingency_name", "string"), ("element_name", "string"), ("element_type", "string"), ("criterion", "string"),
+        ("phase", "string"), ("status", "string"), ("first_text", "string"), ("last_text", "string"), ("points", "integer"),
+        ("peak_text", "string"), ("peak_time", "string"), ("source_text", "string"), ("violation", "integer"))),
+    ("ScriptedQualityRegister", (
+        ("row_order", "integer"), ("case_order", "integer"), ("case_name", "string"), ("level", "string"),
+        ("status", "string"), ("cause", "string"), ("contingency_name", "string"), ("time_text", "string"),
+        ("cells", "integer"), ("violation", "integer"))),
+    ("ScriptedTimeCriticality", TIME_COURSE_FIELDS),
+    ("ScriptedTimeMatrix", MATRIX_FIELDS),
+    ("ScriptedAssessmentSettings", (
+        ("row_order", "integer"), ("section", "string"), ("setting_key", "string"), ("label", "string"),
+        ("value_text", "string"), ("unit", "string"), ("origin", "string"), ("status", "string"))),
+    ("ScriptedResultProvenance", (
+        ("row_order", "integer"), ("level", "string"), ("case_name", "string"), ("object_name", "string"),
+        ("object_path", "string"), ("content_text", "string"), ("status", "string"))),
 )
 REQUIRED_FIELDS = {
     "ScriptedReportMeta": (
-        "study_id", "study_name", "model_name", "model_version", "generation_date", "generated_by", "run_mode",
+        "run_id", "study_name", "model_name", "model_version", "generation_date", "generated_by", "run_mode",
         "template_name", "template_version", "data_contract_version", "result_name", "assessment_scope",
-        "assessment_status", "voltage_limits", "has_cases", "chart_cases", "case_source_text", "reference_text",
-        "qds_mode_text", "coverage_statement"),
+        "assessment_status", "voltage_limits", "has_cases", "case_source_text", "reference_text",
+        "qds_mode_text", "coverage_statement", "has_contingency", "contingency_text"),
     "ScriptedModelQuality": ("check_id", "check_name", "status", "message"),
     "ScriptedCases": ("case_order", "case_id", "case_name", "is_reference", "simulation_status", "assessment",
                       "violation"),
@@ -213,21 +280,67 @@ REQUIRED_FIELDS = {
     "ScriptedKpis": ("highest_text", "highest_caption", "delta_text", "delta_caption"),
     "ScriptedPieLines": ("sort_order", "class_label", "element_count"),
     "ScriptedPieTransformers": ("sort_order", "class_label", "element_count"),
-    "ScriptedReferenceExceeded": ("rank", "type_label", "element_name", "max_text"),
     "ScriptedCaseCounts": ("case_order", "case_name", "line_count", "transformer_count", "node_count"),
-    "ScriptedRadar": ("metric_order", "metric_label", "series_ref_name"),
     "ScriptedLineLoadingBars": ("rank", "element_name", "max_value"),
-    "ScriptedTrendMostLoaded": ("time_label", "timestamp", "element_name", "chart_title", "unit", "series_ref_name"),
-    "ScriptedTrendLargestDelta": ("time_label", "timestamp", "element_name", "chart_title", "unit", "series_ref_name"),
     "ScriptedCaseComparison": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
     "ScriptedCalculationRuns": ("run_order", "run_id", "run_kind", "case_name", "status"),
     "ScriptedTopLinesByCase": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
     "ScriptedAppendixLine": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
     "ScriptedAppendixTransformer": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
     "ScriptedAppendixVoltage": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedCaseStatistics": ("case_order", "case_name", "level", "assessment", "violation"),
+    "ScriptedCaseStatusCounts": ("case_order", "case_name"),
+    "ScriptedCoverage": ("case_order", "case_name", "level", "coverage_text"),
+    "ScriptedScope": ("case_order", "case_name", "level", "element_class"),
+    "ScriptedOutageWindows": ("row_order", "case_name", "outage_name"),
+    "ScriptedReferenceFindings": ("row_order", "level", "element_name", "criterion", "status"),
+    "ScriptedCriticalLines": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedCriticalTransformers": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedCriticalNodes": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedDetailLines": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedDetailTransformers": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedDetailVoltageLow": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedDetailVoltageHigh": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedClassificationMatrix": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedTimeMatrix": ("block", "row_order", "element_name", "ref_text", "col_count", "violation"),
+    "ScriptedContingencyRegister": ("case_order", "case_name", "row_order", "contingency_name"),
+    "ScriptedContingencyRanking": ("rank", "contingency_name", "finding_count"),
+    "ScriptedContingencyEvents": ("case_order", "case_name", "row_order", "element_name", "status"),
+    "ScriptedContingencyEpisodes": ("case_order", "case_name", "row_order", "element_name", "status"),
+    "ScriptedQualityRegister": ("row_order", "case_name", "status", "cause"),
+    "ScriptedTimeCriticality": ("time_label", "timestamp", "series_ref_name"),
+    "ScriptedAssessmentSettings": ("row_order", "setting_key", "label"),
+    "ScriptedResultProvenance": ("row_order", "level", "case_name", "object_name"),
 }
-# One table per chart: every table below feeds exactly one chart, which reads it without a data relation.
-TREND_TABLES = ("ScriptedTrendMostLoaded", "ScriptedTrendLargestDelta")
+
+# Fields the builders compute for the script itself (summaries, log, checks) that no template shows: they are not
+# declared to PowerFactory and never written, so the report database holds only what the two reports print.
+DETAIL_MATRICES = ("ScriptedDetailLines", "ScriptedDetailTransformers", "ScriptedDetailVoltageLow", "ScriptedDetailVoltageHigh",
+                   "ScriptedClassificationMatrix")
+UNPUBLISHED_FIELDS = {
+    "ScriptedReportMeta": ("study_description", "voltage_limits", "has_cases", "has_contingency"),
+    "ScriptedModelQuality": ("check_id",),
+    "ScriptedCases": ("case_id", "is_reference", "simulation_status", "case_description", "windows_text"),
+    "ScriptedCaseMetrics": ("coverage_text",),
+    "ScriptedLineLoadingBars": ("case_name",),
+    "ScriptedCalculationRuns": ("reference_text", "period_text", "provenance_text"),
+    "ScriptedTopLinesByCase": ("violation",),
+    "ScriptedCaseStatistics": ("new_events", "worsened_events", "preexisting_events", "improved_events", "resolved_events",
+                               "quality_events", "critical_contingencies", "critical_times", "episodes"),
+    "ScriptedCoverage": ("pairs_examined", "pairs_not_applicable", "pairs_failed", "pairs_missing", "cells_required",
+                         "cells_evaluated"),
+    "ScriptedReferenceFindings": ("status", "source_text"),
+    "ScriptedContingencyRegister": ("violation_events",),
+    "ScriptedContingencyEvents": ("phase", "unit", "source_text"),
+    "ScriptedContingencyEpisodes": ("phase", "source_text"),
+    "ScriptedTimeCriticality": ("chart_title", "unit"),
+    "ScriptedAssessmentSettings": ("setting_key",),
+}
+UNPUBLISHED_FIELDS.update({name: tuple(field(slot) for slot in range(DETAIL_SLOTS + 1, CASE_SLOTS + 1)
+                                       for field in (case_text_field, case_name_field)) for name in DETAIL_MATRICES})
+TABLES = tuple((name, tuple(item for item in fields if item[0] not in UNPUBLISHED_FIELDS.get(name, ()))) for name, fields in TABLES)
+REQUIRED_FIELDS = {name: tuple(field for field in fields if field not in UNPUBLISHED_FIELDS.get(name, ()))
+                   for name, fields in REQUIRED_FIELDS.items()}
 
 def safe_attr(obj, name, default=None):
     try:
@@ -1422,7 +1535,7 @@ def read_n1_results(source, in_scope=element_in_scope, recording_limits=None):
     variables of N1_VARIABLES of elements in scope are read; a value that is
     neither written nor marked code 3 is left out (no artificial zero).
     """
-    found = {'times': {}, 'elements': {}, 'contingencies': {}, 'categories': {}, 'nominal_kv': {}}
+    found = {'times': {}, 'elements': {}, 'contingencies': {}, 'categories': {}, 'nominal_kv': {}, 'grids': {}, 'present': {}}
     from_command = class_name(source) == N1_COMMAND_CLASS
     result = safe_attr(source, N1_RESULT_ATTRIBUTE) if from_command else source
     subs = [item for item in (_contents(result, '*.ElmRes') if result is not None else []) if class_name(item) == 'ElmRes']
@@ -1431,46 +1544,116 @@ def read_n1_results(source, in_scope=element_in_scope, recording_limits=None):
         moment = finite_number(safe_attr(sub, 'cnttime'))
         if moment is None:
             continue
-        values = found['times'].setdefault(moment, {})
-        try:
-            sub.Load()
-            columns = []
-            for column in range(int(sub.GetNumberOfColumns())):
-                obj = sub.GetObject(column)
-                quantity = wanted.get(str(sub.GetVariable(column)))
-                if obj is None or quantity is None or not in_scope(obj):
-                    continue
-                key = object_key(obj)
-                category = 'voltage' if quantity == 'voltage' else (CLASS_CATEGORIES.get(class_name(obj)) or ('line',))[0]
-                found['elements'][key] = object_name(obj)
-                found['categories'][key] = category
-                if quantity == 'voltage':
-                    found['nominal_kv'][key] = finite_number(safe_attr(obj, 'uknom'))
-                columns.append((column, key, quantity))
-            rows = int(sub.GetNumberOfRows())
-            contingencies = []
-            for row in range(rows):
-                code, outage = _status_pair(sub.GetObjectValue(row))
-                contingency = object_key(outage) if code == 0 and outage is not None else None
-                if contingency is not None:
-                    found['contingencies'].setdefault(contingency, object_name(outage))
-                contingencies.append(contingency)
-            for column, key, quantity in columns:
-                for row, value in enumerate(_n1_column(sub, column, rows, quantity)):
-                    contingency = contingencies[row]
-                    if contingency is None or value is _ABSENT:
-                        continue
-                    values[(contingency, key, quantity)] = value
-        finally:
-            try:
-                sub.Release()
-            except Exception:
-                pass
+        present, values, _absent = _read_n1_sub(sub, wanted, in_scope, found, keep_unrecorded=True)
+        found['times'].setdefault(moment, {}).update(values)
+        found['present'][moment] = present
     found['recording_limits'] = _recording_limits(source) if from_command else (recording_limits or {})
     return found
 
 
 _ABSENT = object()
+
+
+def _read_n1_sub(sub, wanted, in_scope, meta, keep_unrecorded=False):
+    """One sub-result (one study time): (contingencies with a row, values, unreadable cells).
+
+    `values` maps (contingency, element, quantity) to the value; with
+    `keep_unrecorded` a value inside the recording limits (code 3) is kept as
+    None, otherwise it is left out and stands for itself (the streaming path
+    counts such cells without storing them). Cells that could not be read at
+    all are returned as unreadable keys, never as values. Element and
+    contingency names, categories, nominal voltages and grids go into `meta`
+    the first time an object is seen.
+    """
+    values, present, absent = {}, set(), set()
+    try:
+        sub.Load()
+        columns = []
+        for column in range(int(sub.GetNumberOfColumns())):
+            obj = sub.GetObject(column)
+            quantity = wanted.get(str(sub.GetVariable(column)))
+            if obj is None or quantity is None or not in_scope(obj):
+                continue
+            key = object_key(obj)
+            if key not in meta['elements']:
+                meta['elements'][key] = object_name(obj)
+                meta['categories'][key] = 'voltage' if quantity == 'voltage' else (
+                    CLASS_CATEGORIES.get(class_name(obj)) or ('line',))[0]
+                meta.setdefault('grids', {})[key] = element_grid_name(obj)
+                if quantity == 'voltage':
+                    meta['nominal_kv'][key] = finite_number(safe_attr(obj, 'uknom'))
+            columns.append((column, key, quantity))
+        rows = int(sub.GetNumberOfRows())
+        contingencies = []
+        for row in range(rows):
+            code, outage = _status_pair(sub.GetObjectValue(row))
+            contingency = object_key(outage) if code == 0 and outage is not None else None
+            if contingency is not None:
+                meta['contingencies'].setdefault(contingency, object_name(outage))
+                present.add(contingency)
+            contingencies.append(contingency)
+        for column, key, quantity in columns:
+            for row, value in enumerate(_n1_column(sub, column, rows, quantity)):
+                contingency = contingencies[row]
+                if contingency is None:
+                    continue
+                if value is _ABSENT:
+                    absent.add((contingency, key, quantity))
+                elif value is not None or keep_unrecorded:
+                    values[(contingency, key, quantity)] = value
+    finally:
+        try:
+            sub.Release()
+        except Exception:
+            pass
+    return present, values, absent
+
+
+class SweepReader:
+    """A kept n-1 result (or a contingency analysis) read one study time at a time.
+
+    `times` are the study times of its sub-results; `read(moment)` returns
+    (contingencies with a row, explicit values, unreadable cells) of that study
+    time only, so a whole sweep is never held in memory. `meta` collects the
+    names, categories, nominal voltages and grids of every object read.
+    """
+
+    def __init__(self, source, in_scope=element_in_scope, recording_limits=None):
+        result = safe_attr(source, N1_RESULT_ATTRIBUTE) if class_name(source) == N1_COMMAND_CLASS else source
+        self._subs = {}
+        for item in _contents(result, '*.ElmRes') if result is not None else []:
+            moment = finite_number(safe_attr(item, 'cnttime'))
+            if class_name(item) == 'ElmRes' and moment is not None:
+                self._subs[moment] = item
+        self.times = sorted(self._subs)
+        self.meta = {'elements': {}, 'contingencies': {}, 'categories': {}, 'nominal_kv': {}, 'grids': {}}
+        self.recording_limits = recording_limits or {}
+        self._in_scope = in_scope
+        self._wanted = {variable: quantity for quantity, variables in N1_VARIABLES.items() for variable in variables}
+
+    def read(self, moment):
+        return _read_n1_sub(self._subs[moment], self._wanted, self._in_scope, self.meta)
+
+
+class LoadedSweep:
+    """n-1 data already read by read_n1_results/load_n1, offered like a SweepReader (times, read, meta).
+
+    Code 3 cells (None, inside the recording limits) are left out, as the
+    streaming reader leaves them out; only the study times of the data exist.
+    """
+
+    def __init__(self, data):
+        self._data = data
+        self.times = sorted(data['times'])
+        self.meta = {name: data.get(name) or {} for name in ('elements', 'contingencies', 'categories', 'nominal_kv', 'grids')}
+        self.recording_limits = data.get('recording_limits') or {}
+
+    def read(self, moment):
+        values = self._data['times'].get(moment) or {}
+        present = self._data.get('present', {}).get(moment)
+        if present is None:
+            present = {key[0] for key in values}
+        return set(present), {key: value for key, value in values.items() if value is not None}, set()
 
 
 def _n1_column(sub, column, rows, quantity='loading'):
@@ -1608,6 +1791,7 @@ def compare_n1(reference, scenario, switched_off=(), contingency_elements=None, 
     contingency_elements = contingency_elements or {}
     elements = {}
     counts = {}
+    not_applicable = set()
     for moment, ref_values in sorted(reference['times'].items()):
         case_values = scenario['times'].get(moment)
         present = {key[0] for key in (case_values or {})}
@@ -1624,20 +1808,599 @@ def compare_n1(reference, scenario, switched_off=(), contingency_elements=None, 
                 case_side = _n1_side(case_values, moment, contingency, element, quantity, limit, applicable)
             outcome = classify_n1(ref_side, case_side, parameters, scenario.get('recording_limits'))
             counts[outcome['status']] = counts.get(outcome['status'], 0) + 1
+            if outcome['status'] == 'NOT_APPLICABLE':
+                not_applicable.add(reference['contingencies'].get(contingency, contingency))
             entry = elements.setdefault((element, quantity), {'element': element, 'quantity': quantity,
                                                               'name': reference['elements'].get(element, element),
-                                                              'worst': None})
+                                                              'category': category, 'worst': None})
             worst = entry['worst']
             if worst is None or N1_SEVERITY.index(outcome['status']) < N1_SEVERITY.index(worst['status']) or (
                     outcome['status'] == worst['status'] and (outcome['delta'] or 0.0) > (worst['delta'] or 0.0)):
-                entry['worst'] = dict(outcome, contingency_name=reference['contingencies'].get(contingency, contingency))
-    return {'elements': elements, 'counts': counts}
+                entry['worst'] = dict(outcome, contingency_name=reference['contingencies'].get(contingency, contingency),
+                                      reference_value=ref_side.get('value'), scenario_value=case_side.get('value'))
+    return {'elements': elements, 'counts': counts, 'not_applicable': sorted(not_applicable, key=str.casefold)}
 
 
 def n1_summary(comparison):
     """'NEW 2, WORSENED 1, OK 140' style text of the classification counts, most severe first."""
     counts = comparison['counts']
     return ', '.join('{} {}'.format(status, counts[status]) for status in N1_SEVERITY if counts.get(status)) or 'nothing compared'
+
+
+# ---------------------------------------------------------------------------
+# Reporting core (reporting assignment, gate B): criteria, streaming n-1
+# comparison and the statistics of the main and the detail report.
+#
+# n-0 is the QDS of the base network, n-1 the time-sweep contingency analysis
+# of the base network, (n-1)' the same sweep per planning case with its active
+# planned outages. A comparison needs the same study time, contingency,
+# element, criterion and post-fault phase. Voltage is two criteria: below the
+# band and above it. Every statistic is computed over the complete result
+# before any report selection; quality statuses never count as OK, and a
+# missing or unrecorded value never becomes 0 %.
+# ---------------------------------------------------------------------------
+CRITERIA = ('loading', 'voltage_low', 'voltage_high')
+CRITERION_QUANTITY = {'loading': 'loading', 'voltage_low': 'voltage', 'voltage_high': 'voltage'}
+CRITERION_UNIT = {'loading': '%', 'voltage_low': 'p.u.', 'voltage_high': 'p.u.'}
+QUANTITY_CRITERIA = {'loading': ('loading',), 'voltage': ('voltage_low', 'voltage_high')}
+VIOLATION_STATUSES = ('NEW', 'WORSENED', 'PRE_EXISTING', 'IMPROVED')
+# Statuses whose n-1 reference value violates the limit.
+REFERENCE_VIOLATED = ('WORSENED', 'PRE_EXISTING', 'IMPROVED', 'RESOLVED')
+QUALITY_STATUSES = ('FAILED', 'NOT_EVALUATED', 'NOT_APPLICABLE', 'NOT_COMPARABLE')
+# Report priority: caused findings first, then quality problems, then findings already in n-1.
+STATUS_PRIORITY = ('NEW', 'WORSENED', 'FAILED', 'NOT_EVALUATED', 'NOT_COMPARABLE', 'NOT_APPLICABLE', 'PRE_EXISTING',
+                   'IMPROVED', 'RESOLVED', 'OK')
+STATUS_RANK = {status: rank for rank, status in enumerate(STATUS_PRIORITY)}
+STATE_NOT_RECORDED_CELL = 'not_recorded'
+STATE_MISSING = 'missing'
+POST_FAULT_PHASE = 'post-fault'
+REPORT_CATEGORY = {'line': 'line', 'transformer': 'transformer', 'voltage': 'node'}
+
+
+def criterion_thresholds(quantity, limit):
+    """[(criterion, threshold)] of a limit definition: loading its maximum, voltage each band edge on its own."""
+    if not isinstance(limit, dict):
+        return []
+    if quantity == 'loading':
+        return [('loading', _measured(limit.get('max')))]
+    return [('voltage_low', _measured(limit.get('min'))), ('voltage_high', _measured(limit.get('max')))]
+
+
+def criterion_violation(criterion, value, threshold):
+    """How far a value lies beyond the threshold, in the criterion's unit; negative inside, None if not computable."""
+    value, threshold = _measured(value), _measured(threshold)
+    if value is None or threshold is None:
+        return None
+    return threshold - value if criterion == 'voltage_low' else value - threshold
+
+
+def _inside_recording(criterion, bounds, threshold, margin):
+    """Whether a value PowerFactory did not record (inside its recording limits) is certainly no violation."""
+    if not bounds or threshold is None:
+        return False
+    bound = bounds[-1] if criterion == 'voltage_high' else bounds[0]
+    if bound is None:
+        return False
+    return bound >= threshold - margin if criterion == 'voltage_low' else bound <= threshold + margin
+
+
+def classify_criterion(criterion, threshold, reference, scenario, parameters=None, recording=None):
+    """Classify one criterion of one element at one study time and contingency: (n-1)' against n-1.
+
+    `reference` and `scenario` are (state, value) with state 'ok', 'failed',
+    'not_applicable', 'not_recorded' (inside the recording limits) or
+    'missing'. `threshold` is one value, or (reference threshold, scenario
+    threshold). Decision order as in classify_comparison(): FAILED,
+    NOT_APPLICABLE, NOT_COMPARABLE (thresholds differ), NOT_EVALUATED
+    (threshold or value missing, unrecorded value not proven inside the
+    limit), then the violation sizes. `change` is the coincident change of
+    the violation (positive: worse), `delta` the coincident difference of the
+    values (scenario minus reference); both only when both values are known.
+    """
+    parameters = parameters or classification_parameters()
+    quantity = CRITERION_QUANTITY[criterion]
+    tolerance, numeric = parameters[quantity], parameters['numeric']
+    result = {'criterion': criterion, 'indicators': [], 'change': None, 'delta': None,
+              'reference_violation': None, 'scenario_violation': None}
+
+    def done(status):
+        return dict(result, status=status, code=CLASSIFICATION_CODES[status])
+    states = (reference[0], scenario[0])
+    if STATE_FAILED in states:
+        return done('FAILED')
+    if STATE_NOT_APPLICABLE in states:
+        return done('NOT_APPLICABLE')
+    pair = threshold if isinstance(threshold, (tuple, list)) else (threshold, threshold)
+    if _measured(pair[0]) is not None and _measured(pair[1]) is not None and abs(pair[0] - pair[1]) > numeric:
+        return done('NOT_COMPARABLE')
+    limit = _measured(pair[1])
+    if limit is None:
+        return done('NOT_EVALUATED')
+    margin = tolerance['limit'] + numeric
+    sizes = []
+    for state, value in (reference, scenario):
+        if state == STATE_NOT_RECORDED_CELL:
+            if not _inside_recording(criterion, (recording or {}).get(quantity), limit, margin):
+                return done('NOT_EVALUATED')
+            sizes.append(None)
+        elif state == STATE_OK and _measured(value) is not None:
+            sizes.append(criterion_violation(criterion, value, limit))
+        else:
+            return done('NOT_EVALUATED')
+    result['reference_violation'], result['scenario_violation'] = sizes
+    in_reference = sizes[0] is not None and sizes[0] > margin
+    in_scenario = sizes[1] is not None and sizes[1] > margin
+    if None not in sizes:
+        result['change'] = sizes[1] - sizes[0]
+        result['delta'] = float(scenario[1]) - float(reference[1])
+    if in_scenario and not in_reference:
+        return done('NEW')
+    if in_scenario:
+        change = result['change']
+        return done('WORSENED' if change > tolerance['worsened'] + numeric else
+                    'IMPROVED' if -change > tolerance['improved'] + numeric else 'PRE_EXISTING')
+    if in_reference:
+        return done('RESOLVED')
+    if result['change'] is not None and result['change'] > tolerance['worsened'] + numeric and (
+            quantity != 'loading' or float(scenario[1]) >= parameters['margin_warning_loading']):
+        result['indicators'].append(INDICATOR_MARGIN_REDUCED)
+    return done('OK')
+
+
+def element_thresholds(meta, element):
+    """{criterion: threshold} of an element from its category and nominal voltage (n1_limit)."""
+    category = meta['categories'].get(element, 'line')
+    quantity = 'voltage' if category == 'voltage' else 'loading'
+    return dict(criterion_thresholds(quantity, n1_limit(quantity, category, meta['nominal_kv'].get(element))))
+
+
+class ScenarioAggregate:
+    """Streaming comparison of one (n-1)' scenario with n-1 and every statistic the reports need.
+
+    add_time() takes the reference and the scenario of one study time (from
+    SweepReader.read() or a synthetic source) and keeps only aggregates:
+    nothing grows with time x contingency x element except the findings
+    themselves. Cells inside the recording limits are counted, not stored.
+    Elements the scenario's planned outages switch off are left out (they
+    are no finding and no OK). Call finish() once for the statistics.
+    """
+
+    def __init__(self, run_id, scenario_id, meta, contingencies, requested_times, switched_off=(),
+                 contingency_elements=None, recording=None, parameters=None, event_limit=500):
+        self.run_id, self.scenario_id = run_id, scenario_id
+        self.meta = meta
+        self._contingencies = list(contingencies or ())
+        self.requested_times = sorted(requested_times)
+        self.switched_off = set(switched_off)
+        self.contingency_elements = contingency_elements or {}
+        self.recording = recording or {}
+        self.parameters = parameters or classification_parameters()
+        self.event_limit = event_limit
+        self.thresholds = {}
+        self.events = {status: 0 for status in STATUS_PRIORITY}
+        self.element_status = {}
+        self.element_extremes = {}
+        self.new_elements, self.worsened_elements, self.critical_elements = set(), set(), set()
+        self.critical_contingencies, self.critical_times = set(), set()
+        self.max_violation, self.max_worsening = {}, {}
+        self.register = {}
+        self.time_rows = []
+        self.quality = {}
+        self.episodes, self._open = [], {}
+        self._top, self.events_listed = [], 0
+        self.examined_pairs = self.pairs_not_applicable = self.pairs_failed = self.pairs_missing_time = 0
+        self.unreadable = 0
+        self.times_calculated, self.contingencies_applicable = [], set()
+        self._group_counts, self._group_size = None, -1
+
+    @property
+    def contingencies(self):
+        """The contingencies defined: as given, else every contingency the sources have named so far."""
+        return self._contingencies or list(self.meta['contingencies'])
+
+    # --- helpers --------------------------------------------------------------------
+    def _monitored(self):
+        return [element for element in self.meta['elements'] if element not in self.switched_off]
+
+    def _groups(self):
+        """{(criterion, threshold): monitored elements} to count unrecorded cells without visiting elements."""
+        if self._group_counts is None or self._group_size != len(self.meta['elements']):
+            self._group_size = len(self.meta['elements'])
+            groups = {}
+            for element in self._monitored():
+                for criterion, threshold in self._thresholds(element).items():
+                    groups[(criterion, threshold)] = groups.get((criterion, threshold), 0) + 1
+            self._group_counts = groups
+        return self._group_counts
+
+    def _thresholds(self, element):
+        found = self.thresholds.get(element)
+        if found is None:
+            found = self.thresholds[element] = element_thresholds(self.meta, element)
+        return found
+
+    def _cells(self):
+        return sum(self._groups().values())
+
+    def _quality(self, moment, contingency, status, cause, cells):
+        key = (moment, contingency, status, cause)
+        self.quality[key] = self.quality.get(key, 0) + cells
+
+    def _register(self, contingency):
+        entry = self.register.get(contingency)
+        if entry is None:
+            entry = self.register[contingency] = {'examined': 0, 'not_applicable': 0, 'failed': 0, 'missing': 0,
+                                                  'critical_times': set(), 'elements': set(), 'worst': None,
+                                                  'events': {status: 0 for status in VIOLATION_STATUSES}}
+        return entry
+
+    # --- one study time -----------------------------------------------------------------
+    def add_time(self, index, moment, reference, scenario):
+        """One study time; `reference`/`scenario` are (contingencies, values, unreadable) or None when not calculated."""
+        cells = self._cells()
+        if reference is None or scenario is None:
+            side = 'n-1 reference' if reference is None else "(n-1)' scenario"
+            self.pairs_missing_time += len(self.contingencies)
+            self.events['NOT_EVALUATED'] += len(self.contingencies) * cells
+            self._quality(moment, '*', 'NOT_EVALUATED', 'study time not calculated in the ' + side,
+                          len(self.contingencies) * cells)
+            for contingency in self.contingencies:
+                self._register(contingency)['missing'] += 1
+            self._close_episodes(index)
+            return
+        self.times_calculated.append(moment)
+        ref_present, ref_values, ref_absent = reference
+        scen_present, scen_values, scen_absent = scenario
+        examined = ref_present & scen_present
+        for contingency in ref_present - scen_present:
+            applicable = not (self.contingency_elements.get(contingency, set()) & self.switched_off)
+            status = 'FAILED' if applicable else 'NOT_APPLICABLE'
+            self.events[status] += cells
+            if applicable:
+                self.pairs_failed += 1
+                self._register(contingency)['failed'] += 1
+                self._quality(moment, contingency, status, 'contingency without a result row in the scenario', cells)
+            else:
+                self.pairs_not_applicable += 1
+                self._register(contingency)['not_applicable'] += 1
+                self._quality(moment, contingency, status, "the contingency's equipment is switched off by the scenario's "
+                              "planned outages", cells)
+        for contingency in set(self.contingencies) - ref_present - scen_present:
+            self.events['FAILED'] += cells
+            self.pairs_failed += 1
+            self._register(contingency)['failed'] += 1
+            self._quality(moment, contingency, 'FAILED', 'contingency without a result row in n-1 and (n-1)\'', cells)
+        for contingency in scen_present - ref_present:
+            self.events['FAILED'] += cells
+            self.pairs_failed += 1
+            self._register(contingency)['failed'] += 1
+            self._quality(moment, contingency, 'FAILED', 'contingency without a result row in the n-1 reference', cells)
+        for contingency in examined:
+            self._register(contingency)['examined'] += 1
+        self.contingencies_applicable |= examined
+        self.examined_pairs += len(examined)
+        time_elements, time_contingencies, time_caused, time_reference = set(), set(), set(), set()
+        explicit_groups = {}
+        unreadable = (ref_absent | scen_absent)
+        keys = set(ref_values) | set(scen_values) | unreadable
+        seen = set()
+        for contingency, element, quantity in keys:
+            if contingency not in examined or element in self.switched_off or element not in self.meta['elements']:
+                continue
+            for criterion in QUANTITY_CRITERIA[quantity]:
+                threshold = self._thresholds(element).get(criterion)
+                if (contingency, element, criterion) in seen:
+                    continue
+                seen.add((contingency, element, criterion))
+                explicit_groups[(criterion, threshold)] = explicit_groups.get((criterion, threshold), 0) + 1
+                key = (contingency, element, quantity)
+                if key in unreadable:
+                    outcome = {'status': 'NOT_EVALUATED', 'change': None, 'delta': None,
+                               'reference_violation': None, 'scenario_violation': None, 'indicators': []}
+                    self.unreadable += 1
+                    self._quality(moment, contingency, 'NOT_EVALUATED', 'result cell not readable', 1)
+                    ref_value = scen_value = None
+                else:
+                    ref_value, scen_value = ref_values.get(key), scen_values.get(key)
+                    outcome = classify_criterion(
+                        criterion, threshold,
+                        (STATE_OK, ref_value) if ref_value is not None else (STATE_NOT_RECORDED_CELL, None),
+                        (STATE_OK, scen_value) if scen_value is not None else (STATE_NOT_RECORDED_CELL, None),
+                        self.parameters, self.recording)
+                self._record(index, moment, contingency, element, criterion, threshold, ref_value, scen_value, outcome,
+                             time_elements, time_contingencies, time_caused, time_reference)
+        # Cells not recorded on either side: inside the recording limits, counted by threshold group.
+        for (criterion, threshold), members in self._groups().items():
+            implicit = members * len(examined) - explicit_groups.get((criterion, threshold), 0)
+            if implicit <= 0:
+                continue
+            margin = self.parameters[CRITERION_QUANTITY[criterion]]['limit'] + self.parameters['numeric']
+            if _inside_recording(criterion, self.recording.get(CRITERION_QUANTITY[criterion]), threshold, margin):
+                self.events['OK'] += implicit
+            else:
+                self.events['NOT_EVALUATED'] += implicit
+                self._quality(moment, '*', 'NOT_EVALUATED', 'values inside the recording limits do not prove the {} '
+                              'limit'.format(criterion.replace('_', ' ')), implicit)
+        self._close_episodes(index)
+        self.time_rows.append({'time': moment, 'critical_elements': len(time_elements),
+                               'critical_contingencies': len(time_contingencies), 'caused_elements': len(time_caused),
+                               'reference_elements': len(time_reference), 'critical_set': time_elements,
+                               'caused_set': time_caused, 'reference_set': time_reference})
+
+    def _record(self, index, moment, contingency, element, criterion, threshold, ref_value, scen_value, outcome,
+                time_elements, time_contingencies, time_caused, time_reference):
+        status = outcome['status']
+        if status in REFERENCE_VIOLATED:
+            time_reference.add(element)
+        self.events[status] += 1
+        counts = self.element_status.setdefault(element, {})
+        counts[(criterion, status)] = counts.get((criterion, status), 0) + 1
+        for side, value in (('reference', ref_value), ('scenario', scen_value)):
+            if value is None:
+                continue
+            size = criterion_violation(criterion, value, threshold)
+            extremes = self.element_extremes.setdefault(element, {})
+            current = extremes.get((criterion, side))
+            if size is not None and (current is None or size > current[0]):
+                extremes[(criterion, side)] = (size, value, moment, contingency)
+        if status not in VIOLATION_STATUSES:
+            return
+        violation = outcome['scenario_violation']
+        self.critical_elements.add(element)
+        self.critical_contingencies.add(contingency)
+        self.critical_times.add(moment)
+        time_elements.add(element)
+        time_contingencies.add(contingency)
+        if status == 'NEW':
+            self.new_elements.add(element)
+            time_caused.add(element)
+        elif status == 'WORSENED':
+            self.worsened_elements.add(element)
+            time_caused.add(element)
+        register = self._register(contingency)
+        register['critical_times'].add(moment)
+        register['elements'].add(element)
+        register['events'][status] += 1
+        finding = (STATUS_RANK[status], -(violation or 0.0), element, moment)
+        if register['worst'] is None or finding < register['worst'][0]:
+            register['worst'] = (finding, status, element, criterion, moment, violation)
+        best = self.max_violation.get(criterion)
+        if violation is not None and (best is None or violation > best['violation']):
+            self.max_violation[criterion] = self._key(moment, contingency, element, criterion, threshold, ref_value,
+                                                      scen_value, outcome)
+        change = outcome['change']
+        best = self.max_worsening.get(criterion)
+        if change is not None and change > 0 and (best is None or change > best['change']):
+            self.max_worsening[criterion] = self._key(moment, contingency, element, criterion, threshold, ref_value,
+                                                      scen_value, outcome)
+        self._episode(index, moment, contingency, element, criterion, status, violation)
+        self.events_listed += 1
+        priority = (-STATUS_RANK[status], violation or 0.0, abs(change or 0.0))
+        item = (priority, self.events_listed, (moment, contingency, element, criterion, threshold, ref_value, scen_value,
+                                               status, violation, change))
+        if len(self._top) < self.event_limit:
+            heapq.heappush(self._top, item)
+        elif item > self._top[0]:
+            heapq.heapreplace(self._top, item)
+
+    def _key(self, moment, contingency, element, criterion, threshold, ref_value, scen_value, outcome):
+        """A finding with its complete comparison key, for extremes and the event register."""
+        return {'run_id': self.run_id, 'scenario_id': self.scenario_id, 'time': moment, 'contingency': contingency,
+                'phase': POST_FAULT_PHASE, 'element': element, 'criterion': criterion, 'unit': CRITERION_UNIT[criterion],
+                'threshold': threshold, 'reference_value': ref_value, 'scenario_value': scen_value,
+                'violation': outcome.get('scenario_violation'), 'change': outcome.get('change'),
+                'delta': outcome.get('delta'), 'status': outcome['status']}
+
+    # --- episodes: consecutive examined study times with the same finding ---------------------
+    def _episode(self, index, moment, contingency, element, criterion, status, violation):
+        key = (contingency, element, criterion, status)
+        episode = self._open.get(key)
+        if episode is not None and episode['last_index'] == index - 1:
+            episode.update(last_index=index, last=moment, points=episode['points'] + 1)
+            if (violation or 0.0) > (episode['peak'] or 0.0):
+                episode.update(peak=violation, peak_time=moment)
+            return
+        if episode is not None:
+            self.episodes.append(episode)
+        self._open[key] = {'scenario_id': self.scenario_id, 'contingency': contingency, 'element': element,
+                           'criterion': criterion, 'phase': POST_FAULT_PHASE, 'status': status, 'first': moment,
+                           'last': moment, 'last_index': index, 'points': 1, 'peak': violation, 'peak_time': moment}
+
+    def _close_episodes(self, index):
+        for key in [key for key, episode in self._open.items() if episode['last_index'] < index]:
+            self.episodes.append(self._open.pop(key))
+
+    # --- result -----------------------------------------------------------------------------
+    def finish(self):
+        """Every statistic of the scenario; counts of distinct elements are never sums of event counts."""
+        for episode in self._open.values():
+            self.episodes.append(episode)
+        self._open = {}
+        categories = self.meta['categories']
+        grids = self.meta.get('grids', {})
+
+        def by_category(elements):
+            counted = {category: 0 for category in ('line', 'transformer', 'node')}
+            for element in elements:
+                counted[REPORT_CATEGORY.get(categories.get(element), 'line')] += 1
+            return counted
+        monitored = self._monitored()
+        scope = {}
+        for element in monitored:
+            kv = self.meta.get('nominal_kv', {}).get(element)
+            key = (grids.get(element) or '', '{} kV'.format(format_limit(kv)) if kv else '-',
+                   REPORT_CATEGORY.get(categories.get(element), 'line'))
+            entry = scope.setdefault(key, {'monitored': 0, 'critical': 0, 'incomplete': 0})
+            entry['monitored'] += 1
+            entry['critical'] += element in self.critical_elements
+            entry['incomplete'] += any(status in QUALITY_STATUSES for _, status in self.element_status.get(element, {}))
+        cells = self._cells()
+        required = len(self.requested_times) * len(self.contingencies) * cells
+        return {
+            'run_id': self.run_id, 'scenario_id': self.scenario_id, 'level': "(n-1)'", 'meta': self.meta,
+            'switched_off_keys': sorted(self.switched_off), 'contingency_elements': self.contingency_elements,
+            'monitored': by_category(monitored), 'switched_off': len(self.switched_off),
+            'critical': by_category(self.critical_elements), 'new_elements': by_category(self.new_elements),
+            'worsened_elements': by_category(self.worsened_elements),
+            'events': dict(self.events), 'critical_contingencies': len(self.critical_contingencies),
+            'critical_times': len(self.critical_times), 'episodes': len(self.episodes),
+            'max_violation': dict(self.max_violation), 'max_worsening': dict(self.max_worsening),
+            'coverage': {
+                'times_requested': len(self.requested_times), 'times_calculated': len(self.times_calculated),
+                'times_missing': sorted(set(self.requested_times) - set(self.times_calculated)),
+                'contingencies_defined': len(self.contingencies),
+                'contingencies_applicable': len(self.contingencies_applicable),
+                'pairs_examined': self.examined_pairs, 'pairs_not_applicable': self.pairs_not_applicable,
+                'pairs_failed': self.pairs_failed, 'pairs_missing_time': self.pairs_missing_time,
+                'cells_required': required, 'cells_evaluated': sum(self.events[s] for s in VIOLATION_STATUSES + ('RESOLVED', 'OK')),
+                'cells_quality': {status: self.events[status] for status in QUALITY_STATUSES}},
+            'scope': scope,
+            'element_status': self.element_status, 'element_extremes': self.element_extremes,
+            'element_pairs': {'examined': self.examined_pairs, 'not_applicable': self.pairs_not_applicable,
+                              'failed': self.pairs_failed, 'missing_time': self.pairs_missing_time},
+            'register': self.register, 'time_criticality': self.time_rows,
+            'episode_list': sorted(self.episodes, key=lambda item: (item['element'], item['contingency'], item['first'])),
+            'events_top': [self._key(*item[2][:7], {'status': item[2][7], 'scenario_violation': item[2][8],
+                                                    'change': item[2][9]})
+                           for item in sorted(self._top, reverse=True)],
+            'events_listed': self.events_listed,
+            'quality': [{'time': key[0], 'contingency': key[1], 'status': key[2], 'cause': key[3], 'cells': value}
+                        for key, value in sorted(self.quality.items(), key=lambda entry: (str(entry[0][0]), entry[0][1:]))],
+        }
+
+
+def element_counters(statistics, element, criterion):
+    """Status counters of one element and criterion, including the unrecorded OK and the quality cells of the scenario.
+
+    Every examined (study time, contingency) pair contributes one cell per
+    criterion: explicitly classified cells are counted as such, the rest of
+    the examined pairs are inside the recording limits (OK when the
+    recording limit proves it), and pairs without a scenario or reference row
+    or study time count as their quality status for every element.
+    """
+    explicit = {status: count for (crit, status), count in statistics['element_status'].get(element, {}).items()
+                if crit == criterion}
+    pairs = statistics['element_pairs']
+    counters = {status: explicit.get(status, 0) for status in STATUS_PRIORITY}
+    counters['OK'] += max(0, pairs['examined'] - sum(explicit.values()))
+    counters['NOT_APPLICABLE'] += pairs['not_applicable']
+    counters['FAILED'] += pairs['failed']
+    counters['NOT_EVALUATED'] += pairs['missing_time']
+    return counters
+
+
+def compare_scenario(run_id, scenario_id, reference, scenario, requested_times, switched_off=(), contingency_elements=None,
+                     contingencies=None, parameters=None, event_limit=500):
+    """Stream one (n-1)' scenario against the n-1 reference over the requested study times; the statistics.
+
+    `reference` and `scenario` are SweepReader-like sources: `times`,
+    `read(moment)`, `meta` and `recording_limits`. Each study time is read,
+    classified and dropped before the next one is read.
+    """
+    meta = {name: {} for name in ('elements', 'contingencies', 'categories', 'nominal_kv', 'grids')}
+    times = sorted(set(requested_times))
+    aggregate = ScenarioAggregate(run_id, scenario_id, meta, contingencies, times, switched_off, contingency_elements,
+                                  scenario.recording_limits or reference.recording_limits, parameters, event_limit)
+    ref_times, scen_times = set(reference.times), set(scenario.times)
+    for index, moment in enumerate(times):
+        ref_step = reference.read(moment) if moment in ref_times else None
+        scen_step = scenario.read(moment) if moment in scen_times else None
+        for name in meta:
+            meta[name].update(reference.meta.get(name, {}))
+            meta[name].update(scenario.meta.get(name, {}))
+        aggregate.add_time(index, moment, ref_step, scen_step)
+    return aggregate.finish()
+
+
+def level_statistics(run_id, level, reader, requested_times=None, parameters=None):
+    """Absolute statistics of one sweep on its own (the n-1 reference): critical elements, contingencies and times.
+
+    A value counts as violated when it lies beyond its criterion's threshold
+    by more than the limit tolerance; unrecorded cells are inside the
+    recording limits and are no violation only when the limits prove it.
+    """
+    parameters = parameters or classification_parameters()
+    times = sorted(set(requested_times if requested_times is not None else reader.times))
+    available = set(reader.times)
+    critical, contingencies, critical_times, monitored = set(), set(), set(), set()
+    maximum, events, calculated = {}, 0, 0
+    for moment in times:
+        if moment not in available:
+            continue
+        calculated += 1
+        present, values, _absent = reader.read(moment)
+        monitored.update(reader.meta['elements'])
+        for (contingency, element, quantity), value in values.items():
+            if value is None:
+                continue
+            for criterion in QUANTITY_CRITERIA[quantity]:
+                threshold = element_thresholds(reader.meta, element).get(criterion)
+                size = criterion_violation(criterion, value, threshold)
+                margin = parameters[CRITERION_QUANTITY[criterion]]['limit'] + parameters['numeric']
+                if size is None or size <= margin:
+                    continue
+                events += 1
+                critical.add(element)
+                contingencies.add(contingency)
+                critical_times.add(moment)
+                best = maximum.get(criterion)
+                if best is None or size > best['violation']:
+                    maximum[criterion] = {'run_id': run_id, 'level': level, 'time': moment, 'contingency': contingency,
+                                          'phase': POST_FAULT_PHASE, 'element': element, 'criterion': criterion,
+                                          'unit': CRITERION_UNIT[criterion], 'threshold': threshold, 'value': value,
+                                          'violation': size}
+    categories = reader.meta['categories']
+
+    def by_category(elements):
+        counted = {category: 0 for category in ('line', 'transformer', 'node')}
+        for element in elements:
+            counted[REPORT_CATEGORY.get(categories.get(element), 'line')] += 1
+        return counted
+    return {'run_id': run_id, 'level': level, 'monitored': by_category(monitored), 'critical': by_category(critical),
+            'critical_contingencies': len(contingencies), 'critical_times': len(critical_times), 'violation_events': events,
+            'max_violation': maximum, 'times_requested': len(times), 'times_calculated': calculated,
+            'critical_set': critical, 'contingency_set': contingencies, 'time_set': critical_times,
+            'monitored_set': monitored}
+
+
+def qds_level_statistics(run_id, result):
+    """n-0 statistics of a QDS result (REF): monitored and critical elements per class, critical time steps, extremes."""
+    critical, critical_rows, maximum = set(), set(), {}
+    monitored = {category: 0 for category in ('line', 'transformer', 'node')}
+    labels = result.get('labels') or []
+    for category in ('line', 'transformer', 'voltage'):
+        for item, _stats in result['by_category'].get(category, ()):
+            values = item.get('values')
+            if values is None:
+                continue
+            monitored[REPORT_CATEGORY[category]] += 1
+            if category == 'voltage':
+                lower, upper = voltage_limits(item)
+                checks = (('voltage_low', lower), ('voltage_high', upper))
+            else:
+                checks = (('loading', loading_limit(category)),)
+            for criterion, threshold in checks:
+                for row, value in enumerate(values):
+                    if value is None or value == MISSING:
+                        continue
+                    size = criterion_violation(criterion, value, threshold)
+                    if size is None or size <= NUMERIC_TOLERANCE:
+                        continue
+                    critical.add(item['key'])
+                    critical_rows.add(row)
+                    best = maximum.get(criterion)
+                    if best is None or size > best['violation']:
+                        maximum[criterion] = {'run_id': run_id, 'level': 'n-0', 'time': labels[row] if row < len(labels) else row,
+                                              'element': item['key'], 'name': item['element_name'], 'criterion': criterion,
+                                              'unit': CRITERION_UNIT[criterion], 'threshold': threshold, 'value': value,
+                                              'violation': size}
+    counted = {category: 0 for category in ('line', 'transformer', 'node')}
+    for category in ('line', 'transformer', 'voltage'):
+        for item, _stats in result['by_category'].get(category, ()):
+            if item['key'] in critical:
+                counted[REPORT_CATEGORY[category]] += 1
+    return {'run_id': run_id, 'level': 'n-0', 'monitored': monitored, 'critical': counted,
+            'critical_times': len(critical_rows), 'max_violation': maximum, 'times_calculated': len(labels)}
 
 
 REFERENCE_ID = 'REF'
@@ -2164,7 +2927,6 @@ def loading_classes(category):
             ('above {} %'.format(format_limit(limit)), lambda value: True))
 CATEGORY_LABELS = (('line', 'Line loading', 'line', 'lines'), ('transformer', 'Transformer loading', 'transformer', 'transformers'), ('voltage', 'Voltage magnitude', 'node', 'nodes'))
 REFERENCE_NAME = 'Reference'
-MAX_REFERENCE_ROWS = 30
 
 def voltage_limits_text():
     lower, upper = default_voltage_limits()
@@ -2180,10 +2942,9 @@ def _matrix_tables(payload, results, table, entries):
     for block_number, block in enumerate(case_blocks(cases), 1):
         for order, (name, ref_text, texts, violation) in enumerate(entries, 1):
             row = {'block': block_number, 'row_order': order, 'element_name': name, 'ref_text': ref_text, 'col_count': len(block), 'violation': violation}
-            for slot in range(1, CASE_SLOTS + 1):
-                case = block[slot - 1] if slot <= len(block) else None
-                row[case_name_field(slot)] = case['name'] if case else ''
-                row[case_text_field(slot)] = texts.get(case['id'], 'n/a') if case else ''
+            for slot, case in enumerate(block, 1):
+                row[case_name_field(slot)] = case['name']
+                row[case_text_field(slot)] = texts.get(case['id'], 'n/a')
             payload[table].append(row)
 
 def _stats_by_result(results, category):
@@ -2266,25 +3027,6 @@ def _case_counts(payload, results):
         lines, transformers, nodes = _violation_counts(result)
         payload['ScriptedCaseCounts'].append({'case_order': order, 'case_name': _result_name(result), 'line_count': lines, 'transformer_count': transformers, 'node_count': nodes})
 
-def _radar(payload, results):
-    reference = find_reference(results)
-    cases = outage_cases(results)
-    shown = ([reference] if reference else []) + cases[:CASE_SLOTS]
-    if not shown:
-        return
-    counts = [_violation_counts(result) for result in shown]
-    note = 'Axes use their own maximum; the table lists the absolute counts.'
-    if len(cases) > CASE_SLOTS:
-        note = 'The first {} of {} cases are drawn. '.format(CASE_SLOTS, len(cases)) + note
-    for metric, label in enumerate(('Lines > 100 %', 'Transformers > 100 %', 'Nodes outside band')):
-        values = [count[metric] for count in counts]
-        peak = max(values) or 1
-        row = {'metric_order': metric + 1, 'metric_label': label, 'note': note}
-        for slot in range(SERIES_SLOTS):
-            row[series_name_field(slot)] = _result_name(shown[slot]) if slot < len(shown) else ' '
-            row[series_value_field(slot)] = 100.0 * values[slot] / peak if slot < len(shown) else None
-        payload['ScriptedRadar'].append(row)
-
 def _pies(payload, results):
     reference = find_reference(results)
     for category, table in (('line', 'ScriptedPieLines'), ('transformer', 'ScriptedPieTransformers')):
@@ -2296,18 +3038,6 @@ def _pies(payload, results):
         for order, ((label, _), count) in enumerate(zip(classes, counts), 1):
             payload[table].append({'sort_order': order, 'class_label': label, 'element_count': count})
 
-def _reference_exceeded(payload, results):
-    reference = find_reference(results)
-    if reference is None:
-        return
-    rows = []
-    for category, label in (('line', 'Line'), ('transformer', 'Transformer')):
-        for item, stats in reference['by_category'][category]:
-            if is_critical(item, stats):
-                rows.append((-stats['max'], item['element_name'].casefold(), label, item['element_name'], element_grid_name(item['object']), stats['max']))
-    for rank, (_, _, label, name, grid, value) in enumerate(sorted(rows)[:MAX_REFERENCE_ROWS], 1):
-        payload['ScriptedReferenceExceeded'].append({'rank': rank, 'type_label': label, 'element_name': name, 'grid_name': grid or '-', 'max_text': loading_text(value)})
-
 def _line_bars(payload, results):
     best = {}
     for result in converged(results):
@@ -2317,39 +3047,6 @@ def _line_bars(payload, results):
                 best[item['key']] = (item['element_name'], stats['max'], _result_name(result))
     for rank, (name, value, case_name) in enumerate(sorted(best.values(), key=lambda entry: (-entry[1], entry[0].casefold()))[:setting_value('top_n')], 1):
         payload['ScriptedLineLoadingBars'].append({'rank': rank, 'element_name': name, 'max_value': value, 'case_name': case_name})
-
-def _trend_rows(payload, table, results, key, title):
-    reference = find_reference(results)
-    shown = ([reference] if reference else []) + outage_cases(results)[:CASE_SLOTS]
-    items = [result['item_by_key'].get(('line', key)) for result in shown]
-    axis = next((item for item in items if item is not None), None)
-    if axis is None:
-        return
-    series = [{label: value for label, _, value in sampled_plot_points(item)} if item is not None else {} for item in items]
-    for label, timestamp, _ in sampled_plot_points(axis):
-        row = {'time_label': label, 'timestamp': timestamp, 'element_name': axis['element_name'], 'chart_title': title, 'unit': axis['unit']}
-        for slot in range(SERIES_SLOTS):
-            row[series_name_field(slot)] = _result_name(shown[slot]) if slot < len(shown) else ' '
-            row[series_value_field(slot)] = series[slot].get(label) if slot < len(shown) else None
-        payload[table].append(row)
-
-def _trends(payload, results):
-    best = None
-    for result in converged(results):
-        for item, stats in result['by_category']['line']:
-            if best is None or stats['max'] > best[0]:
-                best = (stats['max'], item['key'], item['element_name'])
-    if best is not None:
-        _trend_rows(payload, 'ScriptedTrendMostLoaded', results, best[1], 'Most loaded line: {}'.format(best[2]))
-    largest = None
-    for case in outage_cases(results):
-        for record in paired(results, 'line', case, True):
-            delta = _loading_delta(record)
-            if delta is not None and (largest is None or delta > largest[0]):
-                largest = (delta, record['item']['key'], record['item']['element_name'], case['name'])
-    if largest is not None and largest[0] > change_tolerance('line'):
-        _trend_rows(payload, 'ScriptedTrendLargestDelta', results, largest[1],
-                    'Largest coincident delta: {} ({:+.1f} pp, {})'.format(largest[2], largest[0], largest[3]))
 
 def _line_pairs(results, case):
     return [record for record in paired(results, 'line', case, True) if record['ref'] is not None and record['outage'] is not None]
@@ -2789,6 +3486,943 @@ def _calculation_runs(payload, results, request):
             'period_text': '-', 'time_steps': 0, 'elapsed_text': '-', 'status': plan['status'], 'provenance_text': 'NOT CALCULATED',
             'result_object': '-', 'note': plan.get('reason') or '-'})
 
+
+
+def n1_value_text(quantity, value):
+    if value is None:
+        return 'inside recording limits'
+    return '{:.1f} %'.format(value) if quantity == 'loading' else '{:.3f} p.u.'.format(value)
+
+
+def n1_limit_text(limit):
+    if not isinstance(limit, dict):
+        return '-'
+    if limit.get('quantity') == 'loading':
+        return 'max {} %'.format(format_limit(limit['max'])) if limit.get('max') is not None else '-'
+    if limit.get('min') is None or limit.get('max') is None:
+        return '-'
+    return '{}-{} p.u.'.format(format_limit(limit['min']), format_limit(limit['max']))
+
+
+# --- data contract 7.0: the main and the detail report from the reporting core -------------------------
+# Both templates read the same tables; each shows its chapters. Every count is taken from the complete
+# statistics before any display limit, and both reports print the same numbers for the same run ID.
+MAIN_ELEMENT_LIMITS = (('line', 20), ('transformer', 15), ('node', 20))
+MAIN_EVENTS_PER_CRITERION = 10
+MAIN_REFERENCE_ROWS = 10
+RANKING_ROWS = 10
+CRITERION_LABELS = {'loading': 'Loading', 'voltage_low': 'Voltage low', 'voltage_high': 'Voltage high'}
+CATEGORY_TYPES = {'line': 'Line', 'transformer': 'Transformer', 'node': 'Node', 'voltage': 'Node'}
+STATUS_LETTERS = (('NEW', 'N'), ('WORSENED', 'W'), ('PRE_EXISTING', 'P'), ('IMPROVED', 'I'), ('RESOLVED', 'R'))
+LEVEL_N0 = 'n-0'
+
+
+def status_text(status):
+    return status.replace('_', '-')
+
+
+def status_violation(status):
+    """Row colour of a status: 1 red (NEW, WORSENED), 2 yellow (other violations, quality), 0 neutral."""
+    if status in ('NEW', 'WORSENED'):
+        return 1
+    return 2 if status in ('PRE_EXISTING', 'IMPROVED') + QUALITY_STATUSES else 0
+
+
+def criterion_value_text(criterion, value):
+    if value is None:
+        return '-'
+    return '{:.1f} %'.format(value) if criterion == 'loading' else '{:.3f} p.u.'.format(value)
+
+
+def criterion_limit_text(criterion, threshold):
+    if threshold is None:
+        return '-'
+    if criterion == 'loading':
+        return 'max {} %'.format(format_limit(threshold))
+    return '{} {} p.u.'.format('min' if criterion == 'voltage_low' else 'max', format_limit(threshold))
+
+
+def violation_amount_text(criterion, size):
+    """How far a value lies beyond its limit (pp for loading, p.u. for voltage); '-' within the limit."""
+    if size is None or size <= 0:
+        return '-'
+    return '{:.1f} pp'.format(size) if criterion == 'loading' else '{:.3f} p.u.'.format(size)
+
+
+def change_amount_text(criterion, change):
+    if change is None:
+        return '-'
+    return '{:+.1f} pp'.format(change) if criterion == 'loading' else '{:+.3f} p.u.'.format(change)
+
+
+def _time_text(moment):
+    return _format_pf_time(moment) or '-'
+
+
+def _count_text(count, singular, plural=None):
+    return '{} {}'.format(count, singular if count == 1 else plural or singular + 's')
+
+
+def planning_results(results):
+    """(order, result) of every planning case in run order, calculated or not: one numbering for every table."""
+    return list(enumerate((result for result in results if result['id'] != REFERENCE_ID), 1))
+
+
+def _n1_cases(results):
+    """(order, case, n-1 entry) of every case whose n-1 was evaluated by the reporting core."""
+    return [(order, case, case['n1']) for order, case in planning_results(results)
+            if (case.get('n1') or {}).get('status') == 'EVALUATED' and case['n1'].get('statistics')]
+
+
+def _n1_failed(results):
+    """(order, case, n-1 entry) of every case whose n-1 was requested but not evaluated."""
+    return [(order, case, case['n1']) for order, case in planning_results(results)
+            if case.get('n1') and case['n1'].get('status') != 'EVALUATED']
+
+
+def _names(entry):
+    return entry['statistics'].get('meta') or {name: {} for name in ('elements', 'contingencies', 'categories', 'grids',
+                                                                     'nominal_kv')}
+
+
+def _element_type(meta, element):
+    return CATEGORY_TYPES.get(meta['categories'].get(element), 'Element')
+
+
+def _element_group(meta, element):
+    category = meta['categories'].get(element)
+    return REPORT_CATEGORY.get(category, 'line')
+
+
+def _voltage_level_text(meta, element):
+    kv = meta['nominal_kv'].get(element)
+    return '{} kV'.format(format_limit(kv)) if kv else '-'
+
+
+def _source_text(entry, level):
+    for kind, obj in entry.get('result_objects') or ():
+        if kind == level and obj is not None:
+            return object_name(obj)
+    return 'read at once (not kept)'
+
+
+def _n0_case_statistics(result, reference):
+    """n-0 figures of a QDS case against REF: critical elements per class and distinct NEW/WORSENED elements."""
+    lines, transformers, nodes = _violation_counts(result)
+    statuses = [record['status'] for records in (result.get('comparison') or {}).values() for record in records]
+    return {'critical': {'line': lines, 'transformer': transformers, 'node': nodes},
+            'new': statuses.count(STATUS_NEW), 'worsened': statuses.count(STATUS_WORSENED)}
+
+
+def _case_statistics(payload, results, request):
+    """H02/H06: one row per case and level with distinct elements, events, contingencies, time points and completeness."""
+    table = payload['ScriptedCaseStatistics']
+    reference = find_reference(results)
+    if reference is not None:
+        n0 = qds_level_statistics(request.get('run_id') or '', reference)
+        table.append(_statistics_row(0, REFERENCE_NAME, LEVEL_N0, n0['critical'], 0, 0, None, None, None,
+                                     '{} of {} QDS steps'.format(n0['times_calculated'], n0['times_calculated']), 'BASELINE'))
+    for order, case in planning_results(results):
+        if case['status'] != CONVERGED:
+            table.append(_statistics_row(order, case['name'], LEVEL_N0, {'line': 0, 'transformer': 0, 'node': 0}, 0, 0, None, None,
+                                         None, case.get('message') or 'no result', ASSESSMENT_NOT_EVALUATED))
+            continue
+        figures = _n0_case_statistics(case, reference)
+        assessment = (judged(results, case) or {}).get('assessment') or ASSESSMENT_NO_DATA if reference is not None else 'NO REFERENCE'
+        table.append(_statistics_row(order, case['name'], LEVEL_N0, figures['critical'], figures['new'], figures['worsened'],
+                                     None, None, None, coverage_text_of(case), assessment))
+    union = {'critical': set(), 'contingencies': set(), 'times': set(), 'monitored': set(), 'requested': set(),
+             'calculated': 0}
+    for order, case, entry in _n1_cases(results):
+        level = entry['reference_statistics']
+        union['critical'] |= level['critical_set']
+        union['contingencies'] |= level['contingency_set']
+        union['times'] |= level['time_set']
+        union['requested'] |= set(entry.get('requested_times') or ())
+        union['meta'] = _names(entry)
+    if union['requested']:
+        meta = union['meta']
+        critical = {'line': 0, 'transformer': 0, 'node': 0}
+        for element in union['critical']:
+            critical[_element_group(meta, element)] += 1
+        table.append(_statistics_row(0, REFERENCE_NAME, N1_REFERENCE, critical, 0, 0, None, len(union['contingencies']),
+                                     len(union['times']), '{} study times in the outage windows'.format(len(union['requested'])),
+                                     'BASELINE'))
+    for order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        if stats['level'] != N1_PRIME:
+            continue
+        coverage = stats['coverage']
+        events = stats['events']
+        quality = sum(events[status] for status in QUALITY_STATUSES)
+        caused = events['NEW'] + events['WORSENED']
+        verdict = ('NEW OR WORSENED FINDINGS' if caused else 'INCOMPLETE COVERAGE' if quality - events['NOT_APPLICABLE'] > 0
+                   else 'NO ADDITIONAL VIOLATION' if events['PRE_EXISTING'] + events['IMPROVED'] else 'NO LIMIT EXCEEDED')
+        row = _statistics_row(order, case['name'], N1_PRIME, stats['critical'], sum(stats['new_elements'].values()),
+                              sum(stats['worsened_elements'].values()), events, stats['critical_contingencies'],
+                              stats['critical_times'], _pair_coverage_text(coverage), verdict)
+        row['episodes'] = stats['episodes']
+        table.append(row)
+    for order, case, entry in _n1_failed(results):
+        table.append(_statistics_row(order, case['name'], entry.get('kind') or N1_REFERENCE, {'line': 0, 'transformer': 0, 'node': 0},
+                                     0, 0, None, None, None, entry.get('reason') or 'not evaluated', ASSESSMENT_NOT_EVALUATED))
+
+
+def _statistics_row(order, name, level, critical, new, worsened, events, contingencies, times, completeness, verdict):
+    events = events or {}
+    quality = sum(events.get(status, 0) for status in QUALITY_STATUSES)
+    violation = (1 if new or worsened or events.get('NEW') or events.get('WORSENED') else
+                 2 if any(critical.values()) or quality or verdict in ('INCOMPLETE COVERAGE', ASSESSMENT_NOT_EVALUATED) else 0)
+    return {
+        'case_order': order, 'case_name': name, 'level': level, 'assessment': verdict,
+        'critical_lines': critical['line'], 'critical_transformers': critical['transformer'], 'critical_nodes': critical['node'],
+        'new_elements': new, 'worsened_elements': worsened,
+        'new_events': events.get('NEW', 0), 'worsened_events': events.get('WORSENED', 0),
+        'preexisting_events': events.get('PRE_EXISTING', 0), 'improved_events': events.get('IMPROVED', 0),
+        'resolved_events': events.get('RESOLVED', 0), 'quality_events': quality,
+        'critical_contingencies': contingencies or 0, 'critical_times': times or 0, 'episodes': 0,
+        'events_text': ('{} NEW · {} WORSENED'.format(events.get('NEW', 0), events.get('WORSENED', 0)) if events else
+                        'time steps, see the n-0 chapters' if level == LEVEL_N0 else '-'),
+        'contingencies_text': '-' if contingencies is None else str(contingencies),
+        'times_text': '-' if times is None else str(times),
+        'completeness_text': completeness or '-', 'violation': violation}
+
+
+def coverage_text_of(case):
+    coverage = (case.get('assessment') or {}).get('coverage')
+    return 'outage time covered: ' + percent_text(coverage) if coverage is not None else 'whole simulated period'
+
+
+def _pair_coverage_text(coverage):
+    required = coverage['cells_required']
+    share = coverage['cells_evaluated'] / required if required else None
+    return '{} of {} study times; {} of {} contingencies applicable; {} of cells evaluated'.format(
+        coverage['times_calculated'], coverage['times_requested'], coverage['contingencies_applicable'],
+        coverage['contingencies_defined'], percent_text(share) if share is not None else 'none')
+
+
+def _coverage(payload, results):
+    """H03/D01: requested against calculated study times, contingencies and cells per case and level (three axes)."""
+    reference = find_reference(results)
+    table = payload['ScriptedCoverage']
+    steps = len(reference['labels']) if reference is not None else 0
+    if reference is not None:
+        table.append(_coverage_row(0, REFERENCE_NAME, LEVEL_N0, steps, steps, {}, 'whole simulated period'))
+    for order, case in planning_results(results):
+        if case['status'] == CONVERGED:
+            table.append(_coverage_row(order, case['name'], LEVEL_N0, steps, len(case['labels']), {}, coverage_text_of(case)))
+        else:
+            table.append(_coverage_row(order, case['name'], LEVEL_N0, steps, 0, {},
+                                       'not evaluated: ' + (case.get('message') or 'no result')))
+    for order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        table.append(_coverage_row(order, case['name'], stats['level'], None, None, stats['coverage'],
+                                   _pair_coverage_text(stats['coverage'])))
+    for order, case, entry in _n1_failed(results):
+        table.append(_coverage_row(order, case['name'], entry.get('kind') or N1_REFERENCE, entry.get('times') or 0, 0, {},
+                                   'not evaluated: ' + (entry.get('reason') or 'no reason given')))
+
+
+def _coverage_row(order, name, level, requested, calculated, coverage, text):
+    quality = coverage.get('cells_quality') or {}
+    missing = (coverage.get('times_requested', requested or 0) - coverage.get('times_calculated', calculated or 0))
+    return {
+        'case_order': order, 'case_name': name, 'level': level,
+        'times_requested': coverage.get('times_requested', requested or 0),
+        'times_calculated': coverage.get('times_calculated', calculated or 0),
+        'contingencies_defined': coverage.get('contingencies_defined', 0),
+        'contingencies_applicable': coverage.get('contingencies_applicable', 0),
+        'pairs_examined': coverage.get('pairs_examined', 0), 'pairs_not_applicable': coverage.get('pairs_not_applicable', 0),
+        'pairs_failed': coverage.get('pairs_failed', 0), 'pairs_missing': coverage.get('pairs_missing_time', 0),
+        'cells_required': coverage.get('cells_required', 0), 'cells_evaluated': coverage.get('cells_evaluated', 0),
+        'failed_cells': quality.get('FAILED', 0), 'not_evaluated_cells': quality.get('NOT_EVALUATED', 0),
+        'not_applicable_cells': quality.get('NOT_APPLICABLE', 0), 'not_comparable_cells': quality.get('NOT_COMPARABLE', 0),
+        'coverage_text': text,
+        'violation': 2 if missing > 0 or text.startswith('not evaluated') or any(
+            quality.get(status) for status in ('FAILED', 'NOT_EVALUATED', 'NOT_COMPARABLE')) else 0}
+
+
+def _scope(payload, results):
+    """D01: monitored, critical and not completely evaluable elements per level, grid, voltage level and class."""
+    table = payload['ScriptedScope']
+    reference = find_reference(results)
+    if reference is not None:
+        n0 = {}
+        for category in ('line', 'transformer', 'voltage'):
+            for item, stats in reference['by_category'].get(category, ()):
+                kv = item.get('nominal_kv') if category == 'voltage' else None
+                key = (element_grid_name(item.get('object')) or '-', '{} kV'.format(format_limit(kv)) if kv else '-',
+                       REPORT_CATEGORY[category])
+                entry = n0.setdefault(key, [0, 0, 0])
+                entry[0] += 1
+                entry[1] += bool(stats is not None and is_critical(item, stats))
+                entry[2] += stats is None
+        for (grid, level_text, category), (monitored, critical, incomplete) in sorted(n0.items()):
+            table.append({'case_order': 0, 'case_name': REFERENCE_NAME, 'level': LEVEL_N0, 'grid_name': grid,
+                          'voltage_level': level_text, 'element_class': CATEGORY_TYPES[category], 'monitored': monitored,
+                          'critical': critical, 'incomplete': incomplete})
+    for order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        for (grid, level_text, category), counts in sorted(stats['scope'].items()):
+            table.append({'case_order': order, 'case_name': case['name'], 'level': stats['level'], 'grid_name': grid or '-',
+                          'voltage_level': level_text, 'element_class': CATEGORY_TYPES[category],
+                          'monitored': counts['monitored'], 'critical': counts['critical'], 'incomplete': counts['incomplete']})
+
+
+def _outage_windows(payload, request):
+    """H04/D02: every planned outage of every case with its PowerFactory object, equipment and window (Gantt rows)."""
+    order = 0
+    origin = None
+    rows = []
+    for case_order, plan in enumerate(request.get('cases') or (), 1):
+        for record in plan['members']:
+            start, end = plan['windows'].get(record['key'], (None, None))
+            rows.append((case_order, plan, record, start, end))
+            if start is not None:
+                origin = start if origin is None else min(origin, start)
+    for case_order, plan, record, start, end in rows:
+        order += 1
+        payload['ScriptedOutageWindows'].append({
+            'row_order': order, 'case_order': case_order, 'case_name': plan['name'], 'outage_name': record['name'],
+            'outage_path': record['key'], 'equipment_name': record.get('equipment_name') or '-',
+            'start_text': _time_text(start), 'end_text': _time_text(end),
+            'start_hours': (start - origin) / 3600.0 if start is not None and origin is not None else 0.0,
+            'end_hours': (end - origin) / 3600.0 if end is not None and origin is not None else 0.0,
+            'gantt_label': '{} · {}'.format(plan['name'], record['name'])})
+
+
+def _element_view(results):
+    """Per element and criterion: the n-1 reference extreme over every case and the (n-1)' extreme and counters per case."""
+    view = {}
+    for order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        meta = _names(entry)
+        prime = stats['level'] == N1_PRIME
+        switched = set(stats.get('switched_off_keys') or ())
+        elements = set(stats['element_extremes']) | set(stats['element_status'])
+        for element in elements:
+            group = _element_group(meta, element)
+            for criterion in (('loading',) if group != 'node' else ('voltage_low', 'voltage_high')):
+                record = view.setdefault((element, criterion), {
+                    'element': element, 'criterion': criterion, 'group': group, 'name': meta['elements'].get(element, element),
+                    'grid': meta['grids'].get(element) or '-', 'voltage_level': _voltage_level_text(meta, element),
+                    'threshold': element_thresholds(meta, element).get(criterion), 'reference': None, 'cases': {},
+                    'statuses': set(), 'quality': False})
+                extremes = stats['element_extremes'].get(element, {})
+                found = extremes.get((criterion, 'reference'))
+                if found is not None and (record['reference'] is None or found[0] > record['reference'][0]):
+                    record['reference'] = found
+                explicit = {status: count for (crit, status), count in stats['element_status'].get(element, {}).items()
+                            if crit == criterion}
+                if not prime:
+                    explicit = {}
+                record['statuses'] |= {status for status, count in explicit.items() if count}
+                record['quality'] |= any(explicit.get(status) for status in QUALITY_STATUSES)
+                if prime:
+                    record['cases'][case['id']] = {'extreme': extremes.get((criterion, 'scenario')), 'counts': explicit,
+                                                   'switched_off': element in switched}
+        for element in switched:
+            for criterion in CRITERIA:
+                record = view.get((element, criterion))
+                if record is not None and prime:
+                    record['cases'][case['id']] = {'extreme': None, 'counts': {}, 'switched_off': True}
+    # An element without a value beyond the recording limits in an examined scenario lies inside them there.
+    examined = [case['id'] for _order, case, entry in _n1_cases(results)
+                if entry['statistics']['level'] == N1_PRIME and entry['statistics']['coverage']['pairs_examined']]
+    for record in view.values():
+        for case_id in examined:
+            record['cases'].setdefault(case_id, {'extreme': None, 'counts': {}, 'switched_off': False})
+    return view
+
+
+def _conspicuous(record):
+    """An element and criterion the detail report lists: a finding, a quality problem, a reference violation or a warning."""
+    if record['statuses'] - {'OK'} or record['quality']:
+        return True
+    sizes = [record['reference']] + [entry['extreme'] for entry in record['cases'].values()]
+    if any(found is not None and found[0] > 0 for found in sizes):
+        return True
+    if record['criterion'] == 'loading':
+        warning = loading_warning(record['group'])
+        return any(found is not None and found[1] >= warning for found in sizes)
+    return False
+
+
+def _rank(record):
+    """Main-report order: NEW/WORSENED first, then absolute violations and quality, then the rest; worst first."""
+    group = 0 if record['statuses'] & {'NEW', 'WORSENED'} else 1 if (
+        record['statuses'] & {'PRE_EXISTING', 'IMPROVED'} or record['quality'] or
+        (record['reference'] is not None and record['reference'][0] > 0)) else 2
+    sizes = [found[0] for found in [record['reference']] + [entry['extreme'] for entry in record['cases'].values()]
+             if found is not None]
+    return (group, -(max(sizes) if sizes else float('-inf')), record['name'].casefold())
+
+
+def _counter_text(counts):
+    parts = ['{} {}'.format(letter, counts[status]) for status, letter in STATUS_LETTERS if counts.get(status)]
+    quality = sum(counts.get(status, 0) for status in QUALITY_STATUSES)
+    if quality:
+        parts.append('Q {}'.format(quality))
+    return ' · '.join(parts)
+
+
+def _extreme_text(criterion, found, with_key=False):
+    if found is None:
+        return 'inside recording limits'
+    text = criterion_value_text(criterion, found[1])
+    if with_key:
+        text += '\n{} · {}'.format(_time_text(found[2]), element_label(found[3]) if found[3] else '-')
+    return text
+
+
+def _case_cell(record, case_id, with_key=False, counters=True):
+    entry = record['cases'].get(case_id)
+    if entry is None:
+        return 'n/a'
+    if entry['switched_off']:
+        return 'switched off by the case'
+    text = _extreme_text(record['criterion'], entry['extreme'], with_key)
+    counted = _counter_text(entry['counts']) if counters else ''
+    return text + ('\n' + counted if counted else '')
+
+
+def _record_violation(record):
+    if record['statuses'] & {'NEW', 'WORSENED'}:
+        return 1
+    return 2 if record['statuses'] & {'PRE_EXISTING', 'IMPROVED'} or record['quality'] or (
+        record['reference'] is not None and record['reference'][0] > 0) else 0
+
+
+def _prime_columns(results):
+    return [(case['id'], case['name']) for _order, case, entry in _n1_cases(results) if entry['statistics']['level'] == N1_PRIME]
+
+
+def _block_rows(payload, table, columns, entries, slots, priority=None):
+    """entries (name, ref text, {column id: text}, violation) as blocks of `slots` scenario columns; any number of blocks.
+
+    When the blocks together would exceed MAX_TABLE_ROWS, every block keeps the
+    same rows: the most severe by `priority` (one sort key per entry), in their
+    order; the cut is named in the model quality, the statistics stay complete.
+    """
+    blocks = [columns[start:start + slots] for start in range(0, len(columns), slots)] or [[]]
+    room = MAX_TABLE_ROWS // len(blocks)
+    if len(entries) > room:
+        order = sorted(range(len(entries)), key=lambda index: priority[index]) if priority else range(len(entries))
+        keep = set(list(order)[:room])
+        _table_cut(payload, table, '{} of {} rows in each of the {} scenario block(s), the most severe first'.format(
+            room, len(entries), len(blocks)))
+        entries = [entry for index, entry in enumerate(entries) if index in keep]
+    for number, block in enumerate(blocks, 1):
+        for order, (name, ref_text, texts, violation) in enumerate(entries, 1):
+            row = {'block': number, 'row_order': order, 'element_name': name, 'ref_text': ref_text, 'col_count': len(block),
+                   'violation': violation}
+            for slot, column in enumerate(block, 1):
+                row[case_name_field(slot)] = column[1]
+                row[case_text_field(slot)] = texts.get(column[0], 'n/a')
+            payload[table].append(row)
+
+
+def _table_cut(payload, table, text):
+    _quality(payload, 'table_limit_' + table, 'Table limit ' + table, 'FAIL',
+             'Published: {} (MAX_TABLE_ROWS {}). The register is incomplete in print; every count and statistic includes '
+             'the rows left out.'.format(text, MAX_TABLE_ROWS))
+
+
+def _fair_cut(payload, table, group, priority):
+    """At most MAX_TABLE_ROWS rows of `table`, shared between the groups (cases): small groups keep everything, the
+    others an equal share of the rest; each group keeps its most severe rows (`priority`), in their order."""
+    rows = payload[table]
+    if len(rows) <= MAX_TABLE_ROWS:
+        return
+    groups = {}
+    for row in rows:
+        groups.setdefault(group(row), []).append(row)
+    remaining, kept = MAX_TABLE_ROWS, set()
+    for position, (_key, members) in enumerate(sorted(groups.items(), key=lambda item: len(item[1]))):
+        take = min(len(members), remaining // (len(groups) - position))
+        kept.update(id(row) for row in sorted(members, key=priority)[:take])
+        remaining -= take
+    _table_cut(payload, table, '{} of {} rows, shared between {} group(s), the most severe first'.format(
+        len(kept), len(rows), len(groups)))
+    payload[table][:] = [row for row in rows if id(row) in kept]
+
+
+def _critical_elements(payload, results, view, notes):
+    """H07: up to 20 lines, 15 transformers and 20 nodes, most critical first; 'shown x of y' from the full count."""
+    columns = _prime_columns(results)
+    tables = {'line': 'ScriptedCriticalLines', 'transformer': 'ScriptedCriticalTransformers', 'node': 'ScriptedCriticalNodes'}
+    for group, limit in MAIN_ELEMENT_LIMITS:
+        if group == 'node':
+            records = _node_records(view)
+        else:
+            records = [record for record in view.values() if record['group'] == group and _conspicuous(record)]
+        records.sort(key=_rank)
+        notes[group] = (min(limit, len(records)), len(records))
+        entries = []
+        for record in records[:limit]:
+            if group == 'node':
+                low, high = record['low'], record['high']
+                ref_text = '{} / {}'.format(_extreme_text('voltage_low', low['reference'] if low else None).split(' p.u.')[0],
+                                            _extreme_text('voltage_high', high['reference'] if high else None))
+                texts = {case_id: _node_cell(low, high, case_id) for case_id, _ in columns}
+            else:
+                ref_text = '{} ({})'.format(_extreme_text(record['criterion'], record['reference']),
+                                            criterion_limit_text(record['criterion'], record['threshold']))
+                texts = {case_id: _case_cell(record, case_id) for case_id, _ in columns}
+            entries.append((record['name'], ref_text, texts, _record_violation(record)))
+        _block_rows(payload, tables[group], columns, entries, CASE_SLOTS)
+
+
+def _node_records(view):
+    """Nodes with their low and high voltage records side by side (H07 shows both directions in one row)."""
+    nodes = {}
+    for (element, criterion), record in view.items():
+        if record['group'] != 'node':
+            continue
+        nodes.setdefault(element, {'low': None, 'high': None})['low' if criterion == 'voltage_low' else 'high'] = record
+    merged = []
+    for element, pair in nodes.items():
+        parts = [part for part in (pair['low'], pair['high']) if part is not None]
+        if not any(_conspicuous(part) for part in parts):
+            continue
+        ranked = min(parts, key=_rank)
+        merged.append(dict(ranked, low=pair['low'], high=pair['high'], statuses=set().union(*(p['statuses'] for p in parts)),
+                           quality=any(p['quality'] for p in parts)))
+    return merged
+
+
+def _node_cell(low, high, case_id):
+    entries = [(record, record['cases'].get(case_id)) for record in (low, high) if record is not None]
+    if not any(entry for _, entry in entries):
+        return 'n/a'
+    if any(entry and entry['switched_off'] for _, entry in entries):
+        return 'switched off by the case'
+    values, counts = [], {}
+    for record, entry in entries:
+        if entry is None:
+            continue
+        values.append(_extreme_text(record['criterion'], entry['extreme']).replace(' p.u.', ''))
+        for status, count in entry['counts'].items():
+            counts[status] = counts.get(status, 0) + count
+    counted = _counter_text(counts)
+    return ' / '.join(values) + ' p.u.' * ('inside' not in ' '.join(values)) + ('\n' + counted if counted else '')
+
+
+def _detail_matrices(payload, results, view):
+    """D04-D06b: every conspicuous element, blocks of three scenarios, each extreme with its study time and contingency."""
+    columns = _prime_columns(results)
+    for table, group, criterion in (('ScriptedDetailLines', 'line', 'loading'),
+                                    ('ScriptedDetailTransformers', 'transformer', 'loading'),
+                                    ('ScriptedDetailVoltageLow', 'node', 'voltage_low'),
+                                    ('ScriptedDetailVoltageHigh', 'node', 'voltage_high')):
+        records = [record for record in view.values()
+                   if record['group'] == group and record['criterion'] == criterion and _conspicuous(record)]
+        records.sort(key=lambda record: (record['grid'].casefold(), record['voltage_level'], record['name'].casefold()))
+        entries = []
+        for record in records:
+            # The name is shortened, not the second line: grid, voltage level and limit stay readable.
+            name = '{}\n{}'.format(clip_text(record['name'], MAX_LABEL_LENGTH // 2), ' · '.join(part for part in (
+                record['grid'], record['voltage_level'], criterion_limit_text(criterion, record['threshold'])) if part and part != '-'))
+            texts = {case_id: _case_cell(record, case_id, with_key=True, counters=False) for case_id, _ in columns}
+            entries.append((name, _extreme_text(criterion, record['reference'], with_key=True), texts,
+                            _record_violation(record)))
+        _block_rows(payload, table, columns, entries, DETAIL_SLOTS, [_rank(record) for record in records])
+
+
+def _classification(payload, results, view):
+    """D07: element x scenario status counters, as text in blocks of three and as full integer counters."""
+    columns = _prime_columns(results)
+    by_case = {case['id']: (order, case, entry) for order, case, entry in _n1_cases(results)}
+    records = sorted((record for record in view.values() if _conspicuous(record)),
+                     key=lambda record: (record['group'] != 'line', record['group'] != 'transformer', record['grid'].casefold(),
+                                         record['name'].casefold(), record['criterion']))
+    entries = []
+    for record in records:
+        texts = {}
+        for case_id, case_name in columns:
+            order, case, entry = by_case[case_id]
+            cell = record['cases'].get(case_id)
+            if cell is None:
+                texts[case_id] = 'n/a'
+                continue
+            if cell['switched_off']:
+                texts[case_id] = 'switched off by the case'
+                continue
+            counters = element_counters(entry['statistics'], record['element'], record['criterion'])
+            texts[case_id] = _counter_text(counters) or 'OK only'
+        entries.append((record['name'], '{} ({})'.format(CRITERION_LABELS[record['criterion']], CRITERION_UNIT[record['criterion']]),
+                        texts, _record_violation(record)))
+    _block_rows(payload, 'ScriptedClassificationMatrix', columns, entries, DETAIL_SLOTS, [_rank(record) for record in records])
+
+
+def _reference_findings(payload, results):
+    """H05/D03: n-0 base findings from the QDS REF and n-1 reference findings, thermal and voltage kept apart."""
+    rows = []
+    reference = find_reference(results)
+    if reference is not None:
+        for category in ('line', 'transformer', 'voltage'):
+            for item, stats in reference['by_category'].get(category, ()):
+                if stats is None:
+                    continue
+                if category == 'voltage':
+                    lower, upper = voltage_limits(item)
+                    checks = (('voltage_low', stats['min'], lower, stats['time_min']), ('voltage_high', stats['max'], upper, stats['time_max']))
+                else:
+                    checks = (('loading', stats['max'], loading_limit(category), stats['time_max']),)
+                for criterion, value, threshold, moment in checks:
+                    size = criterion_violation(criterion, value, threshold)
+                    warning = criterion == 'loading' and value >= loading_warning(category)
+                    if (size is None or size <= NUMERIC_TOLERANCE) and not warning:
+                        continue
+                    status = 'VIOLATED' if size is not None and size > NUMERIC_TOLERANCE else 'WARNING'
+                    rows.append((LEVEL_N0, criterion, size or 0.0, {
+                        'level': LEVEL_N0, 'element_name': item['element_name'], 'element_type': CATEGORY_TYPES[category],
+                        'grid_name': element_grid_name(item.get('object')) or '-', 'criterion': CRITERION_LABELS[criterion],
+                        'value_text': criterion_value_text(criterion, value), 'limit_text': criterion_limit_text(criterion, threshold),
+                        'violation_text': violation_amount_text(criterion, size), 'time_label': moment or '-',
+                        'contingency_name': '-', 'status': status, 'source_text': reference.get('result_object') or REFERENCE_ID,
+                        'violation': 2 if status == 'VIOLATED' else 0}))
+    view = _element_view(results)
+    sources = {}
+    for _order, _case, entry in _n1_cases(results):
+        sources.setdefault('n-1', _source_text(entry, N1_REFERENCE))
+    for record in view.values():
+        found = record['reference']
+        if found is None:
+            continue
+        criterion = record['criterion']
+        warning = criterion == 'loading' and found[1] >= loading_warning(record['group'])
+        if found[0] <= NUMERIC_TOLERANCE and not warning:
+            continue
+        status = 'VIOLATED' if found[0] > NUMERIC_TOLERANCE else 'WARNING'
+        rows.append((N1_REFERENCE, criterion, found[0], {
+            'level': N1_REFERENCE, 'element_name': record['name'], 'element_type': CATEGORY_TYPES[record['group']],
+            'grid_name': record['grid'], 'criterion': CRITERION_LABELS[criterion],
+            'value_text': criterion_value_text(criterion, found[1]), 'limit_text': criterion_limit_text(criterion, record['threshold']),
+            'violation_text': violation_amount_text(criterion, found[0]), 'time_label': _time_text(found[2]),
+            'contingency_name': element_label(found[3]) if found[3] else '-', 'status': status,
+            'source_text': sources.get('n-1', '-'), 'violation': 2 if status == 'VIOLATED' else 0}))
+    rows.sort(key=lambda row: (row[0] != LEVEL_N0, CRITERIA.index(row[1]), -row[2], row[3]['element_name'].casefold()))
+    ranks, order = {}, 0
+    for level, criterion, _size, row in rows:
+        key = (level, criterion)
+        ranks[key] = ranks.get(key, 0) + 1
+        if level != LEVEL_N0 and ranks[key] > MAIN_REFERENCE_ROWS:
+            continue  # n-1 reference rows appear only in the main report's top list (the detail report shows n-0, D03)
+        order += 1
+        row.update(row_order=order, criterion_order=CRITERIA.index(criterion), main_rank=ranks[key] if ranks[key] <= MAIN_REFERENCE_ROWS else 0)
+        payload['ScriptedReferenceFindings'].append(row)
+
+
+def _case_status_counts(payload, results):
+    """H06 chart: findings (study time x contingency x element x criterion) per scenario and status."""
+    for order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        if stats['level'] != N1_PRIME:
+            continue
+        events = stats['events']
+        payload['ScriptedCaseStatusCounts'].append({
+            'case_order': order, 'case_name': case['name'], 'new_count': events['NEW'], 'worsened_count': events['WORSENED'],
+            'improved_count': events['IMPROVED'], 'resolved_count': events['RESOLVED']})
+
+
+def _contingency_register(payload, results):
+    """D08 and the H08 ranking: per scenario and contingency, examined/applicable/failed study times and findings."""
+    totals = {}
+    for order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        meta = _names(entry)
+        outaged = stats.get('contingency_elements') or {}
+        rows = []
+        for contingency, register in stats['register'].items():
+            events = sum(register['events'].values())
+            if not (events or register['not_applicable'] or register['failed']):
+                continue
+            name = meta['contingencies'].get(contingency, element_label(contingency))
+            worst = register['worst']
+            worst_text = '-'
+            if worst is not None:
+                _finding, status, element, criterion, moment, violation = worst
+                worst_text = '{} {} {} {} at {}'.format(status_text(status), meta['elements'].get(element, element),
+                                                        CRITERION_LABELS[criterion].lower(),
+                                                        violation_amount_text(criterion, violation), _time_text(moment))
+            rows.append((-events, name.casefold(), {
+                'case_order': order, 'case_name': case['name'], 'level': stats['level'], 'contingency_name': name,
+                'equipment_name': ', '.join(sorted(meta['elements'].get(key, element_label(key)) for key in outaged.get(contingency, ()))) or '-',
+                'examined_times': register['examined'], 'not_applicable_times': register['not_applicable'],
+                'failed_times': register['failed'], 'missing_times': register['missing'],
+                'affected_elements': len(register['elements']), 'critical_times': len(register['critical_times']),
+                'new_events': register['events']['NEW'], 'worsened_events': register['events']['WORSENED'],
+                'violation_events': events, 'worst_text': worst_text,
+                'violation': 1 if register['events']['NEW'] + register['events']['WORSENED'] else 2 if events or register['failed'] else 0}))
+            if stats['level'] == N1_PRIME or not _prime_columns(results):
+                totals[name] = totals.get(name, 0) + events
+        for row_order, (_events, _name, row) in enumerate(sorted(rows, key=lambda item: item[:2]), 1):
+            row['row_order'] = row_order
+            payload['ScriptedContingencyRegister'].append(row)
+    ranked = sorted(((count, name) for name, count in totals.items() if count), key=lambda item: (-item[0], item[1].casefold()))
+    for rank, (count, name) in enumerate(ranked[:RANKING_ROWS], 1):
+        payload['ScriptedContingencyRanking'].append({'rank': rank, 'contingency_name': name, 'finding_count': count})
+
+
+def _contingency_events(payload, results, notes):
+    """H08 top findings per criterion and the D09 selection of single findings with their complete key."""
+    main = []
+    listed = total = 0
+    for order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        meta = _names(entry)
+        source = _source_text(entry, stats['level'] if stats['level'] == N1_PRIME else N1_REFERENCE)
+        listed += len(stats['events_top'])
+        total += stats['events_listed']
+        for row_order, event in enumerate(stats['events_top'], 1):
+            criterion = event['criterion']
+            row = {
+                'case_order': order, 'case_name': case['name'], 'row_order': row_order, 'level': stats['level'],
+                'time_label': _time_text(event['time']), 'contingency_name': meta['contingencies'].get(event['contingency'], event['contingency']),
+                'phase': event['phase'], 'element_name': meta['elements'].get(event['element'], event['element']),
+                'element_type': _element_type(meta, event['element']), 'criterion': CRITERION_LABELS[criterion],
+                'criterion_order': CRITERIA.index(criterion), 'unit': event['unit'],
+                'reference_text': criterion_value_text(criterion, event['reference_value']) if event['reference_value'] is not None else 'inside recording limits',
+                'scenario_text': criterion_value_text(criterion, event['scenario_value']) if event['scenario_value'] is not None else 'inside recording limits',
+                'limit_text': criterion_limit_text(criterion, event['threshold']),
+                'violation_text': violation_amount_text(criterion, event['violation']),
+                'change_text': change_amount_text(criterion, event['change']), 'status': status_text(event['status']),
+                'source_text': source, 'main_rank': 0,
+                'violation': status_violation(event['status'])}
+            payload['ScriptedContingencyEvents'].append(row)
+            main.append(row)
+    ranks = {}
+    for row in sorted(main, key=lambda row: (row['criterion_order'], STATUS_RANK[row['status'].replace('-', '_')],
+                                             -(_amount(row['violation_text'])), row['case_order'], row['row_order'])):
+        ranks[row['criterion_order']] = ranks.get(row['criterion_order'], 0) + 1
+        if ranks[row['criterion_order']] <= MAIN_EVENTS_PER_CRITERION:
+            row['main_rank'] = ranks[row['criterion_order']]
+    notes['events'] = (listed, total)
+
+
+def _amount(text):
+    try:
+        return float(text.split()[0])
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def _episodes(payload, results):
+    """D10: every critical episode (consecutive examined study times with the same finding)."""
+    for order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        meta = _names(entry)
+        source = _source_text(entry, N1_PRIME if stats['level'] == N1_PRIME else N1_REFERENCE)
+        for row_order, episode in enumerate(stats['episode_list'], 1):
+            criterion = episode['criterion']
+            payload['ScriptedContingencyEpisodes'].append({
+                'case_order': order, 'case_name': case['name'], 'row_order': row_order, 'level': stats['level'],
+                'contingency_name': meta['contingencies'].get(episode['contingency'], episode['contingency']),
+                'element_name': meta['elements'].get(episode['element'], episode['element']),
+                'element_type': _element_type(meta, episode['element']), 'criterion': CRITERION_LABELS[criterion],
+                'phase': episode['phase'], 'status': status_text(episode['status']), 'first_text': _time_text(episode['first']),
+                'last_text': _time_text(episode['last']), 'points': episode['points'],
+                'peak_text': violation_amount_text(criterion, episode['peak']), 'peak_time': _time_text(episode['peak_time']),
+                'source_text': source, 'violation': status_violation(episode['status'])})
+
+
+def _quality_register(payload, results):
+    """D11: every quality status with cause and scope, grouped per cause and contingency; cases not evaluated as a whole."""
+    order = 0
+    for case_order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        meta = _names(entry)
+        grouped = {}
+        for item in stats['quality']:
+            key = (item['status'], item['cause'], item['contingency'])
+            found = grouped.setdefault(key, {'times': set(), 'cells': 0})
+            found['times'].add(item['time'])
+            found['cells'] += item['cells']
+        for (status, cause, contingency), found in sorted(grouped.items(), key=lambda entry: (STATUS_RANK[entry[0][0]], entry[0][1], entry[0][2])):
+            order += 1
+            times = sorted(found['times'], key=lambda value: (value is None, value))
+            payload['ScriptedQualityRegister'].append({
+                'row_order': order, 'case_order': case_order, 'case_name': case['name'], 'level': stats['level'],
+                'status': status_text(status), 'cause': cause,
+                'contingency_name': 'every contingency' if contingency == '*' else meta['contingencies'].get(contingency, contingency),
+                'time_text': '{} to {} ({})'.format(_time_text(times[0]), _time_text(times[-1]), _count_text(len(times), 'study time'))
+                if times else '-', 'cells': found['cells'], 'violation': 0 if status == 'NOT_APPLICABLE' else 2})
+    for case_order, case, entry in _n1_failed(results):
+        order += 1
+        payload['ScriptedQualityRegister'].append({
+            'row_order': order, 'case_order': case_order, 'case_name': case['name'], 'level': entry.get('kind') or N1_REFERENCE,
+            'status': 'NOT-EVALUATED', 'cause': entry.get('reason') or 'not evaluated', 'contingency_name': 'every contingency',
+            'time_text': 'every study time of the case', 'cells': 0, 'violation': 2})
+    for case_order, case in planning_results(results):
+        if case['status'] != CONVERGED:
+            order += 1
+            payload['ScriptedQualityRegister'].append({
+                'row_order': order, 'case_order': case_order, 'case_name': case['name'], 'level': LEVEL_N0,
+                'status': 'FAILED', 'cause': case.get('message') or 'no QDS result', 'contingency_name': '-',
+                'time_text': 'every time step of the case', 'cells': 0, 'violation': 2})
+
+
+def _time_criticality(payload, results, notes):
+    """H09: distinct critical elements per actual study time (n-1 reference and (n-1)' over every scenario) and per scenario."""
+    columns = _prime_columns(results)
+    per_time = {}
+    for order, case, entry in _n1_cases(results):
+        stats = entry['statistics']
+        prime = stats['level'] == N1_PRIME
+        for row in stats['time_criticality']:
+            found = per_time.setdefault(row['time'], {'reference': set(), 'scenario': set(), 'caused': set(), 'cases': {}})
+            found['reference'] |= row['reference_set'] if prime else row['critical_set']
+            if prime:
+                found['scenario'] |= row['critical_set']
+                found['caused'] |= row['caused_set']
+                found['cases'][case['id']] = row
+    entries = []
+    for moment in sorted(per_time):
+        found = per_time[moment]
+        payload['ScriptedTimeCriticality'].append({
+            'time_label': _time_text(moment), 'timestamp': float(moment), 'chart_title': 'Distinct critical elements per study time',
+            'unit': 'elements', series_name_field(0): 'n-1 reference', series_value_field(0): float(len(found['reference'])),
+            series_name_field(1): "(n-1)' all scenarios", series_value_field(1): float(len(found['scenario']))})
+        texts = {}
+        for case_id, _name in columns:
+            row = found['cases'].get(case_id)
+            texts[case_id] = ('E {} · C {}'.format(row['critical_elements'], row['critical_contingencies'])
+                              if row is not None else 'not assessed')
+        entries.append((_time_text(moment), str(len(found['reference'])), texts,
+                        1 if found['caused'] else 2 if found['scenario'] or found['reference'] else 0))
+    _block_rows(payload, 'ScriptedTimeMatrix', columns, entries, CASE_SLOTS)
+    notes['times'] = len(per_time)
+
+
+def _assessment_settings(payload):
+    """H10/D12: every setting of the run with its value, unit, origin and whether it is applied."""
+    snapshot = settings_snapshot(active_overrides())
+    for order, setting in enumerate(SETTINGS, 1):
+        key = setting['key']
+        if key not in snapshot['values']:
+            value, origin, status = NOT_VERIFIED, setting['source'], 'not applied (' + NOT_VERIFIED + ')'
+        else:
+            value, origin = setting_text(key, snapshot['values'][key]), snapshot['sources'][key]
+            status = ('applied' if setting['category'] != CATEGORY_CALCULATION else
+                      snapshot['calculation_parameters'].get(key, NOT_VERIFIED))
+        payload['ScriptedAssessmentSettings'].append({
+            'row_order': order, 'section': setting['section'], 'setting_key': key, 'label': setting['label'],
+            'value_text': value, 'unit': setting.get('unit') or '-', 'origin': origin, 'status': status})
+
+
+def _result_provenance(payload, results):
+    """H10/D12: every result object the report rests on, with its PowerFactory path where it is known."""
+    order = 0
+    for result in results:
+        order += 1
+        payload['ScriptedResultProvenance'].append({
+            'row_order': order, 'level': LEVEL_N0, 'case_name': _result_name(result), 'object_name': result.get('result_object') or '-',
+            'object_path': result.get('result_path') or '-', 'content_text': '{} QDS time steps'.format(len(result.get('labels') or ())),
+            'status': result['status']})
+    for _order, case, entry in _n1_cases(results):
+        for kind, obj in entry.get('result_objects') or ():
+            order += 1
+            payload['ScriptedResultProvenance'].append({
+                'row_order': order, 'level': kind, 'case_name': case['name'],
+                'object_name': object_name(obj) if obj is not None else 'read at once (not kept)',
+                'object_path': object_key(obj) if obj is not None else '-',
+                'content_text': '{} study times requested'.format(len(entry.get('requested_times') or ())), 'status': 'EVALUATED'})
+
+
+def _reporting_tables(payload, results, request):
+    """Every contract 7.0 table built from the reporting core; returns the notes for ScriptedReportMeta."""
+    notes = {}
+    _case_statistics(payload, results, request)
+    _coverage(payload, results)
+    _scope(payload, results)
+    _outage_windows(payload, request)
+    view = _element_view(results)
+    _critical_elements(payload, results, view, notes)
+    _detail_matrices(payload, results, view)
+    _classification(payload, results, view)
+    _reference_findings(payload, results)
+    _case_status_counts(payload, results)
+    _contingency_register(payload, results)
+    _contingency_events(payload, results, notes)
+    _episodes(payload, results)
+    _quality_register(payload, results)
+    _time_criticality(payload, results, notes)
+    _assessment_settings(payload)
+    _result_provenance(payload, results)
+    # Long registers are cut fairly between the cases, never by case order; the statistics above stay complete.
+    by_case = lambda row: row['case_order']  # noqa: E731
+    severity = lambda row: (STATUS_RANK.get(row['status'].replace('-', '_'), len(STATUS_RANK)), -_amount(  # noqa: E731
+        row.get('peak_text') or row.get('violation_text') or '0'), row['row_order'])
+    _fair_cut(payload, 'ScriptedContingencyEpisodes', by_case, severity)
+    _fair_cut(payload, 'ScriptedContingencyEvents', by_case, lambda row: row['row_order'])
+    _fair_cut(payload, 'ScriptedContingencyRegister', by_case, lambda row: row['row_order'])
+    _fair_cut(payload, 'ScriptedQualityRegister', by_case, lambda row: row['row_order'])
+    _fair_cut(payload, 'ScriptedReferenceFindings', lambda row: (row['level'], row['criterion']), lambda row: row['row_order'])
+    return notes
+
+
+def critical_note(notes):
+    parts = []
+    for group, singular, plural in (('line', 'line', 'lines'), ('transformer', 'transformer', 'transformers'), ('node', 'node', 'nodes')):
+        shown, total = notes.get(group, (0, 0))
+        parts.append('{} of {} {}'.format(shown, total, singular if total == 1 else plural))
+    return ('Shown: ' + ', '.join(parts) + ' (conspicuous elements, most critical first; the counts come from the complete '
+            'evaluation, the detail report lists every one).')
+
+
+def events_note(notes):
+    listed, total = notes.get('events', (0, 0))
+    return ('Top findings per criterion across every scenario. The detail report lists {} of {} critical single findings '
+            '(a prioritised selection per scenario); every count comes from the complete evaluation.'.format(listed, total))
+
+
+def overall_text(payload):
+    """H02: what the statistics say, without a security release."""
+    rows = [row for row in payload['ScriptedCaseStatistics'] if row['level'] == N1_PRIME and row['assessment'] != ASSESSMENT_NOT_EVALUATED]
+    failed = [row['case_name'] for row in payload['ScriptedCaseStatistics']
+              if row['assessment'] == ASSESSMENT_NOT_EVALUATED and row['level'] != LEVEL_N0]
+    failed_n0 = [row['case_name'] for row in payload['ScriptedCaseStatistics']
+                 if row['assessment'] == ASSESSMENT_NOT_EVALUATED and row['level'] == LEVEL_N0]
+    missing = ''
+    if failed_n0:
+        missing += 'The QDS of {} case(s) could not be evaluated: {}. '.format(len(failed_n0), clip_text(', '.join(failed_n0), 200))
+    if failed:
+        missing += 'The contingency analysis of {} case(s) was requested but could not be evaluated: {}. '.format(
+            len(failed), clip_text(', '.join(failed), 200))
+    if not rows:
+        return (missing + ('No (n-1)\' scenario could be assessed; there is no n-1 result to rely on. ' if failed else
+                           'No (n-1)\' scenario was assessed in this run; the n-0 chapters compare the planning cases with Reference. ')
+                + 'This pre-assessment is no release and no proof of n-1 security.')
+    caused = [row['case_name'] for row in rows if row['new_events'] or row['worsened_events']]
+    incomplete = [row['case_name'] for row in rows if row['assessment'] == 'INCOMPLETE COVERAGE']
+    text = '{} scenario(s) assessed against the n-1 reference. '.format(len(rows))
+    text += ('NEW or WORSENED findings in: {}. '.format(clip_text(', '.join(caused), 200)) if caused
+             else 'No scenario adds or worsens a violation in the assessed study times. ')
+    if incomplete:
+        text += 'Incomplete evaluation in: {}; their results are no clearance. '.format(clip_text(', '.join(incomplete), 200))
+    return text + missing + 'This pre-assessment is no release and no proof of n-1 security.'
+
+
+def empty_tables(payload):
+    """',Table,Table,' of every table without rows: the templates show their empty-state notes by it."""
+    return ',' + ','.join(name for name, _ in TABLES if not payload.get(name)) + ','
+
+
+def n1_meta_text(results):
+    """What the n-1 chapter shows, for the report; ('1' or '0', text)."""
+    kinds = {case['n1'].get('kind') for case in outage_cases(results) if case.get('n1', {}).get('status') == 'EVALUATED'}
+    if not kinds:
+        assessed = any(case.get('n1') for _order, case in planning_results(results))
+        return '0', ('n-1 was requested but could not be evaluated; see the quality register and the model quality page.'
+                     if assessed else 'n-1 was not assessed in this run (tick n-1 in the case manager).')
+    return '1', ("Contingency analysis of the study case at the QDS time steps inside each case's outage windows. "
+                 + ("(n-1)' (with the case's planned outages) is classified against n-1 (without them) per study time, "
+                    "contingency and element; an element counts with its worst result. " if N1_PRIME in kinds else
+                    "Only the n-1 reference was calculated: its violations are shown as PRE-EXISTING. ")
+                 + n1_filter_text() + '.')
+
+
 def _enforce_table_limits(payload):
     for name in sorted(payload):
         if name == 'ScriptedModelQuality':
@@ -2826,20 +4460,17 @@ def build_cases_payload(study_case, results, project_name, result_name, request,
         time_step = format_time_step(plot_times[1] - plot_times[0])
     reference = find_reference(results)
     cases = outage_cases(results)
-    radar_note = ''
-    if len(cases) > CASE_SLOTS:
-        radar_note = 'Charts show the first {} of {} cases; every table lists all of them.'.format(CASE_SLOTS, len(cases))
     payload['ScriptedReportMeta'].append({
-        'study_id': object_name(study_case), 'study_name': object_name(study_case), 'study_description': object_description(study_case),
+        'run_id': request.get('run_id') or '-', 'study_name': object_name(study_case), 'study_description': object_description(study_case),
         'model_name': project_name, 'model_version': 'PowerFactory 2026', 'simulation_start': start, 'simulation_end': end,
         'simulation_time_step': time_step or 'ElmRes row interval', 'generation_date': datetime.now().astimezone().strftime('%Y-%m-%d %H:%M'),
         'generated_by': generated_by, 'run_mode': run_mode, 'template_name': TEMPLATE_NAME, 'template_version': TEMPLATE_VERSION,
         'data_contract_version': DATA_CONTRACT_VERSION, 'result_name': result_name,
         'assessment_scope': '{} planning case(s); reference: {}; {}'.format(len(request.get('cases') or ()), reference['name'] if reference else 'none', grid_scope_text()),
         'assessment_status': 'PRE-ASSESSMENT - NOT AN OPERATIONAL RELEASE', 'voltage_limits': voltage_limits_text(),
-        'has_cases': '1' if cases else '0', 'chart_cases': str(1 + min(len(cases), CASE_SLOTS) if reference is not None else min(len(cases), CASE_SLOTS)),
-        'radar_note': radar_note, 'case_source_text': request.get('source_text') or 'not stated', 'reference_text': _reference_text(request),
-        'qds_mode_text': qds_mode_text(request), 'coverage_statement': coverage_statement(results, request)})
+        'has_cases': '1' if cases else '0', 'case_source_text': request.get('source_text') or 'not stated', 'reference_text': _reference_text(request),
+        'qds_mode_text': qds_mode_text(request), 'coverage_statement': coverage_statement(results, request),
+        'has_contingency': n1_meta_text(results)[0], 'contingency_text': n1_meta_text(results)[1]})
     _case_rows(payload, results, request)
     records = request.get('records') or []
     used = {record['key'] for plan in request.get('cases') or () for record in plan['members']}
@@ -2848,18 +4479,19 @@ def build_cases_payload(study_case, results, project_name, result_name, request,
     _model_quality(payload, results, request)
     _case_metrics(payload, results)
     _pies(payload, results)
-    _reference_exceeded(payload, results)
     _case_counts(payload, results)
-    _radar(payload, results)
     _line_bars(payload, results)
-    _trends(payload, results)
     _case_comparison(payload, results)
     _calculation_runs(payload, results, request)
     _top_lines_by_case(payload, results)
     _loading_appendix(payload, results, 'line', 'ScriptedAppendixLine')
     _loading_appendix(payload, results, 'transformer', 'ScriptedAppendixTransformer')
     _voltage_appendix(payload, results)
+    notes = _reporting_tables(payload, results, request)
+    meta = payload['ScriptedReportMeta'][0]
+    meta.update(overall_text=overall_text(payload), critical_note=critical_note(notes), events_note=events_note(notes))
     _enforce_table_limits(payload)
+    meta['empty_tables'] = empty_tables(payload)
     return payload
 
 def coerce_value(value, kind, where, field=None):
@@ -2906,7 +4538,7 @@ def validate_payload(payload):
             raise ValueError(name + ': rows must be a list')
         if name == 'ScriptedReportMeta' and len(rows) != 1:
             raise ValueError(name + ': exactly one row is required')
-        field_names = {field for field, _ in fields}
+        field_names = {field for field, _ in fields} | set(UNPUBLISHED_FIELDS.get(name, ()))
         for index, row in enumerate(rows):
             unknown = set(row) - field_names
             if unknown:
@@ -2923,9 +4555,6 @@ def validate_payload(payload):
                     raise ValueError(where + ': required field is missing')
                 if kind == 'string' and (not str(value).strip()):
                     raise ValueError(where + ': required text is empty')
-    for table in TREND_TABLES:
-        if len({row.get('element_name') for row in payload[table]}) > 1:
-            raise ValueError('{} mixes several elements in one chart.'.format(table))
 
 def _check(returned, context):
     code = api_error_code(returned)
@@ -5555,7 +7184,7 @@ class CaseManagerDialog:
         ttk, root = self.ttk, self.root
         self._style()
         root.title('GridLens {} - Case Manager'.format(PUBLISHER_VERSION))
-        root.geometry(window_geometry(root.winfo_screenwidth(), root.winfo_screenheight(), share=0.94, largest=(1720, 1020)))
+        root.geometry(window_geometry(root.winfo_screenwidth(), root.winfo_screenheight(), share=0.82, largest=(1200, 760)))
         root.minsize(*minimum_window_size(root.winfo_screenwidth(), root.winfo_screenheight()))
         root.configure(background=self.BACKGROUND)
         root.columnconfigure(0, weight=1)
@@ -8407,7 +10036,8 @@ def drop_contingencies(data, keys):
         return data, []
     times = {moment: {key: value for key, value in values.items() if key[0] not in keys}
              for moment, values in data['times'].items()}
-    return dict(data, times=times), dropped
+    present = {moment: set(found) - set(keys) for moment, found in (data.get('present') or {}).items()}
+    return dict(data, times=times, present=present), dropped
 
 
 def load_n1(found):
@@ -8500,8 +10130,15 @@ def calculate_n1_case(command, plan, request, records, grid, excluded, prime, re
     return entry
 
 
-def evaluate_n1_case(entry, plan, elements_of):
-    """Phase 2 for one planning case: read the kept n-1 results and classify (n-1)' against n-1."""
+def evaluate_n1_case(entry, plan, elements_of, run_id=''):
+    """Phase 2 for one planning case: read the kept n-1 results and classify (n-1)' against n-1.
+
+    Besides the 6.2 comparison (logs, model quality) the entry carries the
+    statistics of the reporting core: 'statistics' (compare_scenario of the
+    case, or of n-1 with itself when only n-1 was calculated) and
+    'reference_statistics' (level_statistics of the n-1 reference), both over
+    the study times inside the case's outage windows.
+    """
     if entry.get('status') != 'CALCULATED':
         return entry
     reference, dropped = drop_contingencies(load_n1(entry['reference']), entry.get('filtered_out') or {})
@@ -8517,9 +10154,18 @@ def evaluate_n1_case(entry, plan, elements_of):
     result = {'status': 'EVALUATED', 'times': len(reference['times']), 'contingencies': len(reference['contingencies']),
               'kind': entry['kind'],
               'details': notes + [n1_data_text(N1_REFERENCE, entry['reference'], reference, entry.get('qds_steps'))]}
+    requested = sorted(entry['reference'].get('window_times') or reference['times'])
+    reference_source = LoadedSweep(reference)
+    with RUN_STATS.measure("n-1 statistics"):
+        result['reference_statistics'] = level_statistics(run_id, N1_REFERENCE, reference_source, requested)
+    result['requested_times'] = requested
+    result['result_objects'] = [(N1_REFERENCE, entry['reference'].get('kept'))]
     if entry['kind'] != N1_PRIME or entry.get('scenario') is None:
         result.update(kind=N1_REFERENCE, comparison=compare_n1(reference, reference))
         result['summary'] = 'n-1 reference: ' + _n1_reference_text(result['comparison'])
+        with RUN_STATS.measure("n-1 statistics"):
+            result['statistics'] = dict(compare_scenario(run_id, plan['id'], reference_source, reference_source, requested,
+                                                         contingency_elements=elements_of), level=N1_REFERENCE)
         return result
     scenario, _ = drop_contingencies(load_n1(entry['scenario']), entry.get('filtered_out') or {})
     result['details'].append(n1_data_text(N1_PRIME, entry['scenario'], scenario, entry.get('qds_steps'), reference))
@@ -8528,6 +10174,10 @@ def evaluate_n1_case(entry, plan, elements_of):
         result['comparison'] = compare_n1(reference, scenario, switched_off, elements_of)
     RUN_STATS.count("n1_classified", sum(result['comparison']['counts'].values()))
     result['summary'] = "(n-1)' against n-1: " + n1_summary(result['comparison'])
+    result['result_objects'].append((N1_PRIME, entry['scenario'].get('kept')))
+    with RUN_STATS.measure("n-1 statistics"):
+        result['statistics'] = compare_scenario(run_id, plan['id'], reference_source, LoadedSweep(scenario), requested,
+                                                switched_off, elements_of)
     return result
 
 
@@ -9003,7 +10653,7 @@ def evaluate_n1(entries, request, ready, results, logger):
             if entry.get('status') == 'CALCULATED':
                 logger.case("n-1 evaluation · Case {} · {}".format(plan['id'], plan['name']))
             try:
-                done[id(entry)] = evaluate_n1_case(entry, plan, entry.get('elements_of') or {})
+                done[id(entry)] = evaluate_n1_case(entry, plan, entry.get('elements_of') or {}, request.get('run_id') or '')
             except GridLensError as exc:
                 done[id(entry)] = {'status': 'NOT EVALUATED', 'reason': str(exc), 'times': 0}
             evaluated = done[id(entry)]
@@ -9277,6 +10927,8 @@ def execute_gridlens(app):
     runs = []
     n1_runs = {}
     evaluate_stamp = request.get("evaluate_stamp")
+    # The run ID of both reports: the stamp of the result objects the run keeps (or re-evaluates).
+    request["run_id"] = evaluate_stamp or result_objects.stamp
     try:
         if evaluate_stamp:
             runs, n1_runs = kept_runs(study_case, evaluate_stamp, request, ready, logger, qds_grid(qds))
