@@ -18,6 +18,7 @@ subsequent evaluation without recalculation.
 from __future__ import annotations
 
 import bisect
+import gc
 import getpass
 import hashlib
 import heapq
@@ -12000,16 +12001,13 @@ def main():
             "application object.", flush=True)
         return False
     logger = RunLogger(app)
+    cancelled = None
     try:
         execute_gridlens(app)
         return True
     except GridLensCancelled as exc:
         logger.write("CANCELLED", "{} Report generation cancelled.".format(exc), level="INFO")
-        # This script can be an IntReport extension. Returning False here is
-        # discarded by the top-level main() call and looks like a successful
-        # extension to the host, which can then render missing or stale tables.
-        # Let the cancellation reach the caller before it continues the report.
-        raise
+        cancelled = str(exc)
     except KeyboardInterrupt:
         logger.write(
             "ABORTED",
@@ -12027,7 +12025,26 @@ def main():
     finally:
         # The interpreter can outlive the run; the next run starts from the defaults.
         reset_settings()
+        # PowerFactory warns "still in unattended mode" while a powerfactory.Application
+        # object outlives the script. Nothing may keep it: not these names, not a frame of
+        # a traceback and not a PowerFactory object left behind in a module global.
+        del app, logger
+        release_powerfactory()
+    if cancelled is not None:
+        # This script can be an IntReport extension. Returning False here is
+        # discarded by the top-level main() call and looks like a successful
+        # extension to the host, which can then render missing or stale tables.
+        # Let the cancellation reach the caller before it continues the report;
+        # raised anew so that its traceback holds no frame with PowerFactory objects.
+        raise GridLensCancelled(cancelled)
     return False
+
+
+def release_powerfactory():
+    """Drop every PowerFactory object this module still refers to, so the Application object can be destroyed."""
+    close_column_buffer()
+    reset_run_context()
+    gc.collect()
 
 
 def exit_code(published):

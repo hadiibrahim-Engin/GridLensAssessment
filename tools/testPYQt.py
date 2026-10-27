@@ -1,14 +1,14 @@
-"""PyQt test launched from PowerFactory, with automatic installation.
+"""PyQt test launched from PowerFactory in a separate process.
 
 Run the COMPLETE file as a ComPython. PowerFactory only runs the standard
 library launcher. Every invocation starts a fresh Python process for Qt;
 closing the window ends that process. No Qt module is imported into the
-PowerFactory process, including during the automatic installation.
+PowerFactory process.
 
-Missing PyQt is downloaded into ~/GridLens/python on the first run and reused
-later. Downloads require a compatible Python with pip and Internet access.
-Set INSTALLER_PYTHON to that python.exe if automatic discovery fails.
-AUTO_INSTALL_PYQT=False disables downloads. QT_BINDING selects auto/PyQt6/PyQt5.
+PyQt6 or PyQt5 must already be installed in the selected Python environment.
+This script does not install or download packages. Set PYTHON_EXECUTABLE to
+a matching python.exe if automatic discovery fails. QT_BINDING selects
+auto/PyQt6/PyQt5.
 
 Only active project/study names are read in PowerFactory. They are sent to the
 GUI as JSON; the GUI does not connect to the PowerFactory API. No calculation
@@ -31,16 +31,13 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
-import threading
 
 QT_BINDING = 'auto'
-AUTO_INSTALL_PYQT = True
-INSTALLER_PYTHON = ''  # Optional absolute path to a matching python.exe.
-DEPENDENCY_DIR = ''  # Default: ~/GridLens/python.
+PYTHON_EXECUTABLE = ''  # Optional absolute path to a matching python.exe.
 LOG_DIR = ''  # Default: ~/GridLens/logs.
 
 def python_identity():
-    """The ABI and architecture the downloaded extension modules must match."""
+    """The Python ABI and architecture required by the external GUI interpreter."""
     return [sys.implementation.cache_tag, sysconfig.get_platform(),
             platform.machine().lower(), struct.calcsize('P')]
 
@@ -52,10 +49,10 @@ def run_python(executable, arguments, timeout=30):
                           encoding='utf-8', errors='replace', timeout=timeout, **options)
 
 
-def installer_python(require_pip=False):
+def gui_python():
     """Never run PowerFactory.exe as if it were a Python command-line interpreter."""
-    if INSTALLER_PYTHON:
-        candidates = [Path(INSTALLER_PYTHON).expanduser()]
+    if PYTHON_EXECUTABLE:
+        candidates = [Path(PYTHON_EXECUTABLE).expanduser()]
     else:
         candidates = [Path(sys.executable)]
         for prefix in (sys.prefix, sys.base_prefix, sysconfig.get_path('stdlib')):
@@ -66,10 +63,9 @@ def installer_python(require_pip=False):
         located = shutil.which('python{}.{}'.format(*sys.version_info[:2]))
         if located:
             candidates.append(Path(located))
-    probe = ('import importlib.util, json, platform, struct, sys, sysconfig; '
-             'print(json.dumps([[sys.implementation.cache_tag, sysconfig.get_platform(), '
-             'platform.machine().lower(), struct.calcsize("P")], '
-             'importlib.util.find_spec("pip") is not None]))')
+    probe = ('import json, platform, struct, sys, sysconfig; '
+             'print(json.dumps([sys.implementation.cache_tag, sysconfig.get_platform(), '
+             'platform.machine().lower(), struct.calcsize("P")]))')
     checked = set()
     for path in candidates:
         if str(path) in checked or not re.fullmatch(r'python(?:w)?(?:\d+(?:\.\d+)?)?(?:\.exe)?', path.name, re.I):
@@ -79,12 +75,12 @@ def installer_python(require_pip=False):
             continue
         try:
             result = run_python(path, ['-c', probe])
-            identity, has_pip = json.loads(result.stdout) if result.returncode == 0 else (None, False)
+            identity = json.loads(result.stdout) if result.returncode == 0 else None
         except (OSError, ValueError, subprocess.TimeoutExpired):
             continue
-        if identity == python_identity() and (has_pip or not require_pip):
+        if identity == python_identity():
             return path
-    raise RuntimeError('Kein passender Python-Interpreter gefunden. INSTALLER_PYTHON auf die '
+    raise RuntimeError('Kein passender Python-Interpreter gefunden. PYTHON_EXECUTABLE auf die '
                        'python.exe der in PowerFactory verwendeten Python-Version setzen '
                        '(Python {}, {} Bit). sys.executable={} kann in PowerFactory auf die '
                        'Host-Anwendung zeigen.'.format(platform.python_version(), struct.calcsize('P') * 8,
@@ -141,15 +137,14 @@ def child_environment():
 def launch_gui(context, app=None):
     if QT_BINDING not in ('auto', 'PyQt6', 'PyQt5'):
         raise RuntimeError('QT_BINDING muss auto, PyQt6 oder PyQt5 sein.')
-    executable = installer_python()
+    executable = gui_python()
     folder = Path(LOG_DIR).expanduser() if LOG_DIR else Path.home() / 'GridLens' / 'logs'
     folder.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix='PyQtTest-', suffix='.log', dir=str(folder), delete=False) as handle:
         log_path = Path(handle.name)
     log(app, 'Starte PyQt in einem eigenen Prozess mit {}. Protokoll: {}'.format(executable, log_path))
-    log(app, 'Beim ersten Start wird fehlendes PyQt automatisch installiert. Zum Fortsetzen das GUI-Fenster schließen.')
-    options = {'binding': QT_BINDING, 'auto_install': AUTO_INSTALL_PYQT,
-               'dependency_dir': DEPENDENCY_DIR, 'context': context}
+    log(app, 'Zum Fortsetzen das GUI-Fenster schließen.')
+    options = {'binding': QT_BINDING, 'context': context}
     with tempfile.TemporaryDirectory(prefix='gridlens-pyqt-') as temporary:
         script = Path(temporary) / 'gui.py'
         config = Path(temporary) / 'context.json'
@@ -169,14 +164,31 @@ def launch_gui(context, app=None):
     return log_path
 
 
+def without_frames(exc):
+    """The exception without tracebacks; their frames would keep the PowerFactory objects alive."""
+    seen = set()
+    item = exc
+    while item is not None and id(item) not in seen:
+        seen.add(id(item))
+        item.__traceback__ = None
+        item = item.__cause__ or item.__context__
+    return exc
+
+
 def main():
+    # PowerFactory warns "still in unattended mode" while a powerfactory.Application
+    # object outlives the script, so no name and no traceback may keep it.
     app = None
+    failure = None
     try:
         app, context = powerfactory_context()
         return launch_gui(context, app)
     except Exception as exc:
         log(app, str(exc), error=True)
-        raise
+        failure = without_frames(exc)
+    finally:
+        del app
+    raise failure
 
 
 # Kept inline so the complete file also works when pasted into a ComPython.
@@ -186,83 +198,16 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 from pathlib import Path
 import platform
-import re
-import shutil
-import struct
-import subprocess
 import sys
-import sysconfig
-import tempfile
 import threading
 
 QT_BINDING = 'auto'
-AUTO_INSTALL_PYQT = True
-DEPENDENCY_DIR = ''
 _qt_app = None
 
-def python_identity():
-    """The ABI and architecture the downloaded extension modules must match."""
-    return [sys.implementation.cache_tag, sysconfig.get_platform(),
-            platform.machine().lower(), struct.calcsize('P')]
 
-
-def dependency_folder(binding):
-    root = Path(DEPENDENCY_DIR).expanduser() if DEPENDENCY_DIR else Path.home() / 'GridLens' / 'python'
-    identity = '-'.join(str(value) for value in python_identity())
-    return root / re.sub(r'[^A-Za-z0-9_.-]', '_', identity) / binding
-
-
-def run_python(executable, arguments, timeout=30):
-    """Run a real Python executable, with bounded waits and no inherited Python path."""
-    options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
-    return subprocess.run([str(executable), '-I', *arguments], capture_output=True, text=True,
-                          encoding='utf-8', errors='replace', timeout=timeout, **options)
-
-
-def ensure_pyqt(binding, report):
-    """Stage and validate a wheel installation before loading it into the GUI process."""
-    target = dependency_folder(binding)
-    marker = target / '.gridlens-installed.json'
-    if marker.is_file():
-        try:
-            if json.loads(marker.read_text(encoding='utf-8')) == python_identity():
-                report('{} aus {} wiederverwenden.'.format(binding, target))
-                return target
-        except (OSError, ValueError):
-            pass
-    if target.exists():
-        raise RuntimeError('Die lokale PyQt-Installation {} ist unvollständig. Diesen Ordner prüfen '
-                           'oder DEPENDENCY_DIR auf einen anderen Ordner setzen.'.format(target))
-    executable = Path(sys.executable)
-    report('{} fehlt. Installiere mit {} nach {}. Der erste Download kann einige Minuten dauern.'
-           .format(binding, executable, target))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.pyqt-install-', dir=str(target.parent)) as temporary:
-        staged = Path(temporary) / 'packages'
-        requirement = 'PyQt6<7' if binding == 'PyQt6' else 'PyQt5<6'
-        try:
-            result = run_python(executable, ['-m', 'pip', '--disable-pip-version-check', 'install',
-                                            '--no-input', '--only-binary=:all:', '--timeout', '30',
-                                            '--retries', '1', '--target', str(staged), requirement], timeout=600)
-            if result.returncode != 0:
-                raise RuntimeError('PyQt-Installation fehlgeschlagen. Internet/Proxy und passende Wheels prüfen.\n' +
-                                   (result.stdout + result.stderr)[-4000:])
-            check = run_python(executable, ['-c', 'import importlib, sys; sys.path.insert(0, sys.argv[1]); '
-                                            'importlib.import_module(sys.argv[2] + ".QtWidgets")', str(staged), binding])
-            if check.returncode != 0:
-                raise RuntimeError('Die installierten Qt-Module konnten nicht geladen werden:\n' + check.stderr[-4000:])
-            (staged / marker.name).write_text(json.dumps(python_identity()), encoding='utf-8')
-            os.rename(str(staged), str(target))
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError('Zeitlimit bei der PyQt-Installation überschritten. Internet/Proxy prüfen.') from exc
-    report('{} installiert. Das Testfenster wird jetzt gestartet.'.format(binding))
-    return target
-
-
-def load_qt(allow_install=True, report=None):
+def load_qt():
     """Load one binding only; avoid mixing PyQt/PySide or different Qt majors."""
     if QT_BINDING not in ('auto', 'PyQt6', 'PyQt5'):
         raise RuntimeError('QT_BINDING muss auto, PyQt6 oder PyQt5 sein.')
@@ -290,13 +235,6 @@ def load_qt(allow_install=True, report=None):
             raise RuntimeError('{} konnte nicht geladen werden: {}. Python-Version, '
                                'Architektur und Qt-/DLL-Installation prüfen.'.format(name, exc)) from exc
         return name, core, widgets
-    if allow_install and AUTO_INSTALL_PYQT:
-        binding = 'PyQt6' if QT_BINDING == 'auto' else QT_BINDING
-        folder = str(ensure_pyqt(binding, report or print))
-        if folder not in sys.path:
-            sys.path.insert(0, folder)
-        importlib.invalidate_caches()
-        return load_qt(allow_install=False, report=report)
     raise RuntimeError('PyQt6/PyQt5 wurde nicht gefunden (Auswahl: {}). PyQt in der von PowerFactory '
                        'verwendeten Python-Umgebung installieren. Python: {}; Umgebung: {}'
                        .format(QT_BINDING, platform.python_version(), sys.prefix))
@@ -490,7 +428,7 @@ def log(app, text, error=False):
 
 
 def main(context, close_after_ms=0):
-    binding, core, widgets = load_qt(report=lambda message: log(None, message))
+    binding, core, widgets = load_qt()
     version = '{} {} · Qt {}'.format(binding, core.PYQT_VERSION_STR, core.QT_VERSION_STR)
     log(None, version + '\n' + context)
     qt_app = application(core, widgets)
@@ -510,9 +448,8 @@ def main(context, close_after_ms=0):
 if __name__ == '__main__':
     options = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
     QT_BINDING = options['binding']
-    AUTO_INSTALL_PYQT = options['auto_install']
-    DEPENDENCY_DIR = options['dependency_dir']
     main(options['context'])
+
 
 '''
 
