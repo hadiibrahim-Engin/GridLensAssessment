@@ -1,63 +1,94 @@
-"""PyQt compatibility test for a PowerFactory ComPython or standalone Python.
+"""PyQt test launched from PowerFactory, with automatic installation.
 
-Copy the complete file into a ComPython and run it. PyQt6 or PyQt5 must be
-installed in the Python environment configured in PowerFactory. QT_BINDING
-can select a version explicitly; auto reuses a loaded PyQt binding, otherwise
-tries PyQt6 and then PyQt5. A broken installation is reported without loading
-a second Qt version into the process.
+Run the COMPLETE file as a ComPython. PowerFactory only runs the standard
+library launcher. Every invocation starts a fresh Python process for Qt;
+closing the window ends that process. No Qt module is imported into the
+PowerFactory process, including during the automatic installation.
 
-The dialog tests navigation, widgets, signals and timer events. Only the
-active project and study-case names are read; no calculation or write to the
-PowerFactory model is performed. Closing the dialog returns to the script.
-An existing QApplication is reused and is never quit or restyled.
+Missing PyQt is downloaded into ~/GridLens/python on the first run and reused
+later. Downloads require a compatible Python with pip and Internet access.
+Set INSTALLER_PYTHON to that python.exe if automatic discovery fails.
+AUTO_INSTALL_PYQT=False disables downloads. QT_BINDING selects auto/PyQt6/PyQt5.
 
-Qt lifecycle reference: https://doc.qt.io/qt-6/qapplication.html
-Dialog event loop: https://doc.qt.io/qt-6/qdialog.html#exec
+Only active project/study names are read in PowerFactory. They are sent to the
+GUI as JSON; the GUI does not connect to the PowerFactory API. No calculation
+or model change is performed. Per-run logs are saved in ~/GridLens/logs.
+
+Qt lifecycle: https://doc.qt.io/qt-6/qapplication.html
 """
 
 from __future__ import annotations
 
 import importlib
+import json
+import os
+from pathlib import Path
 import platform
+import re
+import shutil
+import struct
+import subprocess
 import sys
+import sysconfig
+import tempfile
 import threading
 
+QT_BINDING = 'auto'
+AUTO_INSTALL_PYQT = True
+INSTALLER_PYTHON = ''  # Optional absolute path to a matching python.exe.
+DEPENDENCY_DIR = ''  # Default: ~/GridLens/python.
+LOG_DIR = ''  # Default: ~/GridLens/logs.
 
-QT_BINDING = 'auto'  # 'auto', 'PyQt6' or 'PyQt5'
-_qt_app = None
+def python_identity():
+    """The ABI and architecture the downloaded extension modules must match."""
+    return [sys.implementation.cache_tag, sysconfig.get_platform(),
+            platform.machine().lower(), struct.calcsize('P')]
 
 
-def load_qt():
-    """Load one binding only; avoid mixing PyQt/PySide or different Qt majors."""
-    if QT_BINDING not in ('auto', 'PyQt6', 'PyQt5'):
-        raise RuntimeError('QT_BINDING muss auto, PyQt6 oder PyQt5 sein.')
-    loaded = {name for name in ('PyQt6', 'PyQt5', 'PySide6', 'PySide2')
-              if any(key == name or key.startswith(name + '.') for key in sys.modules)}
-    if loaded & {'PySide6', 'PySide2'} or len(loaded) > 1:
-        raise RuntimeError('Bereits geladene Qt-Bindings: {}. PyQt bitte in einer frischen '
-                           'PowerFactory-Sitzung testen.'.format(', '.join(sorted(loaded))))
-    if loaded and QT_BINDING != 'auto' and QT_BINDING not in loaded:
-        raise RuntimeError('{} ist bereits geladen; QT_BINDING={} würde Qt-Versionen mischen.'
-                           .format(next(iter(loaded)), QT_BINDING))
-    candidates = sorted(loaded) if loaded else (['PyQt6', 'PyQt5'] if QT_BINDING == 'auto' else [QT_BINDING])
-    for name in candidates:
-        try:
-            importlib.import_module(name)
-        except ModuleNotFoundError as exc:
-            if exc.name != name:
-                raise RuntimeError('{} ist installiert, aber eine Abhängigkeit fehlt: {}'
-                                   .format(name, exc)) from exc
+def run_python(executable, arguments, timeout=30):
+    """Run a real Python executable, with bounded waits and no inherited Python path."""
+    options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+    return subprocess.run([str(executable), '-I', *arguments], capture_output=True, text=True,
+                          encoding='utf-8', errors='replace', timeout=timeout, **options)
+
+
+def installer_python(require_pip=False):
+    """Never run PowerFactory.exe as if it were a Python command-line interpreter."""
+    if INSTALLER_PYTHON:
+        candidates = [Path(INSTALLER_PYTHON).expanduser()]
+    else:
+        candidates = [Path(sys.executable)]
+        for prefix in (sys.prefix, sys.base_prefix, sysconfig.get_path('stdlib')):
+            if prefix:
+                folder = Path(prefix)
+                candidates.extend((folder / 'python.exe', folder / 'bin' / 'python3',
+                                   folder.parent / 'python.exe'))
+        located = shutil.which('python{}.{}'.format(*sys.version_info[:2]))
+        if located:
+            candidates.append(Path(located))
+    probe = ('import importlib.util, json, platform, struct, sys, sysconfig; '
+             'print(json.dumps([[sys.implementation.cache_tag, sysconfig.get_platform(), '
+             'platform.machine().lower(), struct.calcsize("P")], '
+             'importlib.util.find_spec("pip") is not None]))')
+    checked = set()
+    for path in candidates:
+        if str(path) in checked or not re.fullmatch(r'python(?:w)?(?:\d+(?:\.\d+)?)?(?:\.exe)?', path.name, re.I):
+            continue
+        checked.add(str(path))
+        if not path.is_file():
             continue
         try:
-            core = importlib.import_module(name + '.QtCore')
-            widgets = importlib.import_module(name + '.QtWidgets')
-        except (ImportError, OSError) as exc:
-            raise RuntimeError('{} konnte nicht geladen werden: {}. Python-Version, '
-                               'Architektur und Qt-/DLL-Installation prüfen.'.format(name, exc)) from exc
-        return name, core, widgets
-    raise RuntimeError('PyQt6/PyQt5 wurde nicht gefunden (Auswahl: {}). PyQt in der von PowerFactory '
-                       'verwendeten Python-Umgebung installieren. Python: {}; Umgebung: {}'
-                       .format(QT_BINDING, platform.python_version(), sys.prefix))
+            result = run_python(path, ['-c', probe])
+            identity, has_pip = json.loads(result.stdout) if result.returncode == 0 else (None, False)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            continue
+        if identity == python_identity() and (has_pip or not require_pip):
+            return path
+    raise RuntimeError('Kein passender Python-Interpreter gefunden. INSTALLER_PYTHON auf die '
+                       'python.exe der in PowerFactory verwendeten Python-Version setzen '
+                       '(Python {}, {} Bit). sys.executable={} kann in PowerFactory auf die '
+                       'Host-Anwendung zeigen.'.format(platform.python_version(), struct.calcsize('P') * 8,
+                                                       sys.executable))
 
 
 def powerfactory_context():
@@ -89,7 +120,186 @@ def log(app, text, error=False):
         if callable(printer):
             printer(message)
             return
-    print(message, file=sys.stderr if error else sys.stdout)
+    print(message, file=sys.stderr if error else sys.stdout, flush=True)
+
+
+def child_environment():
+    """Do not inherit the host's Qt plugin paths or Python startup settings."""
+    environment = dict(os.environ)
+    for key in list(environment):
+        if key.startswith('QT_') or key in ('PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP',
+                                           'DYLD_LIBRARY_PATH', 'DYLD_FRAMEWORK_PATH', 'LD_LIBRARY_PATH'):
+            environment.pop(key)
+    environment['PYTHONIOENCODING'] = 'utf-8'
+    if os.name == 'nt' and not re.fullmatch(r'python(?:w)?(?:\d+(?:\.\d+)?)?(?:\.exe)?', Path(sys.executable).name, re.I):
+        host_folder = os.path.normcase(os.path.dirname(sys.executable))
+        environment['PATH'] = os.pathsep.join(part for part in environment.get('PATH', '').split(os.pathsep)
+                                             if os.path.normcase(os.path.normpath(part)) != host_folder)
+    return environment
+
+
+def launch_gui(context, app=None):
+    if QT_BINDING not in ('auto', 'PyQt6', 'PyQt5'):
+        raise RuntimeError('QT_BINDING muss auto, PyQt6 oder PyQt5 sein.')
+    executable = installer_python()
+    folder = Path(LOG_DIR).expanduser() if LOG_DIR else Path.home() / 'GridLens' / 'logs'
+    folder.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix='PyQtTest-', suffix='.log', dir=str(folder), delete=False) as handle:
+        log_path = Path(handle.name)
+    log(app, 'Starte PyQt in einem eigenen Prozess mit {}. Protokoll: {}'.format(executable, log_path))
+    log(app, 'Beim ersten Start wird fehlendes PyQt automatisch installiert. Zum Fortsetzen das GUI-Fenster schließen.')
+    options = {'binding': QT_BINDING, 'auto_install': AUTO_INSTALL_PYQT,
+               'dependency_dir': DEPENDENCY_DIR, 'context': context}
+    with tempfile.TemporaryDirectory(prefix='gridlens-pyqt-') as temporary:
+        script = Path(temporary) / 'gui.py'
+        config = Path(temporary) / 'context.json'
+        script.write_text(CHILD_SOURCE, encoding='utf-8')
+        config.write_text(json.dumps(options, ensure_ascii=False), encoding='utf-8')
+        flags = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+        with log_path.open('w', encoding='utf-8') as output:
+            process = subprocess.Popen([str(executable), '-I', '-u', '-X', 'faulthandler',
+                                        str(script), str(config)], stdout=output, stderr=subprocess.STDOUT,
+                                       env=child_environment(), cwd=temporary, **flags)
+            returncode = process.wait()
+    if returncode != 0:
+        tail = log_path.read_text(encoding='utf-8', errors='replace')[-6000:]
+        raise RuntimeError('Der separate PyQt-Prozess wurde mit Code {} (0x{:08X}) beendet. '
+                           'Protokoll: {}\n{}'.format(returncode, returncode & 0xffffffff, log_path, tail))
+    log(app, 'PyQt-Prozess beendet. PowerFactory kann weiterarbeiten. Protokoll: {}'.format(log_path))
+    return log_path
+
+
+def main():
+    app = None
+    try:
+        app, context = powerfactory_context()
+        return launch_gui(context, app)
+    except Exception as exc:
+        log(app, str(exc), error=True)
+        raise
+
+
+# Kept inline so the complete file also works when pasted into a ComPython.
+# This source is written to a temporary file and executed ONLY by the child.
+CHILD_SOURCE = r'''
+from __future__ import annotations
+
+import importlib
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import sysconfig
+import tempfile
+import threading
+
+QT_BINDING = 'auto'
+AUTO_INSTALL_PYQT = True
+DEPENDENCY_DIR = ''
+_qt_app = None
+
+def python_identity():
+    """The ABI and architecture the downloaded extension modules must match."""
+    return [sys.implementation.cache_tag, sysconfig.get_platform(),
+            platform.machine().lower(), struct.calcsize('P')]
+
+
+def dependency_folder(binding):
+    root = Path(DEPENDENCY_DIR).expanduser() if DEPENDENCY_DIR else Path.home() / 'GridLens' / 'python'
+    identity = '-'.join(str(value) for value in python_identity())
+    return root / re.sub(r'[^A-Za-z0-9_.-]', '_', identity) / binding
+
+
+def run_python(executable, arguments, timeout=30):
+    """Run a real Python executable, with bounded waits and no inherited Python path."""
+    options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+    return subprocess.run([str(executable), '-I', *arguments], capture_output=True, text=True,
+                          encoding='utf-8', errors='replace', timeout=timeout, **options)
+
+
+def ensure_pyqt(binding, report):
+    """Stage and validate a wheel installation before loading it into the GUI process."""
+    target = dependency_folder(binding)
+    marker = target / '.gridlens-installed.json'
+    if marker.is_file():
+        try:
+            if json.loads(marker.read_text(encoding='utf-8')) == python_identity():
+                report('{} aus {} wiederverwenden.'.format(binding, target))
+                return target
+        except (OSError, ValueError):
+            pass
+    if target.exists():
+        raise RuntimeError('Die lokale PyQt-Installation {} ist unvollständig. Diesen Ordner prüfen '
+                           'oder DEPENDENCY_DIR auf einen anderen Ordner setzen.'.format(target))
+    executable = Path(sys.executable)
+    report('{} fehlt. Installiere mit {} nach {}. Der erste Download kann einige Minuten dauern.'
+           .format(binding, executable, target))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.pyqt-install-', dir=str(target.parent)) as temporary:
+        staged = Path(temporary) / 'packages'
+        requirement = 'PyQt6<7' if binding == 'PyQt6' else 'PyQt5<6'
+        try:
+            result = run_python(executable, ['-m', 'pip', '--disable-pip-version-check', 'install',
+                                            '--no-input', '--only-binary=:all:', '--timeout', '30',
+                                            '--retries', '1', '--target', str(staged), requirement], timeout=600)
+            if result.returncode != 0:
+                raise RuntimeError('PyQt-Installation fehlgeschlagen. Internet/Proxy und passende Wheels prüfen.\n' +
+                                   (result.stdout + result.stderr)[-4000:])
+            check = run_python(executable, ['-c', 'import importlib, sys; sys.path.insert(0, sys.argv[1]); '
+                                            'importlib.import_module(sys.argv[2] + ".QtWidgets")', str(staged), binding])
+            if check.returncode != 0:
+                raise RuntimeError('Die installierten Qt-Module konnten nicht geladen werden:\n' + check.stderr[-4000:])
+            (staged / marker.name).write_text(json.dumps(python_identity()), encoding='utf-8')
+            os.rename(str(staged), str(target))
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError('Zeitlimit bei der PyQt-Installation überschritten. Internet/Proxy prüfen.') from exc
+    report('{} installiert. Das Testfenster wird jetzt gestartet.'.format(binding))
+    return target
+
+
+def load_qt(allow_install=True, report=None):
+    """Load one binding only; avoid mixing PyQt/PySide or different Qt majors."""
+    if QT_BINDING not in ('auto', 'PyQt6', 'PyQt5'):
+        raise RuntimeError('QT_BINDING muss auto, PyQt6 oder PyQt5 sein.')
+    loaded = {name for name in ('PyQt6', 'PyQt5', 'PySide6', 'PySide2')
+              if any(key == name or key.startswith(name + '.') for key in sys.modules)}
+    if loaded & {'PySide6', 'PySide2'} or len(loaded) > 1:
+        raise RuntimeError('Bereits geladene Qt-Bindings: {}. PyQt bitte in einer frischen '
+                           'PowerFactory-Sitzung testen.'.format(', '.join(sorted(loaded))))
+    if loaded and QT_BINDING != 'auto' and QT_BINDING not in loaded:
+        raise RuntimeError('{} ist bereits geladen; QT_BINDING={} würde Qt-Versionen mischen.'
+                           .format(next(iter(loaded)), QT_BINDING))
+    candidates = sorted(loaded) if loaded else (['PyQt6', 'PyQt5'] if QT_BINDING == 'auto' else [QT_BINDING])
+    for name in candidates:
+        try:
+            importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            if exc.name != name:
+                raise RuntimeError('{} ist installiert, aber eine Abhängigkeit fehlt: {}'
+                                   .format(name, exc)) from exc
+            continue
+        try:
+            core = importlib.import_module(name + '.QtCore')
+            widgets = importlib.import_module(name + '.QtWidgets')
+        except (ImportError, OSError) as exc:
+            raise RuntimeError('{} konnte nicht geladen werden: {}. Python-Version, '
+                               'Architektur und Qt-/DLL-Installation prüfen.'.format(name, exc)) from exc
+        return name, core, widgets
+    if allow_install and AUTO_INSTALL_PYQT:
+        binding = 'PyQt6' if QT_BINDING == 'auto' else QT_BINDING
+        folder = str(ensure_pyqt(binding, report or print))
+        if folder not in sys.path:
+            sys.path.insert(0, folder)
+        importlib.invalidate_caches()
+        return load_qt(allow_install=False, report=report)
+    raise RuntimeError('PyQt6/PyQt5 wurde nicht gefunden (Auswahl: {}). PyQt in der von PowerFactory '
+                       'verwendeten Python-Umgebung installieren. Python: {}; Umgebung: {}'
+                       .format(QT_BINDING, platform.python_version(), sys.prefix))
 
 
 def application(core, widgets):
@@ -118,7 +328,7 @@ def build_dialog(core, widgets, version, context, app=None):
     dialog.setMinimumSize(840, 560)
     attribute = getattr(core.Qt, 'WidgetAttribute', core.Qt).WA_QuitOnClose
     dialog.setAttribute(attribute, False)
-    dialog.setStyleSheet('''
+    dialog.setStyleSheet("""
         QDialog#GridLensPyQtTest { background: #101827; }
         QWidget { color: #e7edf7; font-family: "Segoe UI"; font-size: 13px; }
         QFrame#sidebar { background: #172236; border-radius: 12px; }
@@ -135,7 +345,7 @@ def build_dialog(core, widgets, version, context, app=None):
         QCheckBox { spacing: 8px; }
         QTableWidget { background: #172236; alternate-background-color: #1e2d45; gridline-color: #435676; }
         QHeaderView::section { background: #253650; color: #e7edf7; padding: 8px; border: 0; }
-    ''')
+    """)
     layout = widgets.QHBoxLayout(dialog)
     layout.setContentsMargins(18, 18, 18, 18)
     layout.setSpacing(24)
@@ -275,26 +485,36 @@ def build_dialog(core, widgets, version, context, app=None):
     return dialog
 
 
-def main():
-    pf_app = None
-    try:
-        pf_app, context = powerfactory_context()
-        log(pf_app, 'Python {} · {} · {}'.format(platform.python_version(), platform.machine(), sys.prefix))
-        binding, core, widgets = load_qt()
-        version = '{} {} · Qt {}'.format(binding, core.PYQT_VERSION_STR, core.QT_VERSION_STR)
-        log(pf_app, version + '\n' + context)
-        application(core, widgets)
-        dialog = build_dialog(core, widgets, version, context, pf_app)
-        log(pf_app, 'Testfenster wird geöffnet. Zum Fortsetzen das Fenster schließen.')
-        # ComPython waits here until the dialog closes. Do not start or quit
-        # the host QApplication's global event loop.
-        execute = getattr(dialog, 'exec', None) or dialog.exec_
-        execute()
-        dialog.deleteLater()
-        log(pf_app, 'Testfenster geschlossen; Kontrolle an PowerFactory zurückgegeben.')
-    except Exception as exc:
-        log(pf_app, str(exc), error=True)
-        raise
+def log(app, text, error=False):
+    print('[PYQT-TEST] ' + text, file=sys.stderr if error else sys.stdout, flush=True)
+
+
+def main(context, close_after_ms=0):
+    binding, core, widgets = load_qt(report=lambda message: log(None, message))
+    version = '{} {} · Qt {}'.format(binding, core.PYQT_VERSION_STR, core.QT_VERSION_STR)
+    log(None, version + '\n' + context)
+    qt_app = application(core, widgets)
+    dialog = build_dialog(core, widgets, version, context)
+    dialog.finished.connect(qt_app.quit)
+    if close_after_ms:
+        core.QTimer.singleShot(close_after_ms, dialog.reject)
+    dialog.show()
+    execute = getattr(qt_app, 'exec', None) or qt_app.exec_
+    execute()
+    dialog.deleteLater()
+    deferred = getattr(core.QEvent, 'Type', core.QEvent).DeferredDelete
+    core.QCoreApplication.sendPostedEvents(None, deferred)
+    log(None, 'Testfenster geschlossen.')
+
+
+if __name__ == '__main__':
+    options = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+    QT_BINDING = options['binding']
+    AUTO_INSTALL_PYQT = options['auto_install']
+    DEPENDENCY_DIR = options['dependency_dir']
+    main(options['context'])
+
+'''
 
 
 if __name__ == '__main__':
