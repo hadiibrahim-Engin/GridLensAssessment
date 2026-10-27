@@ -1,256 +1,301 @@
-97
-98
-99
-100
-101
-102
-103
-104
-105
-106
-107
-108
-109
-110
-111
-112
-113
-114
-115
-116
-117
-118
-119
-120
-121
-122
-123
-124
-125
-126
-127
-128
-129
-130
-131
-132
-133
-134
-135
-136
-137
-138
-139
-140
-141
-142
-143
-144
-145
-146
-147
-148
-149
-150
-151
-152
-153
-154
-155
-156
-157
-158
-159
-160
-161
-162
-163
-164
-165
-166
-167
-168
-169
-170
-171
-172
-173
-174
-175
-176
-177
-178
-179
-180
-181
-182
-183
-184
-185
-186
-187
-188
-189
-190
-191
-192
-193
-194
-195
-196
-197
-198
-199
-200
-201
-202
-203
-204
-205
-206
-207
-208
-209
-210
-211
-212
-213
-214
-215
-216
-217
-218
-219
-220
-221
-222
-223
-224
-                           relief="flat", bd=0, bg=PANEL, fg=MUTED,
-                           activebackground=PANEL2, activeforeground=TEXT,
-                           cursor="hand2", pady=12)
-        button.pack(fill="x", padx=9, pady=2)
-        nav_buttons[name] = button
+"""PyQt compatibility test for a PowerFactory ComPython or standalone Python.
 
-    tk.Label(sidebar, text="NUR TEST · KEINE BERECHNUNG", bg=PANEL,
-             fg=GREEN, font=("Segoe UI", 8, "bold")).pack(
-                 side="bottom", pady=23)
+Copy the complete file into a ComPython and run it. PyQt6 or PyQt5 must be
+installed in the Python environment configured in PowerFactory. QT_BINDING
+can select a version explicitly; auto reuses a loaded PyQt binding, otherwise
+tries PyQt6 and then PyQt5. A broken installation is reported without loading
+a second Qt version into the process.
 
-    header = tk.Frame(content, bg=BG)
-    header.pack(fill="x", padx=30, pady=(26, 7))
-    tk.Label(header, textvariable=title_var, bg=BG, fg=TEXT,
-             font=("Segoe UI", 23, "bold")).pack(side="left")
-    tk.Label(header, text="●  " + check_powerfactory(), bg=BG,
-             fg=GREEN, font=("Segoe UI", 10)).pack(side="right")
-    tk.Label(content, textvariable=subtitle_var, bg=BG, fg=MUTED,
-             font=("Segoe UI", 10), anchor="w").pack(fill="x", padx=31, pady=(0, 14))
+The dialog tests navigation, widgets, signals and timer events. Only the
+active project and study-case names are read; no calculation or write to the
+PowerFactory model is performed. Closing the dialog returns to the script.
+An existing QApplication is reused and is never quit or restyled.
 
-    # Die Seiten befinden sich unter einem dauerhaft sichtbaren Kopfbereich.
-    body = tk.Frame(content, bg=BG)
-    body.pack(fill="both", expand=True, padx=30, pady=(0, 25))
-    # Alle Seiten liegen im gemeinsamen Body-Bereich.
-    pages = {name: tk.Frame(body, bg=BG) for name, _ in nav_spec}
+Qt lifecycle reference: https://doc.qt.io/qt-6/qapplication.html
+Dialog event loop: https://doc.qt.io/qt-6/qdialog.html#exec
+"""
 
-    def label(parent, text, size=11, bold=False, fg=TEXT):
-        return tk.Label(parent, text=text, bg=BG, fg=fg, anchor="w",
-                        font=("Segoe UI", size, "bold" if bold else "normal"))
+from __future__ import annotations
 
-    home = pages["Übersicht"]
-    label(home, "Test-Komponenten", 12, True).pack(anchor="w", pady=(8, 10))
-    card = tk.Canvas(home, height=118, bg=BG, highlightthickness=0)
-    card.pack(fill="x", pady=(0, 18))
+import importlib
+import platform
+import sys
+import threading
 
-    def draw_card(event=None):
-        card.delete("all")
-        width = max(320, card.winfo_width())
-        rounded_rect(card, 2, 2, width - 2, 116, 18, PANEL2)
-        card.create_text(24, 30, text="GUI-Kompatibilität", anchor="w",
-                         font=("Segoe UI", 12, "bold"), fill=TEXT)
-        card.create_text(24, 69, text="Canvas  ·  ttk  ·  native Python  ·  kein Webserver",
-                         anchor="w", font=("Segoe UI", 11), fill=MUTED)
-        card.create_oval(width - 49, 43, width - 27, 65,
-                         fill=GREEN, outline="")
 
-    card.bind("<Configure>", draw_card)
-    label(home, "Wenn du dieses Fenster siehst, funktioniert tkinter in deiner Python-Umgebung.",
-          10, fg=MUTED).pack(anchor="w", pady=(2, 16))
+QT_BINDING = 'auto'  # 'auto', 'PyQt6' or 'PyQt5'
+_qt_app = None
 
-    test_text = tk.StringVar(value="Testfall 2030")
-    form = tk.Frame(home, bg=BG)
-    form.pack(fill="x", pady=5)
-    label(form, "Name des Testfalls", 10).pack(anchor="w", pady=(0, 5))
-    entry = ttk.Entry(form, textvariable=test_text, width=38, font=("Segoe UI", 11))
-    entry.pack(anchor="w", pady=(0, 12))
 
-    assessment_n0 = tk.BooleanVar(value=True)
-    assessment_n1 = tk.BooleanVar(value=True)
-    checks = tk.Frame(home, bg=BG)
-    checks.pack(anchor="w")
-    tk.Checkbutton(checks, text="n-0", variable=assessment_n0, bg=BG,
-                   fg=TEXT, selectcolor=PANEL, activebackground=BG,
-                   activeforeground=TEXT).pack(side="left", padx=(0, 22))
-    tk.Checkbutton(checks, text="n-1", variable=assessment_n1, bg=BG,
-                   fg=TEXT, selectcolor=PANEL, activebackground=BG,
-                   activeforeground=TEXT).pack(side="left")
-
-    def test_button():
-        messagebox.showinfo(
-            "GridLens GUI-Test erfolgreich",
-            "Dialog funktioniert.\n\nTestfall: {}\nn-0: {}\nn-1: {}\n\n"
-            "Es wurde keine PowerFactory-Berechnung ausgeführt.".format(
-                test_text.get(), assessment_n0.get(), assessment_n1.get()),
-            parent=root)
-
-    controls = tk.Frame(home, bg=BG)
-    controls.pack(anchor="w", pady=22)
-    tk.Button(controls, text="Oberfläche testen", command=test_button,
-              bg=ACCENT, fg="white", activebackground="#2563eb",
-              activeforeground="white", font=("Segoe UI", 11, "bold"),
-              padx=19, pady=11, bd=0, relief="flat",
-              cursor="hand2").pack(side="left")
-    tk.Button(controls, text="Fenster schließen", command=root.destroy,
-              bg=PANEL2, fg=TEXT, activebackground=BORDER,
-              activeforeground=TEXT, font=("Segoe UI", 10),
-              padx=18, pady=11, bd=0, relief="flat",
-              cursor="hand2").pack(side="left", padx=12)
-
-    cases = pages["Planungsfälle"]
-    label(cases, "Beispiel-Tabelle (keine echten Netzdaten)", 12, True).pack(
-        anchor="w", pady=(8, 14))
-    columns = ("fall", "status", "bewertung")
-    table = ttk.Treeview(cases, columns=columns, show="headings", style="GL.Treeview")
-    for col, title, width in [("fall", "Planungsfall", 240),
-                              ("status", "Status", 130),
-                              ("bewertung", "Bewertung", 140)]:
-        table.heading(col, text=title)
-        table.column(col, width=width, anchor="w")
-    for item in [("Referenz", "Bereit", "n-0"),
-                 ("Kabeltausch Nord", "Entwurf", "n-1"),
-                 ("Wartung Trafo 2", "Entwurf", "(n-1)'")]:
-        table.insert("", "end", values=item)
-    table.pack(fill="both", expand=True)
-
-    net = pages["Netzauswahl"]
-    label(net, "Beispiel-Netzauswahl", 12, True).pack(anchor="w", pady=(8, 15))
-    selected_grid = tk.StringVar(value="Gesamtes Netz")
-    ttk.Combobox(net, textvariable=selected_grid, state="readonly", width=35,
-                 values=("Gesamtes Netz", "Netz Nord", "Netz Süd")).pack(anchor="w")
-    label(net, "Nur Demo-Werte. Es werden keine PowerFactory-Netze gelesen.",
-          10, fg=MUTED).pack(anchor="w", pady=14)
-
-    settings = pages["Einstellungen"]
-    label(settings, "Darstellung", 12, True).pack(anchor="w", pady=(8, 15))
-    label(settings, "Dieses Beispiel nutzt tkinter, ttk und Canvas.",
-          11, fg=MUTED).pack(anchor="w")
-    label(settings, "Keine Installation und kein zusätzlicher Dienst erforderlich.",
-          11, fg=MUTED).pack(anchor="w", pady=8)
-
-    show_page("Übersicht")
-    root.protocol("WM_DELETE_WINDOW", root.destroy)
-    try:
-        root.mainloop()
-    finally:
+def load_qt():
+    """Load one binding only; avoid mixing PyQt/PySide or different Qt majors."""
+    if QT_BINDING not in ('auto', 'PyQt6', 'PyQt5'):
+        raise RuntimeError('QT_BINDING muss auto, PyQt6 oder PyQt5 sein.')
+    loaded = {name for name in ('PyQt6', 'PyQt5', 'PySide6', 'PySide2')
+              if any(key == name or key.startswith(name + '.') for key in sys.modules)}
+    if loaded & {'PySide6', 'PySide2'} or len(loaded) > 1:
+        raise RuntimeError('Bereits geladene Qt-Bindings: {}. PyQt bitte in einer frischen '
+                           'PowerFactory-Sitzung testen.'.format(', '.join(sorted(loaded))))
+    if loaded and QT_BINDING != 'auto' and QT_BINDING not in loaded:
+        raise RuntimeError('{} ist bereits geladen; QT_BINDING={} würde Qt-Versionen mischen.'
+                           .format(next(iter(loaded)), QT_BINDING))
+    candidates = sorted(loaded) if loaded else (['PyQt6', 'PyQt5'] if QT_BINDING == 'auto' else [QT_BINDING])
+    for name in candidates:
         try:
-            root.destroy()
-        except tk.TclError:
-            pass
+            importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            if exc.name != name:
+                raise RuntimeError('{} ist installiert, aber eine Abhängigkeit fehlt: {}'
+                                   .format(name, exc)) from exc
+            continue
+        try:
+            core = importlib.import_module(name + '.QtCore')
+            widgets = importlib.import_module(name + '.QtWidgets')
+        except (ImportError, OSError) as exc:
+            raise RuntimeError('{} konnte nicht geladen werden: {}. Python-Version, '
+                               'Architektur und Qt-/DLL-Installation prüfen.'.format(name, exc)) from exc
+        return name, core, widgets
+    raise RuntimeError('PyQt6/PyQt5 wurde nicht gefunden (Auswahl: {}). PyQt in der von PowerFactory '
+                       'verwendeten Python-Umgebung installieren. Python: {}; Umgebung: {}'
+                       .format(QT_BINDING, platform.python_version(), sys.prefix))
+
+
+def powerfactory_context():
+    """The current PowerFactory application and a read-only context description."""
+    try:
+        powerfactory = importlib.import_module('powerfactory')
+    except ModuleNotFoundError as exc:
+        if exc.name == 'powerfactory':
+            return None, 'Standalone · PowerFactory-Modul nicht verfügbar'
+        raise
+    get_application = getattr(powerfactory, 'GetApplication', None)
+    if not callable(get_application):
+        # A checkout may contain a directory named powerfactory, which Python
+        # can import as a namespace package even without the PowerFactory API.
+        return None, 'Standalone · Paket powerfactory enthält keine PowerFactory-API'
+    app = get_application()
+    if app is None:
+        return None, 'Keine aktive PowerFactory-Verbindung'
+    project, study = app.GetActiveProject(), app.GetActiveStudyCase()
+    return app, 'PowerFactory verbunden\nProjekt: {}\nStudienfall: {}'.format(
+        project.loc_name if project is not None else 'keines',
+        study.loc_name if study is not None else 'keiner')
+
+
+def log(app, text, error=False):
+    message = '[PYQT-TEST] ' + text
+    if app is not None:
+        printer = getattr(app, 'PrintError' if error else 'PrintPlain', None)
+        if callable(printer):
+            printer(message)
+            return
+    print(message, file=sys.stderr if error else sys.stdout)
+
+
+def application(core, widgets):
+    """Keep the QApplication alive, and create widgets only on its GUI thread."""
+    global _qt_app
+    app = widgets.QApplication.instance()
+    if app is None:
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError('PyQt benötigt den GUI-Hauptthread. Den ComPython direkt '
+                               'aus der PowerFactory-Oberfläche starten.')
+        app = widgets.QApplication(['GridLens-PyQt-Test'])
+    if not isinstance(app, widgets.QApplication):
+        raise RuntimeError('Die vorhandene Qt-Anwendung unterstützt keine Widgets.')
+    if core.QThread.currentThread() != app.thread():
+        raise RuntimeError('Der ComPython läuft außerhalb des Qt-GUI-Threads. '
+                           'Den Test direkt aus der PowerFactory-Oberfläche starten.')
+    _qt_app = app
+    return app
+
+
+def build_dialog(core, widgets, version, context, app=None):
+    dialog = widgets.QDialog()
+    dialog.setObjectName('GridLensPyQtTest')
+    dialog.setWindowTitle('GridLens · PyQt-Test für PowerFactory')
+    dialog.resize(1080, 720)
+    dialog.setMinimumSize(840, 560)
+    attribute = getattr(core.Qt, 'WidgetAttribute', core.Qt).WA_QuitOnClose
+    dialog.setAttribute(attribute, False)
+    dialog.setStyleSheet('''
+        QDialog#GridLensPyQtTest { background: #101827; }
+        QWidget { color: #e7edf7; font-family: "Segoe UI"; font-size: 13px; }
+        QFrame#sidebar { background: #172236; border-radius: 12px; }
+        QFrame#card { background: #1e2d45; border-radius: 12px; }
+        QLabel#title { font-size: 25px; font-weight: bold; }
+        QLabel#muted { color: #a4b3c9; }
+        QLabel#success { color: #72d8a5; }
+        QPushButton { background: #253650; border: 0; border-radius: 6px; padding: 12px 16px; }
+        QPushButton:hover { background: #324967; }
+        QPushButton:focus { border: 1px solid #91baff; }
+        QPushButton#primary, QPushButton:checked { background: #3478ed; }
+        QLineEdit, QComboBox { background: #172236; border: 1px solid #435676; padding: 8px; }
+        QComboBox QAbstractItemView { background: #172236; selection-background-color: #3478ed; }
+        QCheckBox { spacing: 8px; }
+        QTableWidget { background: #172236; alternate-background-color: #1e2d45; gridline-color: #435676; }
+        QHeaderView::section { background: #253650; color: #e7edf7; padding: 8px; border: 0; }
+    ''')
+    layout = widgets.QHBoxLayout(dialog)
+    layout.setContentsMargins(18, 18, 18, 18)
+    layout.setSpacing(24)
+    sidebar = widgets.QFrame()
+    sidebar.setObjectName('sidebar')
+    sidebar.setFixedWidth(205)
+    navigation = widgets.QVBoxLayout(sidebar)
+    brand = widgets.QLabel('GRIDLENS\nPyQt-Kompatibilität')
+    navigation.addWidget(brand)
+    navigation.addSpacing(24)
+    layout.addWidget(sidebar)
+    content = widgets.QVBoxLayout()
+    content.setSpacing(16)
+    layout.addLayout(content, 1)
+    title = widgets.QLabel()
+    title.setObjectName('title')
+    content.addWidget(title)
+    subtitle = widgets.QLabel(version)
+    subtitle.setWordWrap(True)
+    subtitle.setObjectName('muted')
+    content.addWidget(subtitle)
+    stack = widgets.QStackedWidget()
+    stack.setObjectName('pages')
+    content.addWidget(stack, 1)
+    buttons = []
+    group = widgets.QButtonGroup(dialog)
+    group.setExclusive(True)
+
+    def page(name):
+        frame = widgets.QWidget()
+        body = widgets.QVBoxLayout(frame)
+        body.setSpacing(16)
+        index = stack.addWidget(frame)
+        button = widgets.QPushButton(name)
+        button.setCheckable(True)
+        button.setAutoDefault(False)
+        group.addButton(button)
+        navigation.addWidget(button)
+        buttons.append(button)
+
+        def show_page(_checked=False):
+            stack.setCurrentIndex(index)
+            title.setText(name)
+        button.clicked.connect(show_page)
+        return body
+
+    home = page('Übersicht')
+    card = widgets.QFrame()
+    card.setObjectName('card')
+    card_layout = widgets.QVBoxLayout(card)
+    card_layout.setContentsMargins(20, 20, 20, 20)
+    card_layout.addWidget(widgets.QLabel('GUI-Kompatibilität · Qt Widgets'))
+    timer_label = widgets.QLabel('Ereignisschleife: wartet auf Timer …')
+    timer_label.setObjectName('heartbeat')
+    card_layout.addWidget(timer_label)
+    home.addWidget(card)
+    home.addWidget(widgets.QLabel('Name des Testfalls'))
+    name = widgets.QLineEdit('Testfall 2030')
+    name.setObjectName('caseName')
+    home.addWidget(name)
+    checks = widgets.QHBoxLayout()
+    n0, n1 = widgets.QCheckBox('n-0'), widgets.QCheckBox('n-1')
+    n0.setObjectName('n0')
+    n1.setObjectName('n1')
+    for check in (n0, n1):
+        check.setChecked(True)
+        checks.addWidget(check)
+    checks.addStretch()
+    home.addLayout(checks)
+    test = widgets.QPushButton('Oberfläche testen')
+    test.setObjectName('primary')
+    test.setAutoDefault(False)
+
+    def test_button(_checked=False):
+        text = 'Testfall: {}\nn-0: {}\nn-1: {}\n\nPyQt-Signal empfangen. Keine Berechnung ausgeführt.'.format(
+            name.text(), n0.isChecked(), n1.isChecked())
+        log(app, text)
+        widgets.QMessageBox.information(dialog, 'GridLens PyQt-Test erfolgreich', text)
+    test.clicked.connect(test_button)
+    home.addWidget(test)
+    home.addStretch()
+
+    cases = page('Planungsfälle')
+    cases.addWidget(widgets.QLabel('Beispiel-Tabelle · keine echten Netzdaten'))
+    table = widgets.QTableWidget(3, 3)
+    table.setObjectName('caseTable')
+    table.setHorizontalHeaderLabels(['Planungsfall', 'Status', 'Bewertung'])
+    table.verticalHeader().hide()
+    table.setAlternatingRowColors(True)
+    view = widgets.QAbstractItemView
+    table.setEditTriggers(getattr(view, 'EditTrigger', view).NoEditTriggers)
+    for row, values in enumerate([('Referenz', 'Bereit', 'n-0'),
+                                  ('Kabeltausch Nord', 'Entwurf', 'n-1'),
+                                  ('Wartung Trafo 2', 'Entwurf', "(n-1)'")]):
+        for column, value in enumerate(values):
+            table.setItem(row, column, widgets.QTableWidgetItem(value))
+    table.horizontalHeader().setStretchLastSection(True)
+    table.resizeColumnsToContents()
+    cases.addWidget(table)
+
+    network = page('Netzauswahl')
+    network.addWidget(widgets.QLabel('Beispiel-Netzauswahl'))
+    grids = widgets.QComboBox()
+    grids.setObjectName('gridChoice')
+    grids.addItems(['Gesamtes Netz', 'Netz Nord', 'Netz Süd'])
+    network.addWidget(grids)
+    note = widgets.QLabel('Nur Demo-Werte. Es werden keine PowerFactory-Netze gelesen.')
+    note.setWordWrap(True)
+    network.addWidget(note)
+    network.addStretch()
+
+    settings = page('Einstellungen')
+    details = widgets.QLabel('{}\n\n{}\n\nPython {} · {}\nInterpreter: {}\nUmgebung: {}'.format(
+        version, context, platform.python_version(), platform.machine(), sys.executable, sys.prefix))
+    details.setWordWrap(True)
+    settings.addWidget(details)
+    settings.addStretch()
+    navigation.addStretch()
+    safe = widgets.QLabel('NUR TEST\nKEINE BERECHNUNG')
+    safe.setObjectName('success')
+    navigation.addWidget(safe)
+    close = widgets.QPushButton('Fenster schließen')
+    close.setAutoDefault(False)
+    close.clicked.connect(dialog.reject)
+    content.addWidget(close)
+    buttons[0].click()
+    timer = core.QTimer(dialog)
+    timer.setInterval(1000)
+    ticks = [0]
+
+    def tick():
+        ticks[0] += 1
+        timer_label.setText('Ereignisschleife aktiv · {} s'.format(ticks[0]))
+    timer.timeout.connect(tick)
+    timer.start()
+    dialog.finished.connect(timer.stop)
+    return dialog
+
+
+def main():
+    pf_app = None
+    try:
+        pf_app, context = powerfactory_context()
+        log(pf_app, 'Python {} · {} · {}'.format(platform.python_version(), platform.machine(), sys.prefix))
+        binding, core, widgets = load_qt()
+        version = '{} {} · Qt {}'.format(binding, core.PYQT_VERSION_STR, core.QT_VERSION_STR)
+        log(pf_app, version + '\n' + context)
+        application(core, widgets)
+        dialog = build_dialog(core, widgets, version, context, pf_app)
+        log(pf_app, 'Testfenster wird geöffnet. Zum Fortsetzen das Fenster schließen.')
+        # ComPython waits here until the dialog closes. Do not start or quit
+        # the host QApplication's global event loop.
+        execute = getattr(dialog, 'exec', None) or dialog.exec_
+        execute()
+        dialog.deleteLater()
+        log(pf_app, 'Testfenster geschlossen; Kontrolle an PowerFactory zurückgegeben.')
+    except Exception as exc:
+        log(pf_app, str(exc), error=True)
+        raise
+
+
+if __name__ == '__main__':
+    main()
