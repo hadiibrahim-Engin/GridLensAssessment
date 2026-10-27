@@ -1,5 +1,8 @@
 # GridLens 8.0 – Planning-Case Manager: Architecture and Method
 
+Historical design document. For the current 8.0.1 delivery, versions and
+operating instructions, see [README](../README.md).
+
 Status: 23 October 2026 · Publisher 8.0.0 · MRT 6.2.0 · data contract 6.2 (n-1 chapters; names without digits; one template page per chapter) · settings 1.0 · classification rules 1.0
 
 GridLens 8 turns the single-outage pre-check of 7.x into an assessment of

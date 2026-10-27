@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of powerfactory/gridlens_report.py, written by tools/sync_case_manager_copy.py - do not edit >>>
-# GridLens 8.0.0: 168 definitions.
+# GridLens 8.0.1: 168 definitions.
 import hashlib
 import math
 import re
@@ -89,7 +89,7 @@ ENERGIZED_MIN_PU = 0.1
 MAX_N1_TIMES = 2000
 
 
-PUBLISHER_VERSION = '8.0.0'
+PUBLISHER_VERSION = '8.0.1'
 
 
 RUN_REFERENCE_CASE = True
@@ -1278,6 +1278,9 @@ def validate_case_config(config, max_cases=-1):
         problems.append('unknown schema {!r}'.format(config.get('schema')))
     if config.get('schema_version') != CASE_CONFIG_SCHEMA_VERSION:
         problems.append('schema version {!r} is not {}'.format(config.get('schema_version'), CASE_CONFIG_SCHEMA_VERSION))
+    revision = config.get('revision', 0)
+    if type(revision) is not int or revision < 0:
+        problems.append('revision must be a non-negative integer')
     # 'mode' is a field of earlier versions (time optimisation); it is ignored and no longer saved.
     if config.get('mode', 'conservative') not in ('conservative', 'optimized'):
         problems.append('unknown calculation mode {!r}'.format(config.get('mode')))
@@ -1308,7 +1311,8 @@ def validate_case_config(config, max_cases=-1):
             problems.append('{}: id {!r} is not allowed (letters, digits, _ and -, up to 16 characters, not REF)'.format(label, identifier))
         elif identifier in seen:
             problems.append('{}: id is used twice'.format(label))
-        seen.add(identifier)
+        if isinstance(identifier, str):
+            seen.add(identifier)
         if not isinstance(case.get('name', ''), str) or not isinstance(case.get('description', ''), str):
             problems.append('{}: name and description must be text'.format(label))
         if not isinstance(case.get('enabled', True), bool):
@@ -1519,6 +1523,7 @@ def load_case_config(path):
 
 def save_case_config(path, config, user=''):
     """Write the configuration with the next revision; the project itself is not touched."""
+    path = os.fspath(path)
     problems = validate_case_config(config)
     if problems:
         raise GridLensError('The case configuration was not saved: {}'.format('; '.join(problems)))
@@ -1530,10 +1535,20 @@ def save_case_config(path, config, user=''):
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
-    temporary = path + '.tmp'
-    with open(temporary, 'w', encoding='utf-8') as handle:
-        json.dump(stored, handle, indent=2, sort_keys=True)
-    os.replace(temporary, path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=folder or '.',
+                                         prefix=os.path.basename(path) + '.', suffix='.tmp', delete=False) as handle:
+            temporary = handle.name
+            json.dump(stored, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except (OSError, TypeError, ValueError) as exc:
+        raise GridLensError('The case configuration {} was not saved: {}'.format(path, exc)) from exc
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.remove(temporary)
     config['revision'] = stored['revision']
     config.pop('migration_note', None)
     return stored
@@ -3521,7 +3536,7 @@ class CaseManagerDialog:
         scroll.grid(row=0, column=1, sticky='ns')
         def fit(_event=None):
             allow_horizontal = horizontal and (horizontal != 'zoom' or self.ui_zoom > 1)
-            natural_height = inner.winfo_reqheight() if horizontal != 'zoom' or self.ui_zoom > 1 else 1
+            natural_height = inner.winfo_reqheight()
             canvas.itemconfigure(window, width=max(inner.winfo_reqwidth() if allow_horizontal else 1, canvas.winfo_width()),
                                  height=max(natural_height, canvas.winfo_height()))
             canvas.configure(scrollregion=canvas.bbox('all'))

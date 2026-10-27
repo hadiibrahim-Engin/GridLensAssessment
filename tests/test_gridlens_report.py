@@ -9,7 +9,7 @@ from xml.etree import ElementTree as ET
 import pytest
 
 
-from _paths import REPORTS, delivered, report_tree  # noqa: E402
+from _paths import REPORTS, delivered, report_tree
 SCRIPT = delivered("gridlens_report.py")
 SPEC = importlib.util.spec_from_file_location("gridlens_report", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
@@ -275,7 +275,7 @@ class App:
 
 
 def test_table_contract_is_single_versioned_contract_seven():
-    assert gl.PUBLISHER_VERSION == "8.0.0"
+    assert gl.PUBLISHER_VERSION == "8.0.1"
     assert gl.TEMPLATE_VERSION == "7.0.0"
     assert gl.DATA_CONTRACT_VERSION == "7.0"
     # No field name carries a digit: tables with such fields were missing from the PowerFactory report database.

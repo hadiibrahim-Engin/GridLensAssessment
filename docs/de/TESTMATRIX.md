@@ -1,5 +1,9 @@
 # GridLens 8.0 – Testmatrix (Lieferteil G)
 
+Historische Spezifikationsmatrix; die unten genannten Testzahlen gehören zu
+diesem Entwicklungsstand. Aktuelle Prüfanleitung und Abgrenzung zur nativen
+PowerFactory-Abnahme stehen in der [README](../../README.md).
+
 Englische Fassung: [../TEST_MATRIX.md](../TEST_MATRIX.md)
 
 Statuskategorien:

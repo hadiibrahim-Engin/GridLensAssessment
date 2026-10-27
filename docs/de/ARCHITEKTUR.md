@@ -1,5 +1,8 @@
 # GridLens 8.0 – Planungsfall-Manager: Architektur und Methodik
 
+Historischer Entwurfsstand. Aktueller Lieferumfang, Versionen und
+Betriebsanleitung für 8.0.1 stehen in der [README](../../README.md).
+
 Stand: 23. Oktober 2026 · Publisher 8.0.0 · MRT 6.2.0 · Datenvertrag 6.2 (n-1-Kapitel; Namen ohne Ziffern; eine Vorlagenseite je Kapitel) · Settings 1.0 · Klassifizierungsregeln 1.0
 
 GridLens 8 erweitert die Einzel-Vorprüfung von 7.x zu einer Bewertung **vom

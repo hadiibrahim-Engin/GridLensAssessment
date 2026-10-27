@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from _paths import tool as _tool  # noqa: E402
+from _paths import tool as _tool
 
 TOOL, SYNC = _tool("FS_CaseManager_GUI_Test_PowerFactory2026.py"), _tool("sync_case_manager_copy.py")
 if TOOL is None or SYNC is None:

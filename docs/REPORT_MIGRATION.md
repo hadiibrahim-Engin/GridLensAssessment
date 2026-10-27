@@ -1,5 +1,9 @@
 # Report Migration: Data Contract 5.0 → 6.0
 
+Historical migration record. The current delivery uses data contract 7.0 and
+dictionary/page files; see [README](../README.md). The MRT generator mentioned
+below is no longer part of the delivery.
+
 German version: [de/BERICHTSMIGRATION.md](de/BERICHTSMIGRATION.md)
 
 | | Before | After |

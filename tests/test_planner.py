@@ -10,7 +10,7 @@ import time
 import pytest
 
 
-from _paths import delivered  # noqa: E402
+from _paths import delivered
 SCRIPT = delivered("gridlens_report.py")
 SPEC = importlib.util.spec_from_file_location("gridlens_planner", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)

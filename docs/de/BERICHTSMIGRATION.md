@@ -1,5 +1,9 @@
 # Berichtsmigration: Datenvertrag 5.0 → 6.0
 
+Historische Migration. Die aktuelle Lieferung verwendet Datenvertrag 7.0 und
+Dictionary-/Seitendateien; siehe [README](../../README.md). Der unten genannte
+MRT-Generator gehört nicht mehr zum Lieferumfang.
+
 Englische Fassung: [../REPORT_MIGRATION.md](../REPORT_MIGRATION.md)
 
 | | Vorher | Nachher |

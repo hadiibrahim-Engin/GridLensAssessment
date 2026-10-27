@@ -7,7 +7,7 @@ from xml.etree import ElementTree as ET
 import pytest
 
 
-from _paths import delivered, report_files, report_folder, report_text, report_tree  # noqa: E402
+from _paths import delivered, report_files, report_folder, report_text, report_tree
 # The two reports as the repository keeps them: a .dct dictionary and one .pg file per page each.
 TEMPLATES = {"main": "MASTER_GRIDLENS", "detail": "MASTER_GRIDLENS_DETAIL"}
 SCRIPT = delivered("gridlens_report.py")

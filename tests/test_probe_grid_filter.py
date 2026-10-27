@@ -7,7 +7,7 @@ import importlib.util
 import pytest
 
 
-from _paths import delivered, tool  # noqa: E402
+from _paths import delivered, tool
 
 PROBE = tool("probe_grid_filter.py")
 if PROBE is None:

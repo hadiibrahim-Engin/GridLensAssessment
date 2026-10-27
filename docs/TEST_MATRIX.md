@@ -1,5 +1,9 @@
 # GridLens 8.0 – Test Matrix (deliverable G)
 
+Historical specification matrix; test counts below describe that development
+stage. Current verification instructions and the distinction between automated
+checks and native PowerFactory acceptance are in [README](../README.md).
+
 German version: [de/TESTMATRIX.md](de/TESTMATRIX.md)
 
 Status categories:

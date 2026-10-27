@@ -772,7 +772,7 @@ def run(app, printer=None):
 
 
 def main():
-    import powerfactory  # noqa: F401  (only available inside PowerFactory)
+    import powerfactory
 
     run(powerfactory.GetApplication())
 

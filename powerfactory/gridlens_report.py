@@ -25,6 +25,7 @@ import json
 import math
 import os
 import re
+import tempfile
 import textwrap
 import time
 from array import array
@@ -59,7 +60,7 @@ ENERGIZED_MIN_PU = 0.1
 # Upper bound of n-1 study times per case: every study time calculates every contingency.
 MAX_N1_TIMES = 2000
 TIME_UNIT_FALLBACK = 'h'
-PUBLISHER_VERSION = '8.0.0'
+PUBLISHER_VERSION = '8.0.1'
 TEMPLATE_NAME = 'MASTER_GRIDLENS'
 TEMPLATE_VERSION = '7.0.0'
 DATA_CONTRACT_VERSION = '7.0'
@@ -1727,8 +1728,9 @@ def read_n1_results(source, in_scope=element_in_scope, recording_limits=None):
     """{study time: {(contingency key, element key, quantity): value or None}} plus the element and contingency names.
 
     None marks code 3, a value inside the recording limits. Only the
-    variables of N1_VARIABLES of elements in scope are read; a value that is
-    neither written nor marked code 3 is left out (no artificial zero).
+    variables of N1_VARIABLES of elements in scope are read. Cells that are
+    neither written nor marked code 3 go into `absent` by study time; they
+    remain distinguishable from unrecorded values (no artificial zero).
     """
     found = {
         'times': {},
@@ -1738,6 +1740,7 @@ def read_n1_results(source, in_scope=element_in_scope, recording_limits=None):
         'nominal_kv': {},
         'grids': {},
         'present': {},
+        'absent': {},
     }
     from_command = class_name(source) == N1_COMMAND_CLASS
     result = safe_attr(source, N1_RESULT_ATTRIBUTE) if from_command else source
@@ -1745,11 +1748,12 @@ def read_n1_results(source, in_scope=element_in_scope, recording_limits=None):
     wanted = {variable: quantity for quantity, variables in N1_VARIABLES.items() for variable in variables}
     for sub in subs:
         moment = finite_number(safe_attr(sub, 'cnttime'))
-        if moment is None:
-            continue
-        present, values, _absent = _read_n1_sub(sub, wanted, in_scope, found, keep_unrecorded=True)
-        found['times'].setdefault(moment, {}).update(values)
+        if moment is None or moment in found['times']:
+            raise GridLensError('The n-1 result contains an invalid or duplicate study time.')
+        present, values, absent = _read_n1_sub(sub, wanted, in_scope, found, keep_unrecorded=True)
+        found['times'][moment] = values
         found['present'][moment] = present
+        found['absent'][moment] = absent
     found['recording_limits'] = _recording_limits(source) if from_command else (recording_limits or {})
     return found
 
@@ -1791,9 +1795,10 @@ def _read_n1_sub(sub, wanted, in_scope, meta, keep_unrecorded=False):
         for row in range(rows):
             code, outage = _status_pair(sub.GetObjectValue(row))
             contingency = object_key(outage) if code == 0 and outage is not None else None
-            if contingency is not None:
-                meta['contingencies'].setdefault(contingency, object_name(outage))
-                present.add(contingency)
+            if contingency is None or contingency in present:
+                raise GridLensError('The n-1 result contains an unreadable or duplicate contingency row.')
+            meta['contingencies'].setdefault(contingency, object_name(outage))
+            present.add(contingency)
             contingencies.append(contingency)
         for column, key, quantity in columns:
             for row, value in enumerate(_n1_column(sub, column, rows, quantity)):
@@ -1826,8 +1831,11 @@ class SweepReader:
         self._subs = {}
         for item in _contents(result, '*.ElmRes') if result is not None else []:
             moment = finite_number(safe_attr(item, 'cnttime'))
-            if class_name(item) == 'ElmRes' and moment is not None:
-                self._subs[moment] = item
+            if class_name(item) != 'ElmRes':
+                continue
+            if moment is None or moment in self._subs:
+                raise GridLensError('The n-1 result contains an invalid or duplicate study time.')
+            self._subs[moment] = item
         self.times = sorted(self._subs)
         self.meta = {'elements': {}, 'contingencies': {}, 'categories': {}, 'nominal_kv': {}, 'grids': {}}
         self.recording_limits = recording_limits or {}
@@ -1856,7 +1864,8 @@ class LoadedSweep:
         present = self._data.get('present', {}).get(moment)
         if present is None:
             present = {key[0] for key in values}
-        return set(present), {key: value for key, value in values.items() if value is not None}, set()
+        absent = set(self._data.get('absent', {}).get(moment) or ())
+        return set(present), {key: value for key, value in values.items() if value is not None}, absent
 
 
 def _n1_column(sub, column, rows, quantity='loading'):
@@ -1864,9 +1873,8 @@ def _n1_column(sub, column, rows, quantity='loading'):
 
     The whole column comes in one GetColumnValues call when it holds a value
     in every row; otherwise each cell is read to tell code 3 from a missing
-    value. What the bulk read puts into a code-3 cell is not verified: 0 % is
-    harmless for loading (inside the recording limit anyway), but a voltage
-    column with a 0 is read cell by cell.
+    value. A zero in a bulk column can be a measured zero or an unrecorded
+    sparse cell; read that column cell by cell to preserve its native codes.
     """
     vector = COLUMN_BUFFER
     if vector is not None:
@@ -1877,7 +1885,7 @@ def _n1_column(sub, column, rows, quantity='loading'):
             code, bulk = None, None
         if code == 0.0 and _is_sequence(bulk) and len(bulk) == rows:
             numbers = [finite_number(value) for value in bulk]
-            if all(number is not None and (quantity == 'loading' or number > 0.0) for number in numbers):
+            if all(number is not None and number > 0.0 for number in numbers):
                 RUN_STATS.count('columns_bulk')
                 return numbers
     RUN_STATS.count('values_cellwise', rows)
@@ -1922,6 +1930,14 @@ def _proves_within(quantity, bound, limit, parameters):
     return bound[0] >= limit['min'] - margin and bound[1] <= limit['max'] + margin
 
 
+def _recording_sides(recording):
+    """Recording limits of REF and scenario; accept the shared-limit form as well."""
+    recording = recording or {}
+    if 'reference' in recording or 'scenario' in recording:
+        return recording.get('reference') or {}, recording.get('scenario') or {}
+    return recording, recording
+
+
 def classify_n1(reference, scenario, parameters=None, recording=None):
     """classify_comparison() for n-1 results, where a side may hold no value because it lay inside the recording limits.
 
@@ -1936,7 +1952,6 @@ def classify_n1(reference, scenario, parameters=None, recording=None):
     if not unrecorded:
         return classify_comparison(reference, scenario, parameters)
     quantity, limit = scenario.get('quantity'), scenario.get('limit')
-    bound = (recording or {}).get(quantity)
     base = {'classification_version': CLASSIFICATION_VERSION, 'indicators': [], 'delta': None,
             'identity': {field: scenario.get(field) for field in COMPARISON_IDENTITY}, 'limit': limit,
             'reference_violation': None, 'scenario_violation': None}
@@ -1945,7 +1960,10 @@ def classify_n1(reference, scenario, parameters=None, recording=None):
     checked = classify_comparison(probe[0], probe[1], parameters)
     if checked['status'] in ('FAILED', 'NOT_APPLICABLE', 'NOT_COMPARABLE'):
         return checked
-    if not _proves_within(quantity, bound, limit, parameters):
+    limits = _recording_sides(recording)
+    if any(side.get('state') == STATE_NOT_RECORDED and
+           not _proves_within(quantity, bounds.get(quantity), limit, parameters)
+           for side, bounds in zip((reference, scenario), limits)):
         return dict(base, status='NOT_EVALUATED', code=CLASSIFICATION_CODES['NOT_EVALUATED'],
                     reasons=['inside the recording limits of the contingency analysis, which do not prove the value '
                              'within the assessment limit'])
@@ -1967,7 +1985,7 @@ def classify_n1(reference, scenario, parameters=None, recording=None):
                 scenario_violation=sizes[1], reasons=['a value inside the recording limits has no exact delta'])
 
 
-def _n1_side(values, moment, contingency, element, quantity, limit, applicable=True):
+def _n1_side(values, moment, contingency, element, quantity, limit, applicable=True, unreadable=()):
     identity = {
         'time': moment,
         'contingency': contingency,
@@ -1979,6 +1997,8 @@ def _n1_side(values, moment, contingency, element, quantity, limit, applicable=T
         return dict(identity, state=STATE_NOT_APPLICABLE, limit=limit,
                     reason='the planned outages of the case already switch off its equipment')
     key = (contingency, element, quantity)
+    if key in unreadable:
+        return dict(identity, state=STATE_MISSING, limit=limit, reason='result cell not readable')
     if key not in values:
         return dict(identity, state=STATE_FAILED, limit=limit, reason='no result row for this contingency')
     if values[key] is None:
@@ -2003,19 +2023,24 @@ def compare_n1(reference, scenario, switched_off=(), contingency_elements=None, 
     not_applicable = set()
     for moment, ref_values in sorted(reference['times'].items()):
         case_values = scenario['times'].get(moment)
-        present = {key[0] for key in (case_values or {})}
-        for (contingency, element, quantity) in ref_values:
+        ref_absent = reference.get('absent', {}).get(moment) or set()
+        case_absent = scenario.get('absent', {}).get(moment) or set()
+        present = scenario.get('present', {}).get(moment)
+        if present is None:
+            present = {key[0] for key in (case_values or {})}
+        for (contingency, element, quantity) in sorted(set(ref_values) | set(ref_absent)):
             if element in switched_off:
                 continue
             category = reference['categories'].get(element, 'line')
             limit = n1_limit(quantity, category, reference['nominal_kv'].get(element))
-            ref_side = _n1_side(ref_values, moment, contingency, element, quantity, limit)
+            ref_side = _n1_side(ref_values, moment, contingency, element, quantity, limit, unreadable=ref_absent)
             if case_values is None:
                 case_side = dict(ref_side, state=STATE_FAILED, reason='the study time was not calculated')
             else:
                 applicable = contingency in present or not (contingency_elements.get(contingency, set()) & switched_off)
-                case_side = _n1_side(case_values, moment, contingency, element, quantity, limit, applicable)
-            outcome = classify_n1(ref_side, case_side, parameters, scenario.get('recording_limits'))
+                case_side = _n1_side(case_values, moment, contingency, element, quantity, limit, applicable, case_absent)
+            outcome = classify_n1(ref_side, case_side, parameters, {
+                'reference': reference.get('recording_limits'), 'scenario': scenario.get('recording_limits')})
             counts[outcome['status']] = counts.get(outcome['status'], 0) + 1
             if outcome['status'] == 'NOT_APPLICABLE':
                 not_applicable.add(reference['contingencies'].get(contingency, contingency))
@@ -2127,9 +2152,9 @@ def classify_criterion(criterion, threshold, reference, scenario, parameters=Non
         return done('NOT_EVALUATED')
     margin = tolerance['limit'] + numeric
     sizes = []
-    for state, value in (reference, scenario):
+    for (state, value), bounds in zip((reference, scenario), _recording_sides(recording)):
         if state == STATE_NOT_RECORDED_CELL:
-            if not _inside_recording(criterion, (recording or {}).get(quantity), limit, margin):
+            if not _inside_recording(criterion, bounds.get(quantity), limit, margin):
                 return done('NOT_EVALUATED')
             sizes.append(None)
         elif state == STATE_OK and _measured(value) is not None:
@@ -2324,7 +2349,8 @@ class ScenarioAggregate:
             if implicit <= 0:
                 continue
             margin = self.parameters[CRITERION_QUANTITY[criterion]]['limit'] + self.parameters['numeric']
-            if _inside_recording(criterion, self.recording.get(CRITERION_QUANTITY[criterion]), threshold, margin):
+            if all(_inside_recording(criterion, bounds.get(CRITERION_QUANTITY[criterion]), threshold, margin)
+                   for bounds in _recording_sides(self.recording)):
                 self.events['OK'] += implicit
             else:
                 self.events['NOT_EVALUATED'] += implicit
@@ -2446,6 +2472,14 @@ class ScenarioAggregate:
                 counted[REPORT_CATEGORY.get(categories.get(element), 'line')] += 1
             return counted
         monitored = self._monitored()
+        implicit_unassessed = set()
+        for element in monitored:
+            for criterion, threshold in self._thresholds(element).items():
+                quantity = CRITERION_QUANTITY[criterion]
+                margin = self.parameters[quantity]['limit'] + self.parameters['numeric']
+                if not all(_inside_recording(criterion, bounds.get(quantity), threshold, margin)
+                           for bounds in _recording_sides(self.recording)):
+                    implicit_unassessed.add((element, criterion))
         scope = {}
         for element in monitored:
             kv = self.meta.get('nominal_kv', {}).get(element)
@@ -2454,7 +2488,13 @@ class ScenarioAggregate:
             entry = scope.setdefault(key, {'monitored': 0, 'critical': 0, 'incomplete': 0})
             entry['monitored'] += 1
             entry['critical'] += element in self.critical_elements
-            entry['incomplete'] += any(status in QUALITY_STATUSES for _, status in self.element_status.get(element, {}))
+            explicit = self.element_status.get(element, {})
+            unknown_implicit = any(
+                (element, criterion) in implicit_unassessed and self.examined_pairs > sum(
+                    count for (found, _status), count in explicit.items() if found == criterion)
+                for criterion in self._thresholds(element))
+            entry['incomplete'] += bool(self.pairs_failed or self.pairs_missing_time or unknown_implicit or
+                                       any(status in QUALITY_STATUSES for _, status in explicit))
         cells = self._cells()
         required = len(self.requested_times) * len(self.contingencies) * cells
         return {
@@ -2482,6 +2522,7 @@ class ScenarioAggregate:
             },
             'scope': scope,
             'element_status': self.element_status, 'element_extremes': self.element_extremes,
+            'implicit_unassessed': implicit_unassessed,
             'element_pairs': {'examined': self.examined_pairs, 'not_applicable': self.pairs_not_applicable,
                               'failed': self.pairs_failed, 'missing_time': self.pairs_missing_time},
             'register': self.register, 'time_criticality': self.time_rows,
@@ -2508,7 +2549,8 @@ def element_counters(statistics, element, criterion):
                 if crit == criterion}
     pairs = statistics['element_pairs']
     counters = {status: explicit.get(status, 0) for status in STATUS_PRIORITY}
-    counters['OK'] += max(0, pairs['examined'] - sum(explicit.values()))
+    implicit_status = 'NOT_EVALUATED' if (element, criterion) in statistics.get('implicit_unassessed', ()) else 'OK'
+    counters[implicit_status] += max(0, pairs['examined'] - sum(explicit.values()))
     counters['NOT_APPLICABLE'] += pairs['not_applicable']
     counters['FAILED'] += pairs['failed']
     counters['NOT_EVALUATED'] += pairs['missing_time']
@@ -2526,7 +2568,8 @@ def compare_scenario(run_id, scenario_id, reference, scenario, requested_times, 
     meta = {name: {} for name in ('elements', 'contingencies', 'categories', 'nominal_kv', 'grids')}
     times = sorted(set(requested_times))
     aggregate = ScenarioAggregate(run_id, scenario_id, meta, contingencies, times, switched_off, contingency_elements,
-                                  scenario.recording_limits or reference.recording_limits, parameters, event_limit)
+                                  {'reference': reference.recording_limits, 'scenario': scenario.recording_limits},
+                                  parameters, event_limit)
     ref_times, scen_times = set(reference.times), set(scenario.times)
     for index, moment in enumerate(times):
         ref_step = reference.read(moment) if moment in ref_times else None
@@ -2602,6 +2645,10 @@ def level_statistics(run_id, level, reader, requested_times=None, parameters=Non
 
 def qds_level_statistics(run_id, result):
     """n-0 statistics of a QDS result (REF): monitored and critical elements per class, critical time steps, extremes."""
+    cached = result.get('_qds_statistics')
+    if cached is not None:
+        return dict(cached, run_id=run_id, max_violation={
+            criterion: dict(finding, run_id=run_id) for criterion, finding in cached['max_violation'].items()})
     critical, critical_rows, maximum = set(), set(), {}
     monitored = {category: 0 for category in ('line', 'transformer', 'node')}
     labels = result.get('labels') or []
@@ -3147,6 +3194,8 @@ def critical_steps(result):
 
 def release_values(result):
     """Drop the full-resolution arrays of a compared case; statistics, plot points and critical steps stay."""
+    if result.get('id') == REFERENCE_ID and '_qds_statistics' not in result:
+        result['_qds_statistics'] = qds_level_statistics('', result)
     if 'critical_steps' not in result and result.get('item_by_key'):
         result['critical_steps'] = critical_steps(result)
     for item in result['item_by_key'].values():
@@ -4365,6 +4414,9 @@ def _element_view(results):
         prime = stats['level'] == N1_PRIME
         switched = set(stats.get('switched_off_keys') or ())
         elements = set(stats['element_extremes']) | set(stats['element_status'])
+        elements |= {element for element, _criterion in stats.get('implicit_unassessed', ())}
+        if stats['element_pairs']['failed'] or stats['element_pairs']['missing_time']:
+            elements |= set(meta['elements']) - switched
         for element in elements:
             group = _element_group(meta, element)
             for criterion in (('loading',) if group != 'node' else ('voltage_low', 'voltage_high')):
@@ -4385,10 +4437,10 @@ def _element_view(results):
                 found = extremes.get((criterion, 'reference'))
                 if found is not None and (record['reference'] is None or found[0] > record['reference'][0]):
                     record['reference'] = found
-                explicit = {status: count for (crit, status), count in stats['element_status'].get(element, {}).items()
-                            if crit == criterion}
+                explicit = {status: count for status, count in element_counters(stats, element, criterion).items()
+                            if count and status not in ('OK', 'NOT_APPLICABLE')}
                 if not prime:
-                    explicit = {}
+                    explicit = {status: count for status, count in explicit.items() if status in QUALITY_STATUSES}
                 record['statuses'] |= {status for status, count in explicit.items() if count}
                 record['quality'] |= any(explicit.get(status) for status in QUALITY_STATUSES)
                 if prime:
@@ -6323,6 +6375,9 @@ def validate_case_config(config, max_cases=-1):
         problems.append('unknown schema {!r}'.format(config.get('schema')))
     if config.get('schema_version') != CASE_CONFIG_SCHEMA_VERSION:
         problems.append('schema version {!r} is not {}'.format(config.get('schema_version'), CASE_CONFIG_SCHEMA_VERSION))
+    revision = config.get('revision', 0)
+    if type(revision) is not int or revision < 0:
+        problems.append('revision must be a non-negative integer')
     # 'mode' is a field of earlier versions (time optimisation); it is ignored and no longer saved.
     if config.get('mode', 'conservative') not in ('conservative', 'optimized'):
         problems.append('unknown calculation mode {!r}'.format(config.get('mode')))
@@ -6353,7 +6408,8 @@ def validate_case_config(config, max_cases=-1):
             problems.append('{}: id {!r} is not allowed (letters, digits, _ and -, up to 16 characters, not REF)'.format(label, identifier))
         elif identifier in seen:
             problems.append('{}: id is used twice'.format(label))
-        seen.add(identifier)
+        if isinstance(identifier, str):
+            seen.add(identifier)
         if not isinstance(case.get('name', ''), str) or not isinstance(case.get('description', ''), str):
             problems.append('{}: name and description must be text'.format(label))
         if not isinstance(case.get('enabled', True), bool):
@@ -6583,6 +6639,7 @@ def load_case_config(path):
 
 def save_case_config(path, config, user=''):
     """Write the configuration with the next revision; the project itself is not touched."""
+    path = os.fspath(path)
     problems = validate_case_config(config)
     if problems:
         raise GridLensError('The case configuration was not saved: {}'.format('; '.join(problems)))
@@ -6594,10 +6651,20 @@ def save_case_config(path, config, user=''):
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
-    temporary = path + '.tmp'
-    with open(temporary, 'w', encoding='utf-8') as handle:
-        json.dump(stored, handle, indent=2, sort_keys=True)
-    os.replace(temporary, path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=folder or '.',
+                                         prefix=os.path.basename(path) + '.', suffix='.tmp', delete=False) as handle:
+            temporary = handle.name
+            json.dump(stored, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except (OSError, TypeError, ValueError) as exc:
+        raise GridLensError('The case configuration {} was not saved: {}'.format(path, exc)) from exc
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.remove(temporary)
     config['revision'] = stored['revision']
     config.pop('migration_note', None)
     return stored
@@ -8633,7 +8700,7 @@ class CaseManagerDialog:
         scroll.grid(row=0, column=1, sticky='ns')
         def fit(_event=None):
             allow_horizontal = horizontal and (horizontal != 'zoom' or self.ui_zoom > 1)
-            natural_height = inner.winfo_reqheight() if horizontal != 'zoom' or self.ui_zoom > 1 else 1
+            natural_height = inner.winfo_reqheight()
             canvas.itemconfigure(window, width=max(inner.winfo_reqwidth() if allow_horizontal else 1, canvas.winfo_width()),
                                  height=max(natural_height, canvas.winfo_height()))
             canvas.configure(scrollregion=canvas.bbox('all'))
@@ -9671,8 +9738,15 @@ class ResultStore:
     execution sort together and every case can be opened in PowerFactory.
     """
 
-    def __init__(self, stamp=None):
-        self.stamp = stamp or datetime.now().strftime("%y%m%d-%H%M%S")
+    def __init__(self, stamp=None, study_case=None):
+        if stamp is None:
+            moment = datetime.now().timestamp()
+            used = set(kept_stamps(study_case)) if study_case is not None else set()
+            stamp = datetime.fromtimestamp(moment).strftime('%y%m%d-%H%M%S')
+            while stamp in used:
+                moment += 1
+                stamp = datetime.fromtimestamp(moment).strftime('%y%m%d-%H%M%S')
+        self.stamp = stamp
         self.objects = []
         self.by_case = {}
 
@@ -10370,8 +10444,12 @@ def _calculate_reference(app, study_case, qds, request, records, original_result
 
 
 def reference_fingerprint(request):
-    """What decides REF: the fixed background outages."""
-    return hashlib.sha1("|".join(sorted(record["key"] for record in request["background"])).encode("utf-8")).hexdigest()[:12]
+    """Identity of the reference, including the windows of its fixed background outages."""
+    background = sorted((record['key'], tuple(record['window'])) for record in request['background'])
+    if not background:
+        # R0 has no time-dependent background; its existing result identity remains valid.
+        return hashlib.sha1(b'').hexdigest()[:12]
+    return hashlib.sha256(json.dumps(background, separators=(',', ':')).encode('utf-8')).hexdigest()[:16]
 
 
 def _case_info(plan):
@@ -10786,6 +10864,12 @@ def keep_copy(study_case, obj, name, mark):
         copy.loc_name = name
     except Exception:
         pass
+    if object_name(copy) != name:
+        try:
+            copy.Delete()
+        except Exception:
+            pass
+        return None
     try:
         copy.desc = [mark]
     except Exception:
@@ -10815,14 +10899,20 @@ def n1_filter_of(obj):
 
 def drop_contingencies(data, keys):
     """The n-1 data without the contingencies `keys`; (data, names of those actually dropped)."""
+    keys = set(keys)
     present = {key[0] for values in data['times'].values() for key in values}
-    dropped = sorted(data['contingencies'].get(key, key) for key in present & set(keys))
+    present.update(key for found in (data.get('present') or {}).values() for key in found)
+    present.update(key[0] for found in (data.get('absent') or {}).values() for key in found)
+    dropped = sorted(data['contingencies'].get(key, key) for key in present & keys)
     if not dropped:
         return data, []
     times = {moment: {key: value for key, value in values.items() if key[0] not in keys}
              for moment, values in data['times'].items()}
-    present = {moment: set(found) - set(keys) for moment, found in (data.get('present') or {}).items()}
-    return dict(data, times=times, present=present), dropped
+    present = {moment: set(found) - keys for moment, found in (data.get('present') or {}).items()}
+    absent = {moment: {key for key in found if key[0] not in keys}
+              for moment, found in (data.get('absent') or {}).items()}
+    contingencies = {key: value for key, value in data['contingencies'].items() if key not in keys}
+    return dict(data, times=times, present=present, absent=absent, contingencies=contingencies), dropped
 
 
 def load_n1(found):
@@ -11536,7 +11626,9 @@ def kept_runs(study_case, stamp, request, ready, logger, grid=None):
         obj = objects.get(prefix + REFERENCE_CASE_ID)
         if obj is None:
             raise GridLensError("The run {} kept no reference result object '{}'.".format(stamp, prefix + REFERENCE_CASE_ID))
-        if result_fingerprint(obj) not in (None, reference_fingerprint(request)):
+        if result_fingerprint(obj) is None:
+            raise GridLensError('The kept reference has no verifiable fingerprint. Calculate again.')
+        if result_fingerprint(obj) != reference_fingerprint(request):
             raise GridLensError("The fixed background outages changed since the run {}, so its reference does not fit "
                                 "the cases any more. Calculate again.".format(stamp))
         runs.append({'id': REFERENCE_CASE_ID, 'name': REFERENCE_NAME, 'snapshot': obj, 'elapsed': 0.0,
@@ -11558,7 +11650,10 @@ def kept_runs(study_case, stamp, request, ready, logger, grid=None):
             continue
         if obj is None:
             runs.append(dict(info, failed="the run {} kept no result object '{}'".format(stamp, prefix + plan['id'])))
-        elif result_fingerprint(obj) not in (None, plan['fingerprint']):
+        elif result_fingerprint(obj) is None:
+            runs.append(dict(info, failed='its kept result has no verifiable fingerprint; calculate again',
+                             result_object=object_name(obj)))
+        elif result_fingerprint(obj) != plan['fingerprint']:
             runs.append(dict(info, failed="its outages or windows changed since the run {}; calculate again".format(stamp),
                              result_object=object_name(obj)))
         else:
@@ -11710,7 +11805,7 @@ def execute_gridlens(app):
     logger.step(2, "ComStatsim settings")
     _log_qds_settings(qds, original_result, study_time_state, logger)
     results = []
-    result_objects = ResultStore()
+    result_objects = ResultStore(study_case=study_case)
     state_errors = []
     period = qds_period(qds)
     logger.step(3, "Planned outages and planning cases")
@@ -11845,6 +11940,7 @@ def execute_gridlens(app):
             len(result_objects), object_name(study_case), result_objects.name_for("*"))
         if result_objects else "No calculation executed",
         request, _generated_by(), run_mode)
+    validate_payload(payload)
     RUN_STATS.add("build report tables", time.monotonic() - building)
     RUN_STATS.count("report_rows", sum(len(payload.get(name) or []) for name, _ in TABLES))
     _log_findings(logger, payload)

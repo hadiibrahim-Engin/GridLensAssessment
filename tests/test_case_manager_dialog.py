@@ -11,10 +11,10 @@ import time
 from pathlib import Path
 
 import pytest
+from _paths import delivered
 
 tk = pytest.importorskip("tkinter")
 
-from _paths import delivered  # noqa: E402
 SPEC = importlib.util.spec_from_file_location("gridlens_dialog", delivered("gridlens_report.py"))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
@@ -58,6 +58,18 @@ def _assert_inside(root, widgets):
         assert 0 <= y and y + widget.winfo_height() <= root.winfo_height(), (str(widget), y, widget.winfo_height())
 
 
+def _focus(root, widget):
+    """Wait for native window activation before injecting a keyboard event."""
+    root.lift()
+    widget.focus_force()
+    deadline = time.monotonic() + 1.0
+    root.update()
+    while root.focus_get() is not widget and time.monotonic() < deadline:
+        root.after(10)
+        root.update()
+    assert root.focus_get() is widget
+
+
 def _run(monkeypatch, records, config, steps, tmp_path=None):
     """Open the real dialog, run `steps(dialog, root)` inside its loop and return (outcome, observations)."""
     seen = {}
@@ -65,6 +77,7 @@ def _run(monkeypatch, records, config, steps, tmp_path=None):
     def mainloop(self):
         dialog = self.report_callback_exception.__self__
         self.update()
+        _focus(self, self)
         steps(dialog, self, seen)
         try:
             still_open = bool(self.winfo_exists())
@@ -291,9 +304,20 @@ def test_explanations_and_rule_controls_fit_the_window(monkeypatch, records, con
                    _button(root, 'Remove from fixed background'), _button(root, 'Start calculation'), dialog.status_line]
         widgets += [widget for widget in _widgets(root) if widget.winfo_class() == 'TLabel' and widget.winfo_ismapped() and
                     _safe_text(widget) and str(widget.cget('style')) in ('Inset.TLabel', 'InsetTitle.TLabel')]
-        seen['bounds'] = [(str(widget), widget.winfo_rootx() - root.winfo_rootx(),
-                           widget.winfo_rooty() - root.winfo_rooty(), widget.winfo_width(), widget.winfo_height())
-                          for widget in widgets]
+        # The settings page scrolls when its natural height exceeds the viewport.
+        # Every control must be reachable without compressing the result tables.
+        seen['bounds'] = []
+        for widget in widgets:
+            content = widget
+            while content is not root and not hasattr(content, '_viewport'):
+                content = content.master
+            if content is not root:
+                viewport = content._viewport
+                y = widget.winfo_rooty() - content.winfo_rooty()
+                viewport.yview_moveto(max(0, y) / max(1, content.winfo_height()))
+                root.update()
+            seen['bounds'].append((str(widget), widget.winfo_rootx() - root.winfo_rootx(),
+                                   widget.winfo_rooty() - root.winfo_rooty(), widget.winfo_width(), widget.winfo_height()))
         seen['labels_fit'] = all(widget.winfo_height() >= widget.winfo_reqheight() for widget in widgets
                                 if widget.winfo_class() == 'TLabel')
         seen['window'] = (root.winfo_width(), root.winfo_height())
@@ -414,12 +438,14 @@ def test_double_click_renames_a_case_in_place(monkeypatch, records, config):
         seen["over_the_cell"] = (entry.winfo_parent() == str(tree), entry.get(), entry.winfo_y() == y)
         entry.delete(0, "end")
         entry.insert(0, "Winter")
+        _focus(root, entry)
         entry.event_generate("<Return>")
         root.update()
         seen["renamed"] = (tree.item("B", "values")[1], dialog.inline_edit, entry.winfo_exists())
         seen["still_open"] = root.winfo_exists()
         dialog.rename_in_place("B")
         dialog.inline_edit["entry"].delete(0, "end")
+        _focus(root, dialog.inline_edit['entry'])
         dialog.inline_edit["entry"].event_generate("<Escape>")
         root.update()
         seen["escape"] = (tree.item("B", "values")[1], root.winfo_exists())
@@ -670,7 +696,7 @@ def test_keyboard_deletes_and_shortcuts(monkeypatch, records, config, tmp_path):
     def steps(dialog, root, seen):
         dialog.messagebox.askyesno = lambda *_args, **_kw: True
         dialog.messagebox.showinfo = lambda *_args, **_kw: None
-        press = lambda widget, key: (widget.focus_force(), root.update(), widget.event_generate(key), root.update())
+        press = lambda widget, key: (_focus(root, widget), widget.event_generate(key), root.update())
         _select_case(dialog, root, "A")
         dialog.member_tree.selection_set(records[0]["key"])
         press(dialog.member_tree, "<Delete>")

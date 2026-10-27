@@ -135,8 +135,9 @@ def test_a_new_overload_in_the_scenario_is_new_and_unchanged_values_are_ok():
 
     worst = comparison["elements"][(gl.object_key(LINE_A), "loading")]["worst"]
     assert worst["status"] == "NEW" and worst["contingency_name"] == "C1" and worst["delta"] == pytest.approx(22.0)
-    assert comparison["counts"] == {"NEW": 1, "OK": 1}
-    assert gl.n1_summary(comparison) == "NEW 1, OK 1"
+    # Four other native cells return read errors; they must remain visible.
+    assert comparison["counts"] == {"NEW": 1, "OK": 1, "NOT_EVALUATED": 4}
+    assert gl.n1_summary(comparison) == "NEW 1, NOT_EVALUATED 4, OK 1"
 
 
 def test_a_contingency_the_case_already_switches_off_is_not_applicable_others_failed():
@@ -146,10 +147,10 @@ def test_a_contingency_the_case_already_switches_off_is_not_applicable_others_fa
     c2 = gl.object_key(C2)
 
     applicable = gl.compare_n1(reference, scenario, switched_off={line_b}, contingency_elements={c2: {line_b}})
-    assert applicable["counts"] == {"OK": 1, "NOT_APPLICABLE": 1}
+    assert applicable["counts"] == {"OK": 1, "NOT_APPLICABLE": 2, "NOT_EVALUATED": 1}
 
     other = gl.compare_n1(reference, scenario, switched_off={line_b}, contingency_elements={c2: {"elsewhere"}})
-    assert other["counts"] == {"OK": 1, "FAILED": 1}, "a missing contingency without a reason is never OK"
+    assert other["counts"] == {"OK": 1, "FAILED": 2, "NOT_EVALUATED": 1}, "a missing contingency without a reason is never OK"
 
 
 def test_elements_the_case_switches_off_are_not_assessed():
@@ -166,10 +167,10 @@ def test_values_inside_the_recording_limit_count_only_when_the_limit_proves_them
     assert worst["status"] == "NEW" and worst["delta"] is None
 
     both = gl.compare_n1(reference, _read({(0, 0): (3, 0.0)}))
-    assert both["counts"] == {"OK": 1}
+    assert both["counts"] == {"OK": 1, "NOT_EVALUATED": 5}
 
     unproven = gl.compare_n1(_read({(0, 0): (3, 0.0)}, loadmax=120.0), _read({(0, 0): (0, 110.0)}, loadmax=120.0))
-    assert unproven["counts"] == {"NOT_EVALUATED": 1}, "a recording limit above 100 % proves nothing"
+    assert unproven["counts"] == {"NOT_EVALUATED": 6}, "a recording limit above 100 % proves nothing"
 
 
 def test_voltage_uses_the_p_u_band():
@@ -182,7 +183,7 @@ def test_voltage_uses_the_p_u_band():
 def test_a_study_time_missing_in_the_scenario_is_failed():
     reference = gl.read_n1_results(command({START: {(0, 0): (0, 90.0)}, START + H: {(0, 0): (0, 90.0)}}))
     scenario = gl.read_n1_results(command({START: {(0, 0): (0, 90.0)}}))
-    assert gl.compare_n1(reference, scenario)["counts"] == {"OK": 1, "FAILED": 1}
+    assert gl.compare_n1(reference, scenario)["counts"] == {"OK": 1, "FAILED": 6, "NOT_EVALUATED": 5}
 
 
 # --- the run against an artificial contingency analysis -------------------------------------------
@@ -465,16 +466,20 @@ class BulkSub(Sub):
         return 0
 
 
-def test_n1_columns_are_read_in_one_call_and_a_voltage_column_with_a_zero_cell_by_cell(monkeypatch):
+def test_n1_columns_keep_sparse_zeros_apart_from_measured_values(monkeypatch):
     monkeypatch.setattr(gl, "COLUMN_BUFFER", Vector())
     gl.RUN_STATS = gl.RunStats()
     loading = BulkSub(START, [C1, C2], COLUMNS, {(0, 0): (0, 95.0), (1, 0): (3, 0.0)})
-    assert gl._n1_column(loading, 0, 2, "loading") == [95.0, 0.0], "0 % lies inside the recording limit anyway"
-    assert gl.RUN_STATS.counts == {"columns_bulk": 1}
+    assert gl._n1_column(loading, 0, 2, "loading") == [95.0, None], "code 3 is not a measured 0 %"
+    assert gl.RUN_STATS.counts == {"values_cellwise": 2}
+
+    dense = BulkSub(START, [C1, C2], COLUMNS, {(0, 0): (0, 95.0), (1, 0): (0, 92.0)})
+    assert gl._n1_column(dense, 0, 2, "loading") == [95.0, 92.0]
+    assert gl.RUN_STATS.counts['columns_bulk'] == 1
 
     voltage = BulkSub(START, [C1, C2], COLUMNS, {(0, 2): (0, 0.99), (1, 2): (3, 0.0)})
     assert gl._n1_column(voltage, 2, 2, "voltage") == [0.99, None], "code 3 is read cell by cell, never a 0 p.u. value"
-    assert gl.RUN_STATS.counts["values_cellwise"] == 2
+    assert gl.RUN_STATS.counts["values_cellwise"] == 4
 
 
 
