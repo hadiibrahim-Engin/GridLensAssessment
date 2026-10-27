@@ -164,31 +164,14 @@ def launch_gui(context, app=None):
     return log_path
 
 
-def without_frames(exc):
-    """The exception without tracebacks; their frames would keep the PowerFactory objects alive."""
-    seen = set()
-    item = exc
-    while item is not None and id(item) not in seen:
-        seen.add(id(item))
-        item.__traceback__ = None
-        item = item.__cause__ or item.__context__
-    return exc
-
-
 def main():
-    # PowerFactory warns "still in unattended mode" while a powerfactory.Application
-    # object outlives the script, so no name and no traceback may keep it.
     app = None
-    failure = None
     try:
         app, context = powerfactory_context()
         return launch_gui(context, app)
     except Exception as exc:
         log(app, str(exc), error=True)
-        failure = without_frames(exc)
-    finally:
-        del app
-    raise failure
+        raise
 
 
 # Kept inline so the complete file also works when pasted into a ComPython.

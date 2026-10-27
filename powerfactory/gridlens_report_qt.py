@@ -20,7 +20,6 @@ subsequent evaluation without recalculation.
 from __future__ import annotations
 
 import bisect
-import gc
 import getpass
 import hashlib
 import heapq
@@ -10085,23 +10084,6 @@ class CaseManagerDialog:
         self.outcome = None
         self.window.done_now(0)
 
-    def close(self):
-        """Destroy the window now and drop the planned outages.
-
-        The records hold PowerFactory objects. Left to deleteLater, the window would
-        live on through its signal connections, since no Qt event loop runs after the
-        dialog, and with it the records and the PowerFactory Application object.
-        """
-        window, self.window = getattr(self, 'window', None), None
-        if window is not None:
-            window.on_reject = None
-            window.hide()
-            window.deleteLater()
-            self.qt.QtCore.QCoreApplication.sendPostedEvents(None, _enum_int(self.qt.enum('Type.DeferredDelete',
-                                                                                          self.qt.QtCore.QEvent)))
-        self.editor = None
-        gc.collect()
-
     def run(self):
         """Show the window modally; PowerFactory waits until it is closed."""
         self.window.show()
@@ -10133,7 +10115,9 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
             dialog.build()
         except Exception as exc:
             # Nothing has been shown yet: the same as a missing Qt.
-            dialog.close()
+            window = getattr(dialog, 'window', None)
+            if window is not None:
+                window.deleteLater()
             raise CaseManagerUnavailable('The case manager could not be built: {}'.format(_friendly_exception(exc))) from None
         try:
             dialog.run()
@@ -10141,7 +10125,7 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
             raise GridLensError('The case manager stopped with an error: {}. Nothing was calculated.'.format(
                 _friendly_exception(exc))) from None
         finally:
-            dialog.close()
+            dialog.window.deleteLater()
     finally:
         sys.excepthook = previous_hook
     return dialog.outcome
@@ -12441,13 +12425,16 @@ def main():
             "application object.", flush=True)
         return False
     logger = RunLogger(app)
-    cancelled = None
     try:
         execute_gridlens(app)
         return True
     except GridLensCancelled as exc:
         logger.write("CANCELLED", "{} Report generation cancelled.".format(exc), level="INFO")
-        cancelled = str(exc)
+        # This script can be an IntReport extension. Returning False here is
+        # discarded by the top-level main() call and looks like a successful
+        # extension to the host, which can then render missing or stale tables.
+        # Let the cancellation reach the caller before it continues the report.
+        raise
     except KeyboardInterrupt:
         logger.write(
             "ABORTED",
@@ -12465,26 +12452,7 @@ def main():
     finally:
         # The interpreter can outlive the run; the next run starts from the defaults.
         reset_settings()
-        # PowerFactory warns "still in unattended mode" while a powerfactory.Application
-        # object outlives the script. Nothing may keep it: not these names, not a frame of
-        # a traceback and not a PowerFactory object left behind in a module global.
-        del app, logger
-        release_powerfactory()
-    if cancelled is not None:
-        # This script can be an IntReport extension. Returning False here is
-        # discarded by the top-level main() call and looks like a successful
-        # extension to the host, which can then render missing or stale tables.
-        # Let the cancellation reach the caller before it continues the report;
-        # raised anew so that its traceback holds no frame with PowerFactory objects.
-        raise GridLensCancelled(cancelled)
     return False
-
-
-def release_powerfactory():
-    """Drop every PowerFactory object this module still refers to, so the Application object can be destroyed."""
-    close_column_buffer()
-    reset_run_context()
-    gc.collect()
 
 
 def exit_code(published):
