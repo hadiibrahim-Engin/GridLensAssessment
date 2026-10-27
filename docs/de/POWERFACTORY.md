@@ -308,8 +308,11 @@ fault.SetObjs([element])                       # 0 = Erfolg
 
 - Welche Betriebsmittel ein Fehlerfall schaltet, liest GridLens mit
   `ComOutage.GetObject(i)` für i = 0, 1, … bis `None` (`contingency_equipment`).
-- Fehlerfälle außerhalb der gewählten Netze setzt GridLens für den Lauf auf
-  „Not analysed“ (`ComOutage.outserv = 1`, geprüft 23.10.2026).
+- Fehlerfälle außerhalb der n-1-Netze oder ohne eines der im
+  n-1-Betriebsmittelfilter gewählten Betriebsmittel setzt GridLens für den Lauf auf „Not analysed“
+  (`ComOutage.outserv = 1`, geprüft 23.10.2026; `excluded_contingencies`). Wo die
+  Filter wirken, auch bei einer Neuauswertung:
+  [`BERECHNUNG_UND_AUSWERTUNG.md`](BERECHNUNG_UND_AUSWERTUNG.md).
 
 ### 7.2 Planned Outages im Sweep
 

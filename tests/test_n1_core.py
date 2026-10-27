@@ -553,3 +553,93 @@ def test_only_contingencies_outaging_a_selected_element_are_analysed_for_the_run
     assert seen == [[0, 0, 1]], "C3 outages L3: not analysed during the run"
     assert [outage.outserv for outage in outages] == [0, 0, 0], "restored afterwards"
     assert any("Not analysed for the run: C3 (outages no selected element)." in message for _, message in logger.lines)
+
+
+def test_the_contract_seven_tables_of_one_case_come_from_the_reporting_core():
+    analysis, records, plan, *_ = _scenario()
+    request = {"background": [], "assessments": ["n-0", "n-1", "(n-1)'"]}
+    equipment = gl.contingency_equipment(analysis)
+    elements_of = {gl.object_key(o): {gl.object_key(e) for e in els} for o, els in equipment}
+    entry = gl.run_n1_case(analysis, plan, request, records, GRID, [], elements_of, True, {})
+    results = [{"id": "REF", "name": "Reference", "status": gl.CONVERGED},
+               {"id": "C1", "name": "Case 1", "status": gl.CONVERGED, "n1": entry},
+               {"id": "C2", "name": "Case 2", "status": gl.CONVERGED, "n1": {"status": "NOT EVALUATED", "reason": "no window"}}]
+    payload, notes = gl.empty_payload(), {}
+    view = gl._element_view(results)
+    gl._critical_elements(payload, results, view, notes)
+    gl._detail_matrices(payload, results, view)
+    gl._classification(payload, results, view)
+    gl._case_status_counts(payload, results)
+    gl._contingency_register(payload, results)
+    gl._contingency_events(payload, results, notes)
+    gl._episodes(payload, results)
+    gl._quality_register(payload, results)
+    gl._time_criticality(payload, results, notes)
+
+    # L1 and L3 become overloaded under C1 and C3 at both study times (NEW); L2 is switched off by the case.
+    assert payload["ScriptedCaseStatusCounts"] == [{"case_order": 1, "case_name": "Case 1", "new_count": 8, "worsened_count": 0,
+                                                    "improved_count": 0, "resolved_count": 0}]
+    critical = payload["ScriptedCriticalLines"]
+    assert [(row["element_name"], row["ref_text"], row["case_a_text"], row["violation"]) for row in critical] == [
+        ("L1", "90.0 % (max 100 %)", "110.0 %\nN 4", 1), ("L3", "90.0 % (max 100 %)", "110.0 %\nN 4", 1)]
+    assert notes["line"] == (2, 2) and "2 of 2 lines" in gl.critical_note(notes)
+    detail = payload["ScriptedDetailLines"][0]
+    assert detail["case_a_text"].startswith("110.0 %\n") and detail["ref_text"].startswith("90.0 %\n")
+    l1 = next(key for key, name in entry["statistics"]["meta"]["elements"].items() if name == "L1")
+    counts = gl.element_counters(entry["statistics"], l1, "loading")
+    assert counts["NEW"] == 4 and counts["NOT_APPLICABLE"] == 2 and counts["OK"] == 0
+    assert payload["ScriptedClassificationMatrix"][0]["case_a_text"] == "N 4 · Q 2"
+    register = {row["contingency_name"]: row for row in payload["ScriptedContingencyRegister"]}
+    assert register["C1"]["new_events"] == 4 and register["C2"]["not_applicable_times"] == 2
+    assert payload["ScriptedContingencyRanking"] == [{"rank": 1, "contingency_name": "C1", "finding_count": 4},
+                                                     {"rank": 2, "contingency_name": "C3", "finding_count": 4}]
+    events = payload["ScriptedContingencyEvents"]
+    assert len(events) == 8 and {row["status"] for row in events} == {"NEW"}
+    assert sorted(row["main_rank"] for row in events) == list(range(1, 9))
+    assert events[0]["reference_text"] == "90.0 %" and events[0]["scenario_text"] == "110.0 %"
+    assert events[0]["change_text"] == "+20.0 pp" and events[0]["limit_text"] == "max 100 %"
+    assert notes["events"] == (8, 8)
+    episodes = payload["ScriptedContingencyEpisodes"]
+    assert len(episodes) == 4 and {row["points"] for row in episodes} == {2}
+    quality = payload["ScriptedQualityRegister"]
+    assert [(row["case_name"], row["status"], row["contingency_name"]) for row in quality] == [
+        ("Case 1", "NOT-APPLICABLE", "C2"), ("Case 2", "NOT-EVALUATED", "every contingency")]
+    # Not applicable at both study times, for every monitored element and criterion; equals the NOT_APPLICABLE count.
+    assert quality[0]["cells"] == entry["statistics"]["coverage"]["cells_quality"]["NOT_APPLICABLE"] > 0
+    assert quality[0]["time_text"].endswith("(2 study times)") and quality[0]["violation"] == 0
+    times = payload["ScriptedTimeCriticality"]
+    assert [(row["value_ref"], row["value_a"]) for row in times] == [(0.0, 2.0), (0.0, 2.0)]
+    assert [row["case_a_text"] for row in payload["ScriptedTimeMatrix"]] == ["E 2 · C 2", "E 2 · C 2"]
+    flag, text = gl.n1_meta_text(results)
+    assert flag == "1" and text.startswith("Contingency analysis of the study case at the QDS time steps")
+    assert gl.n1_meta_text(results[:1])[0] == "0"
+
+
+def test_long_registers_are_cut_fairly_between_cases_and_keep_the_most_severe(monkeypatch):
+    monkeypatch.setattr(gl, "MAX_TABLE_ROWS", 5)
+    payload = gl.empty_payload()
+    payload["ScriptedContingencyEpisodes"] = (
+        [{"case_order": 1, "row_order": n, "status": "PRE-EXISTING", "peak_text": "{} pp".format(n)} for n in range(1, 9)]
+        + [{"case_order": 2, "row_order": 1, "status": "NEW", "peak_text": "1.0 pp"}])
+    gl._fair_cut(payload, "ScriptedContingencyEpisodes", lambda row: row["case_order"],
+                 lambda row: (gl.STATUS_RANK[row["status"].replace("-", "_")], -gl._amount(row["peak_text"]), row["row_order"]))
+
+    kept = [(row["case_order"], row["row_order"]) for row in payload["ScriptedContingencyEpisodes"]]
+    # Case 2 keeps its only row; case 1 the four largest peaks, in their original order (never cut by case order).
+    assert kept == [(1, 5), (1, 6), (1, 7), (1, 8), (2, 1)]
+    (note,) = payload["ScriptedModelQuality"]
+    assert note["status"] == "FAIL" and "5 of 9 rows, shared between 2 group(s)" in note["message"]
+
+
+def test_block_tables_keep_the_same_rows_in_every_block_when_cut(monkeypatch):
+    monkeypatch.setattr(gl, "MAX_TABLE_ROWS", 4)
+    payload = gl.empty_payload()
+    columns = [("C{}".format(n), "Case {}".format(n)) for n in range(1, 5)]
+    entries = [("E{}".format(n), "-", {}, 0) for n in range(1, 5)]
+    gl._block_rows(payload, "ScriptedDetailLines", columns, entries, 3, priority=[3, 0, 2, 1])
+
+    rows = payload["ScriptedDetailLines"]
+    # Two blocks of at most two rows each: the two most severe elements (E2, E4) in both, in display order.
+    assert [(row["block"], row["element_name"], row["col_count"]) for row in rows] == [
+        (1, "E2", 3), (1, "E4", 3), (2, "E2", 1), (2, "E4", 1)]
+    assert "2 of 4 rows in each of the 2 scenario block(s)" in payload["ScriptedModelQuality"][0]["message"]

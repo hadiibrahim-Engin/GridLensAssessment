@@ -188,7 +188,7 @@ def test_matrix_tables_continue_in_blocks_of_six_cases():
     last = [row for row in rows if row["block"] == 2][0]
     assert first["col_count"] == 6 and last["col_count"] == 2
     assert first["case_f_name"] == "Outage 6" and last["case_a_name"] == "Outage 7"
-    assert last["case_c_text"] == "" and last["case_c_name"] == ""
+    assert last.get("case_c_text") is None and last.get("case_c_name") is None, "unused slots are not written"
     assert first["ref_text"].endswith(" %")
 
 
@@ -205,7 +205,7 @@ def test_matrix_without_outage_cases_shows_reference_only():
     payload, *_ = _payload(cases=0)
 
     rows = payload["ScriptedAppendixLine"]
-    assert rows and all(row["col_count"] == 0 and row["case_a_name"] == "" for row in rows)
+    assert rows and all(row["col_count"] == 0 and row.get("case_a_name") is None for row in rows)
 
 
 def test_out_of_service_elements_read_n_a():
@@ -230,25 +230,21 @@ def test_switched_equipment_is_reported_out_of_service_not_resolved():
     assert statuses["L-110 Hafen"] == gl.STATUS_OUT_OF_SERVICE
 
 
-def test_trend_charts_carry_reference_and_every_case_in_fixed_slots():
+def test_contract_seven_has_no_radar_and_no_multi_line_trend_tables():
+    # The assignment removes the radar and the time plots of REF plus six cases; the time course of H09 draws two series.
     payload, *_ = _payload()
 
-    row = payload["ScriptedTrendMostLoaded"][0]
-    assert [row[gl.series_name_field(slot)] for slot in range(4)] == ["Reference", "Outage 1", "Outage 2", "Outage 3"]
-    assert row["series_d_name"] == " " and row["value_d"] is None
-    assert row["value_ref"] is not None and row["value_c"] is not None
-    assert payload["ScriptedReportMeta"][0]["chart_cases"] == "4"
-    delta = payload["ScriptedTrendLargestDelta"]
-    assert delta and "Largest coincident delta" in delta[0]["chart_title"]
+    assert not {"ScriptedRadar", "ScriptedTrendMostLoaded", "ScriptedTrendLargestDelta"} & set(payload)
+    assert "chart_cases" not in payload["ScriptedReportMeta"][0] and "radar_note" not in payload["ScriptedReportMeta"][0]
+    assert [field for field, _ in dict(gl.TABLES)["ScriptedTimeCriticality"]] == [
+        "time_label", "timestamp", "series_ref_name", "series_a_name", "value_ref", "value_a"]
 
 
-def test_charts_show_at_most_six_cases_and_say_so():
+def test_more_than_six_cases_stay_in_every_table():
     payload, *_ = _payload(cases=8)
 
-    meta = payload["ScriptedReportMeta"][0]
-    assert meta["chart_cases"] == "7"
-    assert "first 6 of 8" in meta["radar_note"]
     assert len(payload["ScriptedCaseCounts"]) == 9, "tables still list every case"
+    assert [row["block"] for row in payload["ScriptedCaseComparison"]].count(2) > 0
 
 
 def test_reference_disclaimer_tables():
@@ -256,8 +252,10 @@ def test_reference_disclaimer_tables():
 
     classes = {row["class_label"]: row["element_count"] for row in payload["ScriptedPieLines"]}
     assert classes == {"up to 80 %": 2, "80 to 100 %": 2, "above 100 %": 0}
-    exceeded = payload["ScriptedReferenceExceeded"]
-    assert [(row["type_label"], row["element_name"], row["max_text"]) for row in exceeded] == [("Transformer", "TR-West T1", "104.0 %")]
+    base = [row for row in payload["ScriptedReferenceFindings"] if row["level"] == "n-0"]
+    violated = [(row["element_type"], row["element_name"], row["value_text"]) for row in base if row["status"] == "VIOLATED"]
+    assert violated == [("Transformer", "TR-West T1", "104.0 %")]
+    assert {row["status"] for row in base} <= {"VIOLATED", "WARNING"}
 
 
 def test_metric_view_and_key_cards():
@@ -536,3 +534,54 @@ def test_result_object_text_names_steps_period_classes_and_variables():
     text = gl.result_object_text(Obj("GridLens_x_REF", "ElmRes"), counters, LABELS, TIMES)
     assert text == ("Result object 'GridLens_x_REF': 6 time step(s) from {} to {} (step 1 h, span 5 h); 4 column(s) "
                     "by class: ElmTerm 2, ElmLne 1, ElmTr2 1; by variable: c:loading 2, m:u 2.".format(LABELS[0], LABELS[-1]))
+
+
+def test_failed_cases_stay_in_every_contract_seven_table_with_their_reason():
+    # An error-only run: the QDS of every case failed and so did n-1. Nothing may disappear or read as OK.
+    records = [_record(index, "Outage {}".format(index + 1)) for index in range(2)]
+    request = _request(records)
+    reference = _result("REF", "Reference")
+    results = [reference] + [gl.failed_case({"id": plan["id"], "name": plan["name"], "plan": plan}, "did not converge")
+                             for plan in request["cases"]]
+    for case in results[1:]:
+        case["n1"] = {"status": "NOT EVALUATED", "times": 0, "reason": "no result object"}
+    gl.apply_reference(results)
+    payload = gl.build_cases_payload(Obj("Europe", "IntCase"), results, "BDS", "Result", request, "operator", "RUN")
+    gl.validate_payload(payload)
+
+    rows = [(row["case_name"], row["level"], row["assessment"], row["completeness_text"], row["violation"])
+            for row in payload["ScriptedCaseStatistics"] if row["case_name"] != "Reference"]
+    assert rows == [("Outage 1", "n-0", "NOT EVALUATED", "did not converge", 2), ("Outage 2", "n-0", "NOT EVALUATED", "did not converge", 2),
+                    ("Outage 1", "n-1", "NOT EVALUATED", "no result object", 2), ("Outage 2", "n-1", "NOT EVALUATED", "no result object", 2)]
+    coverage = [(row["case_name"], row["level"], row["coverage_text"]) for row in payload["ScriptedCoverage"] if row["case_name"] != "Reference"]
+    assert ("Outage 1", "n-0", "not evaluated: did not converge") in coverage and ("Outage 2", "n-1", "not evaluated: no result object") in coverage
+    quality = {(row["case_name"], row["level"], row["status"]) for row in payload["ScriptedQualityRegister"]}
+    assert quality == {("Outage 1", "n-1", "NOT-EVALUATED"), ("Outage 2", "n-1", "NOT-EVALUATED"),
+                       ("Outage 1", "n-0", "FAILED"), ("Outage 2", "n-0", "FAILED")}
+    text = payload["ScriptedReportMeta"][0]["overall_text"]
+    assert "The QDS of 2 case(s) could not be evaluated" in text and "was requested but could not be evaluated" in text
+    assert "no n-1 result to rely on" in text
+
+
+def test_without_n1_the_time_criticality_shows_the_qds_steps_of_reference_and_every_case():
+    # n-0 with planned outages only: the Time page draws Reference against every case per QDS time step and lists
+    # the steps where a case has other critical elements than Reference.
+    payload, results, _request = _payload()
+    reference = gl.find_reference(results)
+    steps = gl.critical_steps(reference)
+
+    chart = payload["ScriptedTimeCriticality"]
+    assert [row["time_label"] for row in chart] == LABELS
+    assert [row["series_ref_name"] for row in chart][:1] == ["Reference (n-0)"] and chart[0]["series_a_name"] == "all cases (n-0)"
+    assert [row["value_ref"] for row in chart] == [float(len(steps.get(row, ()))) for row in range(len(LABELS))]
+    matrix = payload["ScriptedTimeMatrix"]
+    assert matrix and all(row["element_name"] in LABELS for row in matrix)
+    # Outage 2 overloads L-220 West 1 from 04:00 (+30 pp on 84 %): that step lists it as caused (red).
+    four = next(row for row in matrix if row["element_name"] == "2026-10-15 04:00")
+    assert four["violation"] == 1 and four["case_b_text"].startswith("E ")
+    # The same numbers after the value arrays were released (as in a PowerFactory run).
+    for result in results:
+        gl.release_values(result)
+    again = gl.empty_payload()
+    gl._time_criticality(again, results, {})
+    assert again["ScriptedTimeCriticality"] == chart and again["ScriptedTimeMatrix"] == matrix

@@ -3120,8 +3120,35 @@ def outage_persistence(result, reference, plan):
     return found
 
 
+def critical_steps(result):
+    """{row: element keys beyond their limit at that QDS time step} (n-0), for the time criticality of H09.
+
+    Kept on the result before its value arrays are released; only rows with a
+    critical element are stored. Loading above its limit, voltage outside its
+    band, each beyond the numeric tolerance; missing values are no violation.
+    """
+    found = {}
+    for category in ('line', 'transformer', 'voltage'):
+        for item, _stats in result.get('by_category', {}).get(category, ()):
+            values = item.get('values')
+            if values is None:
+                continue
+            if category == 'voltage':
+                lower, upper = voltage_limits(item)
+                low, high = lower - NUMERIC_TOLERANCE, upper + NUMERIC_TOLERANCE
+                rows = [row for row, value in enumerate(values) if value != MISSING and (value < low or value > high)]
+            else:
+                bound = loading_limit(category) + NUMERIC_TOLERANCE
+                rows = [row for row, value in enumerate(values) if value > bound]
+            for row in rows:
+                found.setdefault(row, set()).add(item['key'])
+    return found
+
+
 def release_values(result):
-    """Drop the full-resolution arrays of a compared case; statistics and plot points stay."""
+    """Drop the full-resolution arrays of a compared case; statistics, plot points and critical steps stay."""
+    if 'critical_steps' not in result and result.get('item_by_key'):
+        result['critical_steps'] = critical_steps(result)
     for item in result['item_by_key'].values():
         item.pop('values', None)
 
@@ -4881,7 +4908,21 @@ def _quality_register(payload, results):
 
 
 def _time_criticality(payload, results, notes):
-    """H09: distinct critical elements per actual study time (n-1 reference and (n-1)' over every scenario) and per scenario."""
+    """H09: distinct critical elements per actual study time; n-1 when the contingency analysis ran, otherwise n-0.
+
+    n-1: the n-1 reference and (n-1)' over every scenario, per scenario E =
+    critical elements, C = critical contingencies, at every assessed study
+    time. n-0 (no n-1 in the run): Reference and every case over the QDS time
+    steps; the table lists the steps where a case changes the critical
+    elements against Reference, the chart the whole period.
+    """
+    if _n1_cases(results):
+        _n1_time_criticality(payload, results, notes)
+    else:
+        _n0_time_criticality(payload, results, notes)
+
+
+def _n1_time_criticality(payload, results, notes):
     columns = _prime_columns(results)
     per_time = {}
     for order, case, entry in _n1_cases(results):
@@ -4898,15 +4939,9 @@ def _time_criticality(payload, results, notes):
     for moment in sorted(per_time):
         found = per_time[moment]
         payload['ScriptedTimeCriticality'].append({
-            'time_label': _time_text(moment),
-            'timestamp': float(moment),
-            'chart_title': 'Distinct critical elements per study time',
-            'unit': 'elements',
-            series_name_field(0): 'n-1 reference',
-            series_value_field(0): float(len(found['reference'])),
-            series_name_field(1): "(n-1)' all scenarios",
-            series_value_field(1): float(len(found['scenario'])),
-        })
+            'time_label': _time_text(moment), 'timestamp': float(moment), 'chart_title': 'Distinct critical elements per study time',
+            'unit': 'elements', series_name_field(0): 'n-1 reference', series_value_field(0): float(len(found['reference'])),
+            series_name_field(1): "(n-1)' all scenarios", series_value_field(1): float(len(found['scenario']))})
         texts = {}
         for case_id, _name in columns:
             row = found['cases'].get(case_id)
@@ -4916,6 +4951,48 @@ def _time_criticality(payload, results, notes):
                         1 if found['caused'] else 2 if found['scenario'] or found['reference'] else 0))
     _block_rows(payload, 'ScriptedTimeMatrix', columns, entries, CASE_SLOTS)
     notes['times'] = len(per_time)
+
+
+def _n0_time_criticality(payload, results, notes):
+    reference = find_reference(results)
+    cases = outage_cases(results)
+    if reference is None or not reference.get('labels'):
+        notes['times'] = 0
+        return
+    # Kept before the value arrays were released; computed here when they are still in memory.
+    steps = {case['id']: case['critical_steps'] if 'critical_steps' in case else critical_steps(case)
+             for case in [reference] + cases}
+    labels, hours = reference['labels'], reference.get('hours') or []
+    count = len(labels)
+
+    def union(row):
+        found = set()
+        for case in cases:
+            found |= steps[case['id']].get(row, set())
+        return found
+    # The chart: the whole period on the plot grid; each point the largest count since the previous point.
+    previous = -1
+    for row in sample_rows(count):
+        bucket = range(previous + 1, row + 1)
+        previous = row
+        payload['ScriptedTimeCriticality'].append({
+            'time_label': labels[row], 'timestamp': float(hours[row] * 3600.0 if row < len(hours) else row),
+            'chart_title': 'Distinct critical elements per QDS time step (n-0)', 'unit': 'elements',
+            series_name_field(0): 'Reference (n-0)', series_value_field(0): float(max(len(steps[REFERENCE_ID].get(r, ())) for r in bucket)),
+            series_name_field(1): 'all cases (n-0)', series_value_field(1): float(max(len(union(r)) for r in bucket))})
+    # The table: every time step where a case has other critical elements than Reference.
+    columns = [(case['id'], case['name']) for case in cases]
+    entries = []
+    for row in range(count):
+        ref = steps[REFERENCE_ID].get(row, set())
+        changed = [case for case in cases if steps[case['id']].get(row, set()) != ref]
+        if not changed:
+            continue
+        caused = any(steps[case['id']].get(row, set()) - ref for case in cases)
+        texts = {case['id']: 'E {}'.format(len(steps[case['id']].get(row, ()))) for case in cases}
+        entries.append((labels[row], str(len(ref)), texts, 1 if caused else 2))
+    _block_rows(payload, 'ScriptedTimeMatrix', columns, entries, CASE_SLOTS)
+    notes['times'] = count
 
 
 def _assessment_settings(payload):

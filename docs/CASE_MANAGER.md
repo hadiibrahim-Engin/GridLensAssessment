@@ -77,14 +77,20 @@ line and the action bar stay visible on both tabs:
 - **Settings** – an action bar (*Restore defaults*, *Apply settings*, *Save
   settings*, state of the settings) and six pages:
   - *Network scope*: two lists with **every grid of the model** (inactive ones
-    labelled; the summary grid of a study case is not offered). *Assessed
-    equipment*: only lines, transformers and terminals in
-    the selected grids are assessed (QDS and n-1); none selected = every
-    grid; *Select all grids*, *Clear selection*. *Contingencies*: *Same grids as
-    the assessed equipment* or *Own selection*; below, the preview "x of y
-    contingencies … in scope"; the n-1 run sets the contingencies outside to
-    *Not analysed* for the run and restores them.
-    A selection takes effect at once.
+    labelled; the summary grid of a study case is not offered) and an element
+    list. *Report filter: assessed equipment*: only lines, transformers and
+    terminals in the selected grids are assessed (n-0 and the elements watched
+    in n-1); none selected = every grid; no effect on the calculation, applies
+    in full when a kept run is re-evaluated; *Select all grids*, *Clear
+    selection*. *n-1 filter: contingencies by grid*: *Every grid (no filter)*
+    or *Own selection*; below, the preview "x of y contingencies … in scope".
+    *n-1 filter: outaged elements* (below it in the same card): a searchable
+    list of the elements the contingencies outage; only contingencies outaging
+    a selected element are calculated, none selected = every element. The n-1
+    run sets the contingencies the two n-1 filters leave
+    out to *Not analysed* for the run and restores them; in a re-evaluation
+    they leave them out of the evaluation. A selection takes effect at once.
+    See [`CALCULATION_AND_EVALUATION.md`](CALCULATION_AND_EVALUATION.md).
   - *Limits*: thermal limits (warning thresholds and n-0 limits, lines and
     transformers separately; limit handling for n-1 and (n-1)') and voltage
     limits (one band in p.u. of the nominal voltage for every voltage level,

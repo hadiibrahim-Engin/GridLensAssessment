@@ -299,8 +299,10 @@ fault.SetObjs([element])                       # 0 = success
 
 - GridLens reads the equipment a contingency switches with
   `ComOutage.GetObject(i)` for i = 0, 1, … until `None` (`contingency_equipment`).
-- Contingencies outside the chosen grids are set to "Not analysed" for the run
-  (`ComOutage.outserv = 1`, verified 23 Oct 2026).
+- Contingencies outside the n-1 grids, or outaging none of the elements chosen
+  in the n-1 element filter, are set to "Not analysed" for the run (`ComOutage.outserv = 1`,
+  verified 23 Oct 2026; `excluded_contingencies`). Where the filters act, also in
+  a re-evaluation: [`CALCULATION_AND_EVALUATION.md`](CALCULATION_AND_EVALUATION.md).
 
 ### 7.2 Planned outages in the sweep
 

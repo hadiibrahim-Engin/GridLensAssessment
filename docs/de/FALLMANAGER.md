@@ -80,14 +80,22 @@ Statuszeile und Aktionsleiste bleiben auf beiden Reitern sichtbar:
 - **Settings** – eine Leiste (*Restore defaults*, *Apply settings*, *Save
   settings*, Zustand der Settings) und sechs Seiten:
   - *Network scope*: zwei Listen mit **jedem Grid des Modells** (inaktive
-    gekennzeichnet; das Summary Grid eines Study Case wird nicht angeboten).
-    *Assessed equipment*: nur Leitungen, Transformatoren und
-    Knoten in den gewählten Grids werden bewertet (QDS und n-1); keine
-    Auswahl = jedes Grid; *Select all grids*, *Clear selection*. *Contingencies*:
-    *Same grids as the assessed equipment* oder *Own selection*; darunter die
-    Vorschau „x of y contingencies … in scope“; der n-1-Lauf setzt die Fehlerfälle
-    außerhalb für den Lauf auf *Not analysed* und setzt sie zurück. Eine Auswahl
-    wirkt sofort.
+    gekennzeichnet; das Summary Grid eines Study Case wird nicht angeboten)
+    und eine Betriebsmittel-Liste. *Report filter: assessed equipment*: nur
+    Leitungen, Transformatoren und Knoten in den gewählten Grids werden
+    bewertet (n-0 und die in n-1 beobachteten Betriebsmittel); keine Auswahl =
+    jedes Grid; keine Wirkung auf die Rechnung, wirkt vollständig bei der
+    Neuauswertung eines erhaltenen Laufs; *Select all grids*, *Clear
+    selection*. *n-1 filter: contingencies by grid*: *Every grid (no filter)*
+    oder *Own selection*; darunter die Vorschau „x of y contingencies … in
+    scope“. *n-1 filter: outaged elements* (darunter in derselben Karte):
+    durchsuchbare Liste der Betriebsmittel, die die Fehlerfälle ausschalten;
+    nur Fehlerfälle mit einem gewählten Betriebsmittel werden gerechnet, keine
+    Auswahl = jedes Betriebsmittel. Der n-1-Lauf setzt die von
+    beiden n-1-Filtern ausgelassenen Fehlerfälle für den Lauf auf *Not analysed*
+    und setzt sie zurück; bei einer Neuauswertung bleiben sie aus der
+    Auswertung. Eine Auswahl wirkt sofort. Siehe
+    [`BERECHNUNG_UND_AUSWERTUNG.md`](BERECHNUNG_UND_AUSWERTUNG.md).
   - *Limits*: thermische Grenzwerte (Warnschwellen und n-0-Grenzen, Leitungen
     und Transformatoren getrennt; Grenzwertbehandlung für n-1 und (n-1)') und
     Spannungsgrenzen (ein Band in p.u. der Nennspannung für jede Spannungsebene,

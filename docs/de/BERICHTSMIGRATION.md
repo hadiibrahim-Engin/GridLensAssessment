@@ -5,8 +5,8 @@ Englische Fassung: [../REPORT_MIGRATION.md](../REPORT_MIGRATION.md)
 | | Vorher | Nachher |
 |---|---|---|
 | Publisher | 7.0.0 | 8.0.0 |
-| MRT (`MASTER_GRIDLENS.mrt`) | 5.0.0 | 6.0.0 |
-| Datenvertrag | 5.0, 18 Tabellen | 6.0, 19 Tabellen |
+| MRT (`MASTER_GRIDLENS.mrt`) | 5.0.0 | 6.0.0 → 6.1.0 (eine Seite je Kapitel; Felder ohne Ziffern) |
+| Datenvertrag | 5.0, 18 Tabellen | 6.0, 19 Tabellen → 6.2, 23 Tabellen (n-1-Kapitel) |
 
 Die MRT wird erzeugt: `python3 tools/build_mrt.py`. `tests/test_mrt.py` prüft,
 dass ihre Datenquellen `TABLES` entsprechen und dass jede SQL-Abfrage gegen die

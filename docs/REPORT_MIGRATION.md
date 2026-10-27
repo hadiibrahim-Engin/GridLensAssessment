@@ -5,8 +5,8 @@ German version: [de/BERICHTSMIGRATION.md](de/BERICHTSMIGRATION.md)
 | | Before | After |
 |---|---|---|
 | Publisher | 7.0.0 | 8.0.0 |
-| MRT (`MASTER_GRIDLENS.mrt`) | 5.0.0 | 6.0.0 |
-| Data contract | 5.0, 18 tables | 6.0, 19 tables |
+| MRT (`MASTER_GRIDLENS.mrt`) | 5.0.0 | 6.0.0 → 6.1.0 (one page per chapter; fields without digits) |
+| Data contract | 5.0, 18 tables | 6.0, 19 tables → 6.2, 23 tables (n-1 chapters) |
 
 The MRT is generated: `python3 tools/build_mrt.py`. `tests/test_mrt.py` checks
 that its data sources equal `TABLES` and that every SQL query runs against the

@@ -47,9 +47,9 @@ H, D = 3600.0, 86400.0
 
 # >>> copy of powerfactory/gridlens_report.py, written by tools/sync_case_manager_copy.py - do not edit >>>
 # GridLens 8.0.0: 168 definitions.
-import re
 import hashlib
 import math
+import re
 from datetime import datetime
 
 
@@ -191,6 +191,7 @@ def element_grid_name(obj):
 
 
 def finite_number(value):
+    """Return a finite float, accepting decimal commas; invalid values return None."""
     if isinstance(value, (tuple, list)):
         return None
     if value is None or type(value) is bool:
@@ -244,8 +245,9 @@ COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'ma
 NOT_VERIFIED = 'not verified yet'
 
 
-PART3_NOTE = ('Read only: set in the contingency analysis (ComSimoutage) of the study case; GridLens reads it '
-              'and does not change it.')
+CONTINGENCY_SETTINGS_NOTE = (
+    'Read only: set in the contingency analysis (ComSimoutage) of the study case; GridLens reads it '
+    'and does not change it.')
 
 
 NUMERIC_TOLERANCE = 1e-9
@@ -260,7 +262,7 @@ def _setting(key, section, label, unit, default, kind, category=CATEGORY_EVALUAT
 
 def _contingency_setting(key, label):
     return _setting(key, 'Contingency analysis', label, '', None, 'text', CATEGORY_CALCULATION, False, "n-1, (n-1)'",
-                    SOURCE_POWERFACTORY, PART3_NOTE)
+                    SOURCE_POWERFACTORY, CONTINGENCY_SETTINGS_NOTE)
 
 
 SETTINGS = (
@@ -289,7 +291,7 @@ SETTINGS = (
     _setting('energized_min_pu', 'Voltage limits', 'De-energised below', 'p.u.', ENERGIZED_MIN_PU, 'pu',
              note='a node below this voltage counts as de-energised at that time step, not as a value'),
     _setting('post_fault_voltage', 'Voltage limits', 'Post-fault voltage limits', '', None, 'text', editable=False,
-             applies="n-1, (n-1)'", source=SOURCE_POWERFACTORY, note=PART3_NOTE),
+             applies="n-1, (n-1)'", source=SOURCE_POWERFACTORY, note=CONTINGENCY_SETTINGS_NOTE),
     _setting('loading_change_tolerance', 'Classification', 'n-0 change tolerance, loading', '%-points',
              LOADING_DELTA_TOLERANCE, 'tolerance'),
     _setting('voltage_change_tolerance', 'Classification', 'n-0 change tolerance, voltage', 'p.u.',
@@ -487,9 +489,16 @@ def active_overrides():
     return clean_overrides(_ACTIVE_SETTINGS or {})
 
 
-_SETTING_CONSTANTS = {'top_n': 'TOP_N', 'max_plot_points': 'MAX_PLOT_POINTS', 'energized_min_pu': 'ENERGIZED_MIN_PU',
-                      'loading_appendix_delta': 'LOADING_APPENDIX_DELTA', 'voltage_appendix_delta': 'VOLTAGE_APPENDIX_DELTA',
-                      'run_reference': 'RUN_REFERENCE_CASE', 'max_cases': 'MAX_CASES', 'max_n1_times': 'MAX_N1_TIMES'}
+_SETTING_CONSTANTS = {
+    'top_n': 'TOP_N',
+    'max_plot_points': 'MAX_PLOT_POINTS',
+    'energized_min_pu': 'ENERGIZED_MIN_PU',
+    'loading_appendix_delta': 'LOADING_APPENDIX_DELTA',
+    'voltage_appendix_delta': 'VOLTAGE_APPENDIX_DELTA',
+    'run_reference': 'RUN_REFERENCE_CASE',
+    'max_cases': 'MAX_CASES',
+    'max_n1_times': 'MAX_N1_TIMES',
+}
 
 
 def setting_value(key, overrides=None):
@@ -1359,9 +1368,19 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
     for case in config.get('cases') or ():
         if case['id'] in disabled:
             continue
-        plan = {'id': case['id'], 'name': str(case.get('name') or case['id']), 'description': str(case.get('description') or ''),
-                'members': [], 'windows': {}, 'status': PLAN_READY, 'reason': '', 'warnings': [], 'states': [],
-                'relations': [], 'overridden': []}
+        plan = {
+            'id': case['id'],
+            'name': str(case.get('name') or case['id']),
+            'description': str(case.get('description') or ''),
+            'members': [],
+            'windows': {},
+            'status': PLAN_READY,
+            'reason': '',
+            'warnings': [],
+            'states': [],
+            'relations': [],
+            'overridden': [],
+        }
         errors = []
         for key in case.get('outages') or ():
             record = lookup(key)
@@ -1432,10 +1451,20 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
         plan['states'] = network_states(windows)
         plan['fingerprint'] = plan_fingerprint(plan, background)
         plans.append(plan)
-    return {'source': source, 'source_text': source_text or source, 'revision': config.get('revision'),
-            'background': background, 'cases': plans, 'skipped': [], 'records': list(records), 'config': config,
-            'warnings': request_warnings, 'disabled': disabled, 'assessments': list(config.get('assessments') or ['n-0']),
-            'settings': dict(config.get('settings') or {})}
+    return {
+        'source': source,
+        'source_text': source_text or source,
+        'revision': config.get('revision'),
+        'background': background,
+        'cases': plans,
+        'skipped': [],
+        'records': list(records),
+        'config': config,
+        'warnings': request_warnings,
+        'disabled': disabled,
+        'assessments': list(config.get('assessments') or ['n-0']),
+        'settings': dict(config.get('settings') or {}),
+    }
 
 
 def legacy_case_config_path(project_key):
@@ -1533,8 +1562,8 @@ CONTINGENCIES_NOT_READ = 'not read'
 
 
 N1_NOTE = ("Calculated with the contingency analysis (ComSimoutage) of the active study case, at the QDS time steps "
-           "inside the outage windows of each case. Until the report chapters for n-1 exist (part 4), the result "
-           "appears in the log and on the Model Quality Assurance page.")
+           "inside the outage windows of each case. Results appear in the log and in the contingency and quality "
+           "sections of the reports.")
 
 
 HELP_TEXTS = {
@@ -1668,7 +1697,7 @@ SETTING_HELP = {
               "change the physical network model.",
     'classification': "Compares n-1 and (n-1)' at the same point in time, for the same contingency and the same "
                       "monitored equipment. Rules version " + CLASSIFICATION_VERSION + ".",
-    'calculation_parameters': "Category B: these parameters can change what PowerFactory calculates. " + PART3_NOTE,
+    'calculation_parameters': "Category B: these parameters can change what PowerFactory calculates. " + CONTINGENCY_SETTINGS_NOTE,
     'restore_defaults': "Removes the user overrides and loads the valid default values of GridLens (and of PowerFactory, "
                         "once those are read).",
     'apply_settings': "Checks the entries and uses the settings for the next selected calculations.",
@@ -1893,8 +1922,14 @@ class CaseEditor:
         if problem:
             return None, problem
         identifier = self.next_case_id()
-        self.config['cases'].append({'id': identifier, 'name': name.strip() or 'Case ' + identifier[1:], 'description': '',
-                                     'enabled': True, 'outages': [], 'overrides': {}})
+        self.config['cases'].append({
+            'id': identifier,
+            'name': name.strip() or 'Case ' + identifier[1:],
+            'description': '',
+            'enabled': True,
+            'outages': [],
+            'overrides': {},
+        })
         return identifier, None
 
     def rename_case(self, case_id, name):
@@ -2812,7 +2847,7 @@ class CaseManagerDialog:
         ttk, root = self.ttk, self.root
         self._style()
         root.title('GridLens {} - Case Manager'.format(PUBLISHER_VERSION))
-        root.geometry(window_geometry(root.winfo_screenwidth(), root.winfo_screenheight(), share=0.94, largest=(1720, 1020)))
+        root.geometry(window_geometry(root.winfo_screenwidth(), root.winfo_screenheight(), share=0.82, largest=(1200, 760)))
         root.minsize(*minimum_window_size(root.winfo_screenwidth(), root.winfo_screenheight()))
         root.configure(background=self.BACKGROUND)
         root.columnconfigure(0, weight=1)
@@ -3356,7 +3391,7 @@ class CaseManagerDialog:
         options.bind('<Configure>', lambda event: [widget.configure(wraplength=max(180, event.width - 58))
                                                    for widget in (n1, prime)], add='+')
         self.tip(prime, HELP_TEXTS['n1_prime'])
-        note = self._wrapped_label(options, "n-1 and (n-1)': results in the log and on the QA page until part 4",
+        note = self._wrapped_label(options, "n-1 and (n-1)': results in the log and reports",
                                    row=4, column=0, padx=(22, 0))
         self.tip(note, N1_NOTE)
         results = ttk.Frame(options, style='Card.TFrame')
@@ -4618,12 +4653,15 @@ def read_contingencies(study_case):
             if element is None:
                 break
             elements.append(element)
-        found.append({'name': object_name(outage), 'number': safe_attr(outage, 'number'),
-                      'analysed': safe_attr(outage, 'outserv', 0) in (0, False),
-                      'elements': [object_name(element) for element in elements],
-                      'element_items': [(object_key(element), object_name(element), class_name(element),
+        found.append({
+            'name': object_name(outage),
+            'number': safe_attr(outage, 'number'),
+            'analysed': safe_attr(outage, 'outserv', 0) in (0, False),
+            'elements': [object_name(element) for element in elements],
+            'element_items': [(object_key(element), object_name(element), class_name(element),
                                          element_grid_name(element)) for element in elements],
-                      'grids': sorted({element_grid_name(element) or '(no grid)' for element in elements}, key=str.casefold)})
+            'grids': sorted({element_grid_name(element) or '(no grid)' for element in elements}, key=str.casefold),
+        })
     return {'command': object_name(command), 'contingencies': found}
 
 

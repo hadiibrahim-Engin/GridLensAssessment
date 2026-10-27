@@ -1,0 +1,920 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<StiSerializer version="1.02" type="Net" application="StiDictionary">
+  <BusinessObjects isList="true" count="0" />
+  <Databases isList="true" count="1">
+    <SQLite Ref="1" type="Stimulsoft.Report.Dictionary.StiSQLiteDatabase" isKey="true">
+      <Alias>SQLite</Alias>
+      <ConnectionStringEncrypted />
+      <Key>6a38df3e3b8a4a038f265a2dca4f12bb</Key>
+      <Name>SQLite</Name>
+    </SQLite>
+  </Databases>
+  <DataSources isList="true" count="38">
+    <ScriptedReportMeta Ref="2" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedReportMeta</Alias>
+      <Columns isList="true" count="25">
+        <value>run_id,System.String</value>
+        <value>study_name,System.String</value>
+        <value>model_name,System.String</value>
+        <value>model_version,System.String</value>
+        <value>simulation_start,System.String</value>
+        <value>simulation_end,System.String</value>
+        <value>simulation_time_step,System.String</value>
+        <value>generation_date,System.String</value>
+        <value>generated_by,System.String</value>
+        <value>run_mode,System.String</value>
+        <value>template_name,System.String</value>
+        <value>template_version,System.String</value>
+        <value>data_contract_version,System.String</value>
+        <value>result_name,System.String</value>
+        <value>assessment_scope,System.String</value>
+        <value>assessment_status,System.String</value>
+        <value>case_source_text,System.String</value>
+        <value>reference_text,System.String</value>
+        <value>qds_mode_text,System.String</value>
+        <value>coverage_statement,System.String</value>
+        <value>contingency_text,System.String</value>
+        <value>overall_text,System.String</value>
+        <value>critical_note,System.String</value>
+        <value>events_note,System.String</value>
+        <value>empty_tables,System.String</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>f1aefaad2e3fe6e53eb987c6bcc985b6</Key>
+      <Name>ScriptedReportMeta</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedReportMeta"</SqlCommand>
+    </ScriptedReportMeta>
+    <ScriptedModelQuality Ref="3" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedModelQuality</Alias>
+      <Columns isList="true" count="4">
+        <value>check_name,System.String</value>
+        <value>status,System.String</value>
+        <value>message,System.String</value>
+        <value>affected_element,System.String</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>d1def64b808292f7c02c6893fd6b225d</Key>
+      <Name>ScriptedModelQuality</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedModelQuality"</SqlCommand>
+    </ScriptedModelQuality>
+    <ScriptedCases Ref="4" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCases</Alias>
+      <Columns isList="true" count="13">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>period_text,System.String</value>
+        <value>priority,System.Int32</value>
+        <value>equipment_name,System.String</value>
+        <value>assessment,System.String</value>
+        <value>assessment_detail,System.String</value>
+        <value>violation,System.Int32</value>
+        <value>outage_names,System.String</value>
+        <value>reference_text,System.String</value>
+        <value>states_text,System.String</value>
+        <value>coverage_text,System.String</value>
+        <value>provenance_text,System.String</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>bc4039d752e90713c7b47664dc0e5521</Key>
+      <Name>ScriptedCases</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCases" ORDER BY "case_order"</SqlCommand>
+    </ScriptedCases>
+    <ScriptedCaseMetrics Ref="5" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCaseMetrics</Alias>
+      <Columns isList="true" count="8">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>max_line_text,System.String</value>
+        <value>max_line_element,System.String</value>
+        <value>coincident_delta_text,System.String</value>
+        <value>maxima_difference_text,System.String</value>
+        <value>violation_hours_text,System.String</value>
+        <value>voltage_range_text,System.String</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>1adeafe8cb1a4d529bb7cd1543ef89e6</Key>
+      <Name>ScriptedCaseMetrics</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCaseMetrics" ORDER BY "case_order"</SqlCommand>
+    </ScriptedCaseMetrics>
+    <ScriptedKpis Ref="6" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedKpis</Alias>
+      <Columns isList="true" count="5">
+        <value>highest_text,System.String</value>
+        <value>highest_caption,System.String</value>
+        <value>highest_violation,System.Int32</value>
+        <value>delta_text,System.String</value>
+        <value>delta_caption,System.String</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>b21538abf07b44107bed6e47a7436307</Key>
+      <Name>ScriptedKpis</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedKpis"</SqlCommand>
+    </ScriptedKpis>
+    <ScriptedPieLines Ref="7" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedPieLines</Alias>
+      <Columns isList="true" count="3">
+        <value>sort_order,System.Int32</value>
+        <value>class_label,System.String</value>
+        <value>element_count,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>94343f2b7dc8db967f5a08d70ebc60cc</Key>
+      <Name>ScriptedPieLines</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedPieLines" ORDER BY "sort_order"</SqlCommand>
+    </ScriptedPieLines>
+    <ScriptedPieTransformers Ref="8" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedPieTransformers</Alias>
+      <Columns isList="true" count="3">
+        <value>sort_order,System.Int32</value>
+        <value>class_label,System.String</value>
+        <value>element_count,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>225bf8f51b9206156ae1f0b2fe6965d1</Key>
+      <Name>ScriptedPieTransformers</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedPieTransformers" ORDER BY "sort_order"</SqlCommand>
+    </ScriptedPieTransformers>
+    <ScriptedCaseCounts Ref="9" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCaseCounts</Alias>
+      <Columns isList="true" count="5">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>line_count,System.Int32</value>
+        <value>transformer_count,System.Int32</value>
+        <value>node_count,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>6b7eedbd3dd2afe852a1484b2e998a09</Key>
+      <Name>ScriptedCaseCounts</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCaseCounts" ORDER BY "case_order"</SqlCommand>
+    </ScriptedCaseCounts>
+    <ScriptedLineLoadingBars Ref="10" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedLineLoadingBars</Alias>
+      <Columns isList="true" count="3">
+        <value>rank,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>max_value,System.Double</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>7e2e1510befcce301612f6fcb7078f6e</Key>
+      <Name>ScriptedLineLoadingBars</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedLineLoadingBars" ORDER BY "rank"</SqlCommand>
+    </ScriptedLineLoadingBars>
+    <ScriptedCaseComparison Ref="11" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCaseComparison</Alias>
+      <Columns isList="true" count="18">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_d_text,System.String</value>
+        <value>case_e_text,System.String</value>
+        <value>case_f_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>case_d_name,System.String</value>
+        <value>case_e_name,System.String</value>
+        <value>case_f_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>602b6cce51740cd3e09dfc9bf19a9900</Key>
+      <Name>ScriptedCaseComparison</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCaseComparison" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedCaseComparison>
+    <ScriptedCalculationRuns Ref="12" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCalculationRuns</Alias>
+      <Columns isList="true" count="9">
+        <value>run_order,System.Int32</value>
+        <value>run_id,System.String</value>
+        <value>run_kind,System.String</value>
+        <value>case_name,System.String</value>
+        <value>time_steps,System.Int32</value>
+        <value>elapsed_text,System.String</value>
+        <value>status,System.String</value>
+        <value>result_object,System.String</value>
+        <value>note,System.String</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>a658fb63f44fa73e7b6844cc1d12b583</Key>
+      <Name>ScriptedCalculationRuns</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCalculationRuns" ORDER BY "run_order"</SqlCommand>
+    </ScriptedCalculationRuns>
+    <ScriptedTopLinesByCase Ref="13" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedTopLinesByCase</Alias>
+      <Columns isList="true" count="17">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_d_text,System.String</value>
+        <value>case_e_text,System.String</value>
+        <value>case_f_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>case_d_name,System.String</value>
+        <value>case_e_name,System.String</value>
+        <value>case_f_name,System.String</value>
+        <value>col_count,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>fdb3ca7065db45790549d70cae2568d5</Key>
+      <Name>ScriptedTopLinesByCase</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedTopLinesByCase" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedTopLinesByCase>
+    <ScriptedAppendixLine Ref="14" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedAppendixLine</Alias>
+      <Columns isList="true" count="18">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_d_text,System.String</value>
+        <value>case_e_text,System.String</value>
+        <value>case_f_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>case_d_name,System.String</value>
+        <value>case_e_name,System.String</value>
+        <value>case_f_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>637ec0719807510484d8b8a8f20523dc</Key>
+      <Name>ScriptedAppendixLine</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedAppendixLine" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedAppendixLine>
+    <ScriptedAppendixTransformer Ref="15" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedAppendixTransformer</Alias>
+      <Columns isList="true" count="18">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_d_text,System.String</value>
+        <value>case_e_text,System.String</value>
+        <value>case_f_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>case_d_name,System.String</value>
+        <value>case_e_name,System.String</value>
+        <value>case_f_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>3387f14c9a2b411b321ebdfe6bd01419</Key>
+      <Name>ScriptedAppendixTransformer</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedAppendixTransformer" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedAppendixTransformer>
+    <ScriptedAppendixVoltage Ref="16" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedAppendixVoltage</Alias>
+      <Columns isList="true" count="18">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_d_text,System.String</value>
+        <value>case_e_text,System.String</value>
+        <value>case_f_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>case_d_name,System.String</value>
+        <value>case_e_name,System.String</value>
+        <value>case_f_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>7678a5507dad6b7ef1efe53cbc38709c</Key>
+      <Name>ScriptedAppendixVoltage</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedAppendixVoltage" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedAppendixVoltage>
+    <ScriptedCaseStatistics Ref="17" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCaseStatistics</Alias>
+      <Columns isList="true" count="14">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>level,System.String</value>
+        <value>assessment,System.String</value>
+        <value>critical_lines,System.Int32</value>
+        <value>critical_transformers,System.Int32</value>
+        <value>critical_nodes,System.Int32</value>
+        <value>new_elements,System.Int32</value>
+        <value>worsened_elements,System.Int32</value>
+        <value>events_text,System.String</value>
+        <value>contingencies_text,System.String</value>
+        <value>times_text,System.String</value>
+        <value>completeness_text,System.String</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>0146473e37bc110357677b6da83fb65b</Key>
+      <Name>ScriptedCaseStatistics</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCaseStatistics" ORDER BY CASE "level" WHEN 'n-0' THEN 0 WHEN 'n-1' THEN 1 ELSE 2 END, "case_order"</SqlCommand>
+    </ScriptedCaseStatistics>
+    <ScriptedCaseStatusCounts Ref="18" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCaseStatusCounts</Alias>
+      <Columns isList="true" count="6">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>new_count,System.Int32</value>
+        <value>worsened_count,System.Int32</value>
+        <value>improved_count,System.Int32</value>
+        <value>resolved_count,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>ea9f36856c307d1dd28a425a8b156fdc</Key>
+      <Name>ScriptedCaseStatusCounts</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCaseStatusCounts" ORDER BY "case_order"</SqlCommand>
+    </ScriptedCaseStatusCounts>
+    <ScriptedCoverage Ref="19" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCoverage</Alias>
+      <Columns isList="true" count="13">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>level,System.String</value>
+        <value>times_requested,System.Int32</value>
+        <value>times_calculated,System.Int32</value>
+        <value>contingencies_defined,System.Int32</value>
+        <value>contingencies_applicable,System.Int32</value>
+        <value>failed_cells,System.Int32</value>
+        <value>not_evaluated_cells,System.Int32</value>
+        <value>not_applicable_cells,System.Int32</value>
+        <value>not_comparable_cells,System.Int32</value>
+        <value>coverage_text,System.String</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>c020c99db90a96e6a6a5038067026044</Key>
+      <Name>ScriptedCoverage</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCoverage" ORDER BY CASE "level" WHEN 'n-0' THEN 0 WHEN 'n-1' THEN 1 ELSE 2 END, "case_order"</SqlCommand>
+    </ScriptedCoverage>
+    <ScriptedScope Ref="20" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedScope</Alias>
+      <Columns isList="true" count="9">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>level,System.String</value>
+        <value>grid_name,System.String</value>
+        <value>voltage_level,System.String</value>
+        <value>element_class,System.String</value>
+        <value>monitored,System.Int32</value>
+        <value>critical,System.Int32</value>
+        <value>incomplete,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>11071b5fa1c41df4ee4099f8d6b22c94</Key>
+      <Name>ScriptedScope</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedScope" ORDER BY "case_order", "level", "grid_name", "voltage_level", "element_class"</SqlCommand>
+    </ScriptedScope>
+    <ScriptedOutageWindows Ref="21" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedOutageWindows</Alias>
+      <Columns isList="true" count="11">
+        <value>row_order,System.Int32</value>
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>outage_name,System.String</value>
+        <value>outage_path,System.String</value>
+        <value>equipment_name,System.String</value>
+        <value>start_text,System.String</value>
+        <value>end_text,System.String</value>
+        <value>start_hours,System.Double</value>
+        <value>end_hours,System.Double</value>
+        <value>gantt_label,System.String</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>8d7f558e1abd83d1b63de5540a489a38</Key>
+      <Name>ScriptedOutageWindows</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedOutageWindows" ORDER BY "row_order"</SqlCommand>
+    </ScriptedOutageWindows>
+    <ScriptedReferenceFindings Ref="22" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedReferenceFindings</Alias>
+      <Columns isList="true" count="14">
+        <value>row_order,System.Int32</value>
+        <value>level,System.String</value>
+        <value>criterion_order,System.Int32</value>
+        <value>main_rank,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>element_type,System.String</value>
+        <value>grid_name,System.String</value>
+        <value>criterion,System.String</value>
+        <value>value_text,System.String</value>
+        <value>limit_text,System.String</value>
+        <value>violation_text,System.String</value>
+        <value>time_label,System.String</value>
+        <value>contingency_name,System.String</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>a2d71da52f0fa73524b7427a410edbb3</Key>
+      <Name>ScriptedReferenceFindings</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedReferenceFindings" ORDER BY "row_order"</SqlCommand>
+    </ScriptedReferenceFindings>
+    <ScriptedCriticalLines Ref="23" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCriticalLines</Alias>
+      <Columns isList="true" count="18">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_d_text,System.String</value>
+        <value>case_e_text,System.String</value>
+        <value>case_f_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>case_d_name,System.String</value>
+        <value>case_e_name,System.String</value>
+        <value>case_f_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>8b9289f855aeae340f339c6a0fad7d82</Key>
+      <Name>ScriptedCriticalLines</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCriticalLines" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedCriticalLines>
+    <ScriptedCriticalTransformers Ref="24" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCriticalTransformers</Alias>
+      <Columns isList="true" count="18">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_d_text,System.String</value>
+        <value>case_e_text,System.String</value>
+        <value>case_f_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>case_d_name,System.String</value>
+        <value>case_e_name,System.String</value>
+        <value>case_f_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>2192d5d7702252ee3d68c28ee11dd3ac</Key>
+      <Name>ScriptedCriticalTransformers</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCriticalTransformers" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedCriticalTransformers>
+    <ScriptedCriticalNodes Ref="25" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCriticalNodes</Alias>
+      <Columns isList="true" count="18">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_d_text,System.String</value>
+        <value>case_e_text,System.String</value>
+        <value>case_f_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>case_d_name,System.String</value>
+        <value>case_e_name,System.String</value>
+        <value>case_f_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>72818bc5c41b1ac7a197559b4bd141a8</Key>
+      <Name>ScriptedCriticalNodes</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCriticalNodes" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedCriticalNodes>
+    <ScriptedDetailLines Ref="26" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedDetailLines</Alias>
+      <Columns isList="true" count="12">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>4b246f7f06e0e22a181d67b0f9838d40</Key>
+      <Name>ScriptedDetailLines</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedDetailLines" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedDetailLines>
+    <ScriptedDetailTransformers Ref="27" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedDetailTransformers</Alias>
+      <Columns isList="true" count="12">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>95617fae435bdc82a9731a2003e9ae44</Key>
+      <Name>ScriptedDetailTransformers</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedDetailTransformers" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedDetailTransformers>
+    <ScriptedDetailVoltageLow Ref="28" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedDetailVoltageLow</Alias>
+      <Columns isList="true" count="12">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>6c9145193a8b76c78b1ce762e8f05496</Key>
+      <Name>ScriptedDetailVoltageLow</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedDetailVoltageLow" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedDetailVoltageLow>
+    <ScriptedDetailVoltageHigh Ref="29" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedDetailVoltageHigh</Alias>
+      <Columns isList="true" count="12">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>e37e0d2678616dc0aab3b706d64847ee</Key>
+      <Name>ScriptedDetailVoltageHigh</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedDetailVoltageHigh" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedDetailVoltageHigh>
+    <ScriptedClassificationMatrix Ref="30" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedClassificationMatrix</Alias>
+      <Columns isList="true" count="12">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>a72702ab817c94f36b854322ea497729</Key>
+      <Name>ScriptedClassificationMatrix</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedClassificationMatrix" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedClassificationMatrix>
+    <ScriptedContingencyRegister Ref="31" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedContingencyRegister</Alias>
+      <Columns isList="true" count="16">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>row_order,System.Int32</value>
+        <value>level,System.String</value>
+        <value>contingency_name,System.String</value>
+        <value>equipment_name,System.String</value>
+        <value>examined_times,System.Int32</value>
+        <value>not_applicable_times,System.Int32</value>
+        <value>failed_times,System.Int32</value>
+        <value>missing_times,System.Int32</value>
+        <value>affected_elements,System.Int32</value>
+        <value>critical_times,System.Int32</value>
+        <value>new_events,System.Int32</value>
+        <value>worsened_events,System.Int32</value>
+        <value>worst_text,System.String</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>dba08da35d6d924d08804c006e67e19b</Key>
+      <Name>ScriptedContingencyRegister</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedContingencyRegister" ORDER BY "case_order", "row_order"</SqlCommand>
+    </ScriptedContingencyRegister>
+    <ScriptedContingencyRanking Ref="32" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedContingencyRanking</Alias>
+      <Columns isList="true" count="3">
+        <value>rank,System.Int32</value>
+        <value>contingency_name,System.String</value>
+        <value>finding_count,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>b25c9aaa0f273fd40eb9cc1f2de08f9e</Key>
+      <Name>ScriptedContingencyRanking</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedContingencyRanking" ORDER BY "rank"</SqlCommand>
+    </ScriptedContingencyRanking>
+    <ScriptedContingencyEvents Ref="33" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedContingencyEvents</Alias>
+      <Columns isList="true" count="17">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>row_order,System.Int32</value>
+        <value>level,System.String</value>
+        <value>main_rank,System.Int32</value>
+        <value>criterion_order,System.Int32</value>
+        <value>time_label,System.String</value>
+        <value>contingency_name,System.String</value>
+        <value>element_name,System.String</value>
+        <value>criterion,System.String</value>
+        <value>reference_text,System.String</value>
+        <value>scenario_text,System.String</value>
+        <value>limit_text,System.String</value>
+        <value>violation_text,System.String</value>
+        <value>change_text,System.String</value>
+        <value>status,System.String</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>4acaf2c049940fb3e78698ad8fcde4f7</Key>
+      <Name>ScriptedContingencyEvents</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedContingencyEvents" ORDER BY "case_order", "row_order"</SqlCommand>
+    </ScriptedContingencyEvents>
+    <ScriptedContingencyEpisodes Ref="34" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedContingencyEpisodes</Alias>
+      <Columns isList="true" count="14">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>row_order,System.Int32</value>
+        <value>level,System.String</value>
+        <value>contingency_name,System.String</value>
+        <value>element_name,System.String</value>
+        <value>criterion,System.String</value>
+        <value>status,System.String</value>
+        <value>first_text,System.String</value>
+        <value>last_text,System.String</value>
+        <value>points,System.Int32</value>
+        <value>peak_text,System.String</value>
+        <value>peak_time,System.String</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>97684f3ce7dd6d4594f09523af5192c7</Key>
+      <Name>ScriptedContingencyEpisodes</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedContingencyEpisodes" ORDER BY "case_order", "row_order"</SqlCommand>
+    </ScriptedContingencyEpisodes>
+    <ScriptedQualityRegister Ref="35" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedQualityRegister</Alias>
+      <Columns isList="true" count="10">
+        <value>row_order,System.Int32</value>
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>level,System.String</value>
+        <value>status,System.String</value>
+        <value>cause,System.String</value>
+        <value>contingency_name,System.String</value>
+        <value>time_text,System.String</value>
+        <value>cells,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>943d8fe13e4f543942401d1f569a005e</Key>
+      <Name>ScriptedQualityRegister</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedQualityRegister" ORDER BY "row_order"</SqlCommand>
+    </ScriptedQualityRegister>
+    <ScriptedTimeCriticality Ref="36" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedTimeCriticality</Alias>
+      <Columns isList="true" count="6">
+        <value>time_label,System.String</value>
+        <value>timestamp,System.Double</value>
+        <value>series_ref_name,System.String</value>
+        <value>series_a_name,System.String</value>
+        <value>value_ref,System.Double</value>
+        <value>value_a,System.Double</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>0a8f739a35697cce1ad07bdf5a297435</Key>
+      <Name>ScriptedTimeCriticality</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedTimeCriticality" ORDER BY "timestamp"</SqlCommand>
+    </ScriptedTimeCriticality>
+    <ScriptedTimeMatrix Ref="37" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedTimeMatrix</Alias>
+      <Columns isList="true" count="18">
+        <value>block,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>element_name,System.String</value>
+        <value>ref_text,System.String</value>
+        <value>case_a_text,System.String</value>
+        <value>case_b_text,System.String</value>
+        <value>case_c_text,System.String</value>
+        <value>case_d_text,System.String</value>
+        <value>case_e_text,System.String</value>
+        <value>case_f_text,System.String</value>
+        <value>case_a_name,System.String</value>
+        <value>case_b_name,System.String</value>
+        <value>case_c_name,System.String</value>
+        <value>case_d_name,System.String</value>
+        <value>case_e_name,System.String</value>
+        <value>case_f_name,System.String</value>
+        <value>col_count,System.Int32</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>7a924b0dd18cf7ff56e1d4f7db6bd072</Key>
+      <Name>ScriptedTimeMatrix</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedTimeMatrix" ORDER BY "block", "row_order"</SqlCommand>
+    </ScriptedTimeMatrix>
+    <ScriptedAssessmentSettings Ref="38" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedAssessmentSettings</Alias>
+      <Columns isList="true" count="7">
+        <value>row_order,System.Int32</value>
+        <value>section,System.String</value>
+        <value>label,System.String</value>
+        <value>value_text,System.String</value>
+        <value>unit,System.String</value>
+        <value>origin,System.String</value>
+        <value>status,System.String</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>f1c0c800c4c44c132358da9652364588</Key>
+      <Name>ScriptedAssessmentSettings</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedAssessmentSettings" ORDER BY "row_order"</SqlCommand>
+    </ScriptedAssessmentSettings>
+    <ScriptedResultProvenance Ref="39" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedResultProvenance</Alias>
+      <Columns isList="true" count="7">
+        <value>row_order,System.Int32</value>
+        <value>level,System.String</value>
+        <value>case_name,System.String</value>
+        <value>object_name,System.String</value>
+        <value>object_path,System.String</value>
+        <value>content_text,System.String</value>
+        <value>status,System.String</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>57c2530090068de14786098d51913a52</Key>
+      <Name>ScriptedResultProvenance</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedResultProvenance" ORDER BY "row_order"</SqlCommand>
+    </ScriptedResultProvenance>
+  </DataSources>
+  <Relations isList="true" count="0" />
+  <Resources isList="true" count="0" />
+  <UserFunctions isList="true" count="0" />
+  <Variables isList="true" count="0" />
+</StiSerializer>

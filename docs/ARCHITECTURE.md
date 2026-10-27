@@ -1,6 +1,6 @@
 # GridLens 8.0 – Planning-Case Manager: Architecture and Method
 
-Status: 23 October 2026 · Publisher 8.0.0 · MRT 6.0.0 · data contract 6.0 (unchanged by part 2) · settings 1.0 · classification rules 1.0
+Status: 23 October 2026 · Publisher 8.0.0 · MRT 6.2.0 · data contract 6.2 (n-1 chapters; names without digits; one template page per chapter) · settings 1.0 · classification rules 1.0
 
 GridLens 8 turns the single-outage pre-check of 7.x into an assessment of
 **engineer-defined planning cases**. A planning case is any set of planned
@@ -173,7 +173,7 @@ flowchart TD
     CMP --> LOOP
     REUSE --> LOOP
     LOOP -- done --> S6["6 Restore: study time, iopt_maint;<br/>list kept result objects"]
-    S6 --> S7["7 Build 19 tables, validate, publish"]
+    S6 --> S7["7 Build 23 tables, validate, publish"]
 ```
 
 A case that raises an ordinary error is kept as `FAILED` with its reason and
@@ -688,7 +688,7 @@ Before production use, run in PowerFactory 2026 and record the result:
 2. P5: an outage window boundary with hourly steps – does the effect appear in the window rows or in the spill-over rows?
 3. P6: the result objects `GridLens_<stamp>_<case>` appear in the study case and can be opened.
 4. P9: the case manager opens, OK / Cancel work, PowerFactory stays responsive afterwards (V30, V31).
-5. The report renders: new chapters 5, 8, 15 and the TOC with 19 entries.
+5. The report renders: one page per chapter, the n-1 chapters 15 and 16 and the TOC with 21 entries (locally rendered with Stimulsoft 2025.3.5, 26 Oct 2026; not yet in PowerFactory).
 6. Memory and run time of a full-year run with 10 cases.
 
 Own dates per case need their own probe first (`tools/probe_planned_outages.py`

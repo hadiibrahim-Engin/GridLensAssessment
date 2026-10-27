@@ -1,6 +1,6 @@
 # GridLens 8.0 – Planungsfall-Manager: Architektur und Methodik
 
-Stand: 23. Oktober 2026 · Publisher 8.0.0 · MRT 6.0.0 · Datenvertrag 6.0 (durch Teil 2 unverändert) · Settings 1.0 · Klassifizierungsregeln 1.0
+Stand: 23. Oktober 2026 · Publisher 8.0.0 · MRT 6.2.0 · Datenvertrag 6.2 (n-1-Kapitel; Namen ohne Ziffern; eine Vorlagenseite je Kapitel) · Settings 1.0 · Klassifizierungsregeln 1.0
 
 GridLens 8 erweitert die Einzel-Vorprüfung von 7.x zu einer Bewertung **vom
 Ingenieur definierter Planungsfälle**. Ein Planungsfall ist eine beliebige
@@ -176,7 +176,7 @@ flowchart TD
     CMP --> LOOP
     REUSE --> LOOP
     LOOP -- fertig --> S6["6 Wiederherstellen: Studienzeit, iopt_maint;<br/>erhaltene Ergebnisobjekte auflisten"]
-    S6 --> S7["7 19 Tabellen bilden, prüfen, publizieren"]
+    S6 --> S7["7 23 Tabellen bilden, prüfen, publizieren"]
 ```
 
 Ein Fall mit einem gewöhnlichen Fehler bleibt als `FAILED` bzw.
@@ -712,8 +712,9 @@ festhalten:
    und lassen sich öffnen.
 4. P9: der Fall-Manager öffnet sich, OK / Abbrechen funktionieren,
    PowerFactory reagiert danach normal (V30, V31).
-5. Der Bericht rendert: neue Kapitel 5, 8, 15 und das Inhaltsverzeichnis mit
-   19 Einträgen.
+5. Der Bericht rendert: eine Seite je Kapitel, die n-1-Kapitel 15 und 16 und
+   das Inhaltsverzeichnis mit 21 Einträgen (lokal mit Stimulsoft 2025.3.5
+   gerendert, 26.10.2026; in PowerFactory noch nicht).
 6. Speicher und Laufzeit eines Ganzjahreslaufs mit 10 Fällen.
 
 Eigene Termine je Fall brauchen zuerst eine eigene Probe

@@ -9,7 +9,7 @@ from xml.etree import ElementTree as ET
 import pytest
 
 
-from _paths import delivered  # noqa: E402
+from _paths import REPORTS, delivered, report_tree  # noqa: E402
 SCRIPT = delivered("gridlens_report.py")
 SPEC = importlib.util.spec_from_file_location("gridlens_report", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
@@ -274,13 +274,22 @@ class App:
         return []
 
 
-def test_table_contract_is_single_versioned_19_table_contract():
+def test_table_contract_is_single_versioned_contract_seven():
     assert gl.PUBLISHER_VERSION == "8.0.0"
-    assert gl.TEMPLATE_VERSION == "6.1.0"
-    assert gl.DATA_CONTRACT_VERSION == "6.1"
+    assert gl.TEMPLATE_VERSION == "7.0.0"
+    assert gl.DATA_CONTRACT_VERSION == "7.0"
     # No field name carries a digit: tables with such fields were missing from the PowerFactory report database.
     assert not [field for _, fields in gl.TABLES for field, _ in fields if any(char.isdigit() for char in field)]
-    assert len(gl.TABLES) == 19
+    assert not [name for name, _ in gl.TABLES if any(char.isdigit() for char in name)], "nor table names"
+    assert len(gl.TABLES) == 38
+    # Contract 7.0: the statistics of the reporting core for the main (H02-H10) and the detail report (D01-D12).
+    for name in ("ScriptedCaseStatistics", "ScriptedCaseStatusCounts", "ScriptedCoverage", "ScriptedScope", "ScriptedOutageWindows",
+                 "ScriptedReferenceFindings", "ScriptedCriticalLines", "ScriptedCriticalTransformers", "ScriptedCriticalNodes",
+                 "ScriptedDetailLines", "ScriptedDetailTransformers", "ScriptedDetailVoltageLow", "ScriptedDetailVoltageHigh",
+                 "ScriptedClassificationMatrix", "ScriptedContingencyRegister",
+                 "ScriptedContingencyRanking", "ScriptedContingencyEvents", "ScriptedContingencyEpisodes", "ScriptedQualityRegister",
+                 "ScriptedTimeCriticality", "ScriptedTimeMatrix", "ScriptedAssessmentSettings", "ScriptedResultProvenance"):
+        assert name in dict(gl.TABLES)
     tables = dict(gl.TABLES)
     for name in ("ScriptedCases", "ScriptedCaseComparison", "ScriptedCalculationRuns",
                  "ScriptedCaseCounts", "ScriptedAppendixLine", "ScriptedTopLinesByCase"):
@@ -288,12 +297,19 @@ def test_table_contract_is_single_versioned_19_table_contract():
     # The two-case outputs of earlier contracts and the LODF ranking are gone.
     for removed in ("ScriptedPlannedOutages", "ScriptedLoadingRanking",
                     "ScriptedOverview", "ScriptedVoltageViolations",
-                    "ScriptedTrendLineLoading", "ScriptedLodfRanking"):
+                    "ScriptedTrendLineLoading", "ScriptedLodfRanking", "ScriptedRadar", "ScriptedTrendMostLoaded",
+                    "ScriptedTrendLargestDelta", "ScriptedContingencyCases", "ScriptedContingencyCounts",
+                    "ScriptedContingencyFindings", "ScriptedContingencySkipped", "ScriptedReferenceExceeded"):
         assert removed not in tables
     assert "lodf_text" not in dict(tables["ScriptedReportMeta"])
     assert "coverage_statement" in dict(tables["ScriptedReportMeta"])
     assert "generated_by" in dict(tables["ScriptedReportMeta"])
     assert "run_mode" in dict(tables["ScriptedReportMeta"])
+    # The cover shows no Study ID; both reports carry the run ID.
+    assert "study_id" not in dict(tables["ScriptedReportMeta"]) and "run_id" in dict(tables["ScriptedReportMeta"])
+    # Only what a template prints is declared and written; the script's own figures stay unpublished.
+    assert "ScriptedClassificationCounts" not in tables and "new_events" not in dict(tables["ScriptedCaseStatistics"])
+    assert "case_d_text" not in dict(tables["ScriptedDetailLines"]) and "case_f_text" in dict(tables["ScriptedCriticalLines"])
 
 
 def test_reference_runs_without_and_every_outage_runs_as_its_own_case(monkeypatch):
@@ -660,7 +676,7 @@ def test_qds_period_is_read_from_the_command():
 def test_payload_validation_rejects_unknown_fields_and_booleans():
     payload = {name: [] for name, _ in gl.TABLES}
     payload["ScriptedReportMeta"] = [{
-        "study_id": "S", "study_name": "S", "model_name": "M",
+        "run_id": "R", "study_name": "S", "model_name": "M",
         "model_version": "PowerFactory 2026", "generation_date": "now",
         "generated_by": "user", "run_mode": "test",
         "template_name": gl.TEMPLATE_NAME,
@@ -668,8 +684,8 @@ def test_payload_validation_rejects_unknown_fields_and_booleans():
         "data_contract_version": gl.DATA_CONTRACT_VERSION,
         "result_name": "R", "assessment_scope": "test",
         "assessment_status": "test", "voltage_limits": "x",
-        "has_cases": "0", "chart_cases": "1", "case_source_text": "x",
-        "reference_text": "x", "qds_mode_text": "x", "coverage_statement": "x",
+        "has_cases": "0", "case_source_text": "x",
+        "reference_text": "x", "qds_mode_text": "x", "coverage_statement": "x", "has_contingency": "0", "contingency_text": "x",
         "unknown": "bad",
     }]
     with pytest.raises(ValueError, match="unknown fields"):
@@ -677,8 +693,8 @@ def test_payload_validation_rejects_unknown_fields_and_booleans():
     payload["ScriptedReportMeta"][0].pop("unknown")
     payload["ScriptedCases"] = [{
         "case_order": 0, "case_id": "REF", "case_name": "Reference",
-        "is_reference": True, "simulation_status": "CONVERGED",
-        "assessment": "BASELINE", "violation": 0,
+        "is_reference": 1, "simulation_status": "CONVERGED",
+        "assessment": "BASELINE", "violation": True,
     }]
     with pytest.raises(ValueError, match="boolean"):
         gl.validate_payload(payload)
@@ -1069,7 +1085,7 @@ def test_publication_validation_failure_does_not_reset_or_claim_validated():
     report = Report()
     messages = []
     payload = _publication_payload()
-    payload["ScriptedCases"][0]["is_reference"] = True
+    payload["ScriptedCases"][0]["violation"] = True
 
     with pytest.raises(ValueError, match="boolean"):
         gl.publish_report(report, payload, log=messages.append)
@@ -1096,12 +1112,16 @@ def test_publication_write_failure_keeps_cell_context_and_clears_partial_data():
 
 
 def _check_emitted_report_against_mrt(report):
-    """Replay recorded IntReport writes into SQLite, not the TABLES constant.
+    """Replay recorded IntReport writes into SQLite, not the TABLES constant; both reports, from their pages.
 
     The host's single Scripted prefix and field type mapping are modeled here;
     this does not exercise PowerFactory's export/merge or Stimulsoft compiler.
     """
-    root = ET.parse(delivered("MASTER_GRIDLENS.mrt")).getroot()
+    for name in REPORTS:
+        _check_emitted_report_against_template(report, report_tree(name))
+
+
+def _check_emitted_report_against_template(report, root):
     sources = list(root.find("./Dictionary/DataSources"))
     emitted = {"Scripted" + name: table
                for name, table in report.tables.items()}
@@ -1808,7 +1828,7 @@ def test_identical_cases_are_calculated_once_and_say_so(monkeypatch):
     assert app.qds.execute_calls == 2  # REF and A; B reuses A
     runs = app.report.tables["CalculationRuns"]["values"]
     assert runs[2, "run_kind"] == "CASE (reused)"
-    assert runs[2, "provenance_text"].startswith("REUSED from A")
+    # The provenance text stays in the script (log); the report shows the run kind.
 
 
 def test_fixed_outages_stay_active_in_the_reference_and_every_case(monkeypatch):
