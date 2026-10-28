@@ -1,0 +1,58 @@
+# Azure Repos PR validation is configured through a branch build policy.
+# See README.md, "Azure DevOps CI".
+trigger:
+  batch: true
+  branches:
+    include:
+      - '*'
+
+# Used when the repository is hosted on GitHub or Bitbucket Cloud.
+pr:
+  autoCancel: true
+  branches:
+    include:
+      - '*'
+
+pool:
+  vmImage: windows-2022
+
+jobs:
+  - job: Tests
+    displayName: Python 3.11 tests with Tk GUI
+    timeoutInMinutes: 20
+    steps:
+      - checkout: self
+
+      - task: UsePythonVersion@0
+        displayName: Use Python 3.11
+        inputs:
+          versionSpec: '3.11'
+          architecture: x64
+
+      - script: python -m pip install -r requirements-dev.txt
+        displayName: Install pinned test dependencies
+
+      # Fail explicitly if GUI tests would otherwise skip for lack of Tk/display.
+      - script: python -c "import tkinter as tk; root = tk.Tk(); root.withdraw(); root.update(); root.destroy(); print('Tk GUI available')"
+        displayName: Verify Tk can open a window
+
+      - script: python tools/sync_case_manager_copy.py --check
+        displayName: Check standalone case manager is up to date
+
+      - script: python -m pytest -q -ra --junitxml="$(Agent.TempDirectory)/test-results/pytest.xml"
+        displayName: Run complete pytest suite
+        env:
+          PYTHONUTF8: '1'
+
+      - task: PublishTestResults@2
+        displayName: Publish pytest results
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: JUnit
+          searchFolder: '$(Agent.TempDirectory)/test-results'
+          testResultsFiles: pytest.xml
+          testRunTitle: GridLens - Windows - Python 3.11
+          failTaskOnFailedTests: true
+          failTaskOnMissingResultsFile: true
+          failTaskOnFailureToPublishResults: true
+          publishRunAttachments: true
