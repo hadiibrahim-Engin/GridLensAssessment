@@ -1,6 +1,6 @@
 # Inspect a saved PowerFactory result object
 
-Use [`ui/explore_result_object.py`](../ui/explore_result_object.py) as a
+Use [`powerfactory_tests/inspect_result_data.py`](../powerfactory_tests/inspect_result_data.py) as a
 **separate ComPython script in PowerFactory**. It is standalone and needs only
 Python's standard library and PowerFactory's own Python module. It does not
 import or run GridLens.
@@ -168,7 +168,7 @@ additional `IntVec` object, which this read-only inspector does not create.
 ## Validation
 
 ```sh
-.venv/bin/python -m pytest -q tests/test_result_explorer.py
+.venv/bin/python -m pytest -q tests/test_inspect_result_data.py
 ```
 
 Tests use synthetic PowerFactory objects, covering dense and sparse results,

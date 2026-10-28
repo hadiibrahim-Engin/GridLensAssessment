@@ -23,7 +23,6 @@ Verhalten, das dort noch nicht bestätigt ist.
 Weitere Dokumente (deutsch):
 
 - [FALLMANAGER.md](FALLMANAGER.md) – Bedienung des Dialogs, Konfigurationsdatei, Rückfallwege
-- [BERICHTSMIGRATION.md](BERICHTSMIGRATION.md) – Datenvertrag 5.0 → 6.0 und Vorlagenänderungen
 - [TESTMATRIX.md](TESTMATRIX.md) – V01–V40 und Tests A–E mit Prüfstatus
 - [../superpowers/specs/2026-10-23-n1-settings-design.de.md](../superpowers/specs/2026-10-23-n1-settings-design.de.md) – Entwurf von Teil 1 und 2 (n-1-Vorbereitung, Settings)
 
@@ -102,7 +101,7 @@ den Stand 7.0 und sind historisch.
 | P7 | Schreiben von `IntPlannedout.starttime/endtime` | eigene Termine je Fall | nicht genutzt (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
 | P8 | Schreiben von `ComStatsim.startTime/endTime` und Anfangszustand zeitgekoppelter Modelle | – | nicht genutzt; kürzere QDS-Fenster sind entfernt |
 | P9 | `tkinter` / Tcl/Tk in PowerFactorys Python | Fall-Manager | Probe-Werkzeug vorhanden, Ergebnis in PowerFactory nicht dokumentiert |
-| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` listet zeitgekoppelte Modelle | Zustandskonsistenz für Teil 3 | nicht geprüft; gezählt von `ui/probe_contingency.py` |
+| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` listet zeitgekoppelte Modelle | Zustandskonsistenz für Teil 3 | nicht geprüft; gezählt von `powerfactory_tests/inspect_contingency_interface.py` |
 
 ---
 
@@ -724,23 +723,23 @@ Problemmeldung gehört meist zu einem davon:
 6. Speicher und Laufzeit eines Ganzjahreslaufs mit 10 Fällen.
 
 Eigene Termine je Fall brauchen zuerst eine eigene Probe
-(`ui/probe_planned_outages.py` ist der Ort), dann eine Entscheidung, sie
+(`powerfactory_tests/inspect_planned_outages.py` ist der Ort), dann eine Entscheidung, sie
 freizuschalten. Kürzere QDS-Fenster sind entfernt und nicht vorgesehen.
 
 ---
 
 ## 12. Teil 1 und Teil 2, und was Teil 3 braucht
 
-Teil 1 (freigegeben am 23. Oktober 2026): `ui/probe_contingency.py`, streng
+Teil 1 (freigegeben am 23. Oktober 2026): `powerfactory_tests/inspect_contingency_interface.py`, streng
 lesend (kein `Execute`, `CreateObject`, `SetAttribute`, kein `GetFromStudyCase`,
-das einen fehlenden Befehl anlegt; `tests/test_probe_contingency.py` prüft den
+das einen fehlenden Befehl anlegt; `tests/test_inspect_contingency_interface.py` prüft den
 Quelltext). Probe 1.0 meldete ComSimoutage, ComStatsim, Contingency-Definitionen,
 Contingency-`ElmRes`, die `ElmRes`-Schnittstelle und Ablage-Kandidaten mit
 Namen und Werten. Seit dem 23. Oktober 2026 läuft Probe 2.0 im **strikten
 Privacy-Modus**: nur feste Labels und Status-Tokens, kein Name, Pfad, Wert,
 Zeitpunkt oder Zähler, jeder PowerFactory-Aufruf über ein lesendes Gateway
 (siehe Spezifikation, Abschnitt 2.1). Ihre Ausgabe darf weitergegeben werden;
-die übrigen Werkzeuge sind nur lokal. `ui/test_contingency.py` bereitet eine
+die übrigen Werkzeuge sind nur lokal. `powerfactory_tests/run_contingency_checks.py` bereitet eine
 sehr kleine Testrechnung auf einer ausdrücklich benannten Projektkopie vor; es ist abgeschaltet
 (`ENABLED = False`), fragt vor jedem Schreiben, stellt wieder her und prüft – und
 wird gesondert freigegeben.
@@ -758,7 +757,7 @@ deaktiviert.
 | weiterhin nur gelesen | Parameter der Kategorie B außer den Contingency-Grids, Post-Fault-Spannungsgrenzen, native Ablage der Settings und von `GL_<Szenario>_CLASSIFICATION`, n-1-Berichtskapitel (Teil 4) |
 
 Voraussetzungen für Teil 3 (jede beantwortet durch die Ausgabe der Probe oder
-einen freigegebenen Lauf von `ui/test_contingency.py`):
+einen freigegebenen Lauf von `powerfactory_tests/run_contingency_checks.py`):
 
 1. Time Sweep des ComSimoutage: Attribute und Nachweis, dass er genau die
    ComStatsim-Zeitschritte rechnet (Beginn, Ende, Schritt, letzter Schritt).

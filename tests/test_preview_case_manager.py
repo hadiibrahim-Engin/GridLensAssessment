@@ -11,7 +11,7 @@ import pytest
 
 from _paths import tool as _tool
 
-TOOL, SYNC = _tool("FS_CaseManager_GUI_Test_PowerFactory2026.py"), _tool("sync_case_manager_copy.py")
+TOOL, SYNC = _tool("preview_case_manager.py"), _tool("sync_case_manager_copy.py")
 if TOOL is None or SYNC is None:
     pytest.skip("development tools not in this checkout", allow_module_level=True)
 SPEC = importlib.util.spec_from_file_location("case_manager_gui_test_tool", TOOL)
@@ -173,7 +173,7 @@ def test_a_missing_tkinter_is_reported_as_failure(monkeypatch, capsys):
 def test_the_tool_is_a_separate_script_that_never_loads_gridlens_report(monkeypatch, tmp_path, capsys):
     source = TOOL.read_text(encoding="utf-8")
     assert "importlib" not in source and "GRIDLENS_SCRIPT" not in source
-    copied = tmp_path / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
+    copied = tmp_path / "preview_case_manager.py"
     copied.write_text(source, encoding="utf-8")  # alone in a folder without main.py
     spec = importlib.util.spec_from_file_location("lonely_tool", copied)
     lonely = importlib.util.module_from_spec(spec)

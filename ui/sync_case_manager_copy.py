@@ -1,12 +1,12 @@
 """Copy the case manager of outage-assessment/main.py into the standalone GUI test tool.
 
 Development tool, not part of the delivery. The PowerFactory GUI test
-(ui/FS_CaseManager_GUI_Test_PowerFactory2026.py) is a separate script: it
+(ui/preview_case_manager.py) is a separate script: it
 does not import main.py. It carries a verbatim copy of the case
 manager window and of everything that window needs (reading the planned
 outages, checking a configuration, the preview), so that it shows exactly the
 window GridLens shows. Whoever changes the case manager in main.py
-runs this script; tests/test_case_manager_gui.py fails while the copy is out of
+runs this script; tests/test_preview_case_manager.py fails while the copy is out of
 date.
 
     python3 ui/sync_case_manager_copy.py           # rewrite the copy
@@ -21,7 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "outage-assessment" / "main.py"
-TOOL = ROOT / "ui" / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
+TOOL = ROOT / "ui" / "preview_case_manager.py"
 
 # What the test tool calls; everything these use is copied with them.
 ROOTS = ("run_case_manager", "CaseEditor", "qds_period", "qds_period_text", "qds_time_info",

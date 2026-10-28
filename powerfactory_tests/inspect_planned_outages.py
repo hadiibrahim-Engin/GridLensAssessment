@@ -5,7 +5,7 @@ separate ComPython script anywhere in the active study case and run it once.
 
 PRIVACY: LOCAL USE ONLY. Its purpose needs project data, so its output contains
 project, grid and equipment names, paths and values. Do not pass that output
-on to external developers or AI systems; ui/probe_contingency.py is the
+on to external developers or AI systems; powerfactory_tests/inspect_contingency_interface.py is the
 strict-privacy probe whose output may be shared.
 
 By default the probe only reads. It writes nothing, starts no calculation and
@@ -27,7 +27,7 @@ What the probe answers:
 import time
 
 OUTAGE_CLASSES = ("IntPlannedout", "IntOutage")
-PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use ui/probe_contingency.py (strict privacy)."
+PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use powerfactory_tests/inspect_contingency_interface.py (strict privacy)."
 
 # Attributes worth resolving into referenced objects rather than printing raw.
 REFERENCE_ATTRIBUTES = ("components", "contents", "charact", "recsettings")

@@ -375,7 +375,7 @@ berichtet; andere Fälle bleiben unverändert.
 
 ## In PowerFactory ausprobieren
 
-`ui/FS_CaseManager_GUI_Test_PowerFactory2026.py` ist ein **eigenständiges
+`ui/preview_case_manager.py` ist ein **eigenständiges
 Skript**: Es lädt und importiert `main.py` nicht und wird allein in
 ein ComPython eingefügt. Es trägt eine eigene Kopie des Fallmanagers (Fenster
 und was es braucht: Einlesen der Freischaltungen, Prüfen einer Konfiguration,

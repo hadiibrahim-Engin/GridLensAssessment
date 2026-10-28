@@ -69,6 +69,8 @@ def report_text(name):
 
 
 def tool(name):
-    """A development tool, or None when it is not part of this checkout."""
-    path = ROOT / "ui" / name
-    return path if path.is_file() else None
+    """A PowerFactory test or probe (powerfactory_tests/) or a development tool (ui/); None when not in this checkout."""
+    for folder in (ROOT / "powerfactory_tests", ROOT / "ui"):
+        if (folder / name).is_file():
+            return folder / name
+    return None

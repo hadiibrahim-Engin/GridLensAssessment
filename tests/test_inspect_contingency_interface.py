@@ -17,8 +17,8 @@ import pytest
 
 from _paths import tool
 
-PROBE = tool("probe_contingency.py")
-TEST_RUN = tool("test_contingency.py")
+PROBE = tool("inspect_contingency_interface.py")
+TEST_RUN = tool("run_contingency_checks.py")
 if PROBE is None:
     pytest.skip("development tool not in this checkout", allow_module_level=True)
 
@@ -339,7 +339,7 @@ def test_static_only_the_report_prints():
 
 @pytest.mark.skipif(TEST_RUN is None, reason="development tool not in this checkout")
 def test_prepared_test_run_is_disabled_by_default():
-    """The full behaviour of the test run is covered by tests/test_contingency_run.py."""
+    """The full behaviour of the test run is covered by tests/test_run_contingency_checks.py."""
     run_tool = _load("test_contingency_tool", TEST_RUN)
 
     assert run_tool.ENABLED is False and run_tool.PROJECT_COPY_NAME == ""

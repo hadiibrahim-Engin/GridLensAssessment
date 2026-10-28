@@ -175,7 +175,7 @@ Reihen, REF und fünf Fällen sind rund 24 Millionen Aufrufe; heute schreibt
 GridLens einige tausend Ergebniszellen.
 
 Ob das tragbar ist, hängt davon ab, wie schnell `SetValue` in PowerFactory ist;
-das ist nicht gemessen. `ui/probe_report_write.py` misst es: Es läuft unter
+das ist nicht gemessen. `powerfactory_tests/benchmark_report_writes.py` misst es: Es läuft unter
 einem **eigenen** IntReport, dessen Name „probe“ enthält (sein `Reset()` leert
 diesen Bericht), schreibt Zahlen, Ganzzahlen und Texte in wachsenden Stufen und
 eine schmale Langformat-Tabelle und gibt Zellen je Sekunde und Schätzungen für

@@ -5,7 +5,7 @@ nothing is calculated, written or published.
 
 PRIVACY: LOCAL USE ONLY. Its purpose needs project data, so its output contains
 project, grid and equipment names, paths and values. Do not pass that output
-on to external developers or AI systems; ui/probe_contingency.py is the
+on to external developers or AI systems; powerfactory_tests/inspect_contingency_interface.py is the
 strict-privacy probe whose output may be shared.
 
 Create a ComPython for this file anywhere in the active study case and run it
@@ -41,11 +41,11 @@ def emit(app, message=""):
     print(message, flush=True)
 
 
-PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use ui/probe_contingency.py (strict privacy)."
+PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use powerfactory_tests/inspect_contingency_interface.py (strict privacy)."
 
 
 # --- The grid filter, kept identical to main.py ------------------
-# tests/test_probe_grid_filter.py fails if the two ever behave differently.
+# tests/test_inspect_network_scope.py fails if the two ever behave differently.
 
 GRID_NAME_FILTER = ''  # type a grid name part here to preview what it would select
 # Grids as chosen in the case manager (Settings -> Network scope); they take precedence over GRID_NAME_FILTER.

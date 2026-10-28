@@ -27,7 +27,7 @@ Privacy by design (strict allowlist):
   command).
 
 A question that cannot be answered without reading project data is reported as
-NOT_VERIFIED_PRIVACY_RESTRICTION. tests/test_probe_contingency.py checks these
+NOT_VERIFIED_PRIVACY_RESTRICTION. tests/test_inspect_contingency_interface.py checks these
 rules with artificial objects; that is no guarantee for an unknown real project
 (see docs/superpowers/specs/2026-10-23-n1-settings-design.md, section 2.1).
 """

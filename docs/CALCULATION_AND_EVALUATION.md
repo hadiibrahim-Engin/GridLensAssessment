@@ -170,7 +170,7 @@ call per cell. One year hourly with 450 series, REF and five cases are about
 24 million calls; today GridLens writes a few thousand result cells.
 
 Whether that is acceptable depends on how fast `SetValue` is in PowerFactory,
-which has not been measured. `ui/probe_report_write.py` measures it: it runs
+which has not been measured. `powerfactory_tests/benchmark_report_writes.py` measures it: it runs
 below a **separate** IntReport whose name contains "probe" (its `Reset()`
 clears that report), writes numbers, integers and texts in growing stages and a
 narrow long-format table, and prints cells per second and estimates for the

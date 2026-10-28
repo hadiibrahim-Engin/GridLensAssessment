@@ -362,7 +362,7 @@ reported; other cases are unaffected.
 
 ## Trying it in PowerFactory
 
-`ui/FS_CaseManager_GUI_Test_PowerFactory2026.py` is a **separate script**:
+`ui/preview_case_manager.py` is a **separate script**:
 it does not load or import `main.py`. Paste it alone into a
 ComPython. It carries its own copy of the case manager (the window and what it
 needs: reading the planned outages, checking a configuration, the preview), so

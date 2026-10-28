@@ -10,12 +10,20 @@ GUI tests need an interactive desktop. PowerFactory itself is not required.
 .EXAMPLE
 .\run_tests.ps1 -PyQtOnly
 .EXAMPLE
+.\run_tests.ps1 -NoGui
+.EXAMPLE
+.\run_tests.ps1 -GuiOnly
+.EXAMPLE
 .\run_tests.ps1 -PytestArgs @('-k', 'n1', '--maxfail=1')
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
     [switch]$PyQtOnly,
+    [switch]$NoGui,
+    [switch]$GuiOnly,
+    [ValidateRange(1, 3600)]
+    [int]$GuiTimeoutSeconds = 60,
     [string[]]$PytestArgs = @()
 )
 
@@ -28,6 +36,9 @@ if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
 $exitCode = 1
 $locationChanged = $false
 try {
+    if (([int]$PyQtOnly.IsPresent + [int]$NoGui.IsPresent + [int]$GuiOnly.IsPresent) -gt 1) {
+        throw 'Use only one of -PyQtOnly, -NoGui or -GuiOnly.'
+    }
     $venvDirectory = Join-Path (Split-Path -Parent $PSScriptRoot) '.venv'
     $testPython = Join-Path $venvDirectory 'Scripts/python.exe'
     if (-not (Test-Path -LiteralPath $testPython -PathType Leaf)) {
@@ -50,9 +61,15 @@ try {
 
     Push-Location -LiteralPath $PSScriptRoot
     $locationChanged = $true
-    $testArguments = @('-m', 'pytest', '-q')
+    $testArguments = @('-m', 'pytest', '-q', "--gui-timeout=$GuiTimeoutSeconds")
+    if ($GuiOnly) {
+        $testArguments = @('-m', 'pytest', '-vv', '--require-gui', '-m', 'gui and not optional_qt', "--gui-timeout=$GuiTimeoutSeconds")
+    }
+    if ($NoGui) {
+        $testArguments += @('-m', 'not gui')
+    }
     if ($PyQtOnly) {
-        $testArguments += 'tests/test_pyqt_tool.py'
+        $testArguments += 'tests/test_preview_pyqt_dialog.py'
     }
     $testArguments += $PytestArgs
     & $testPython @testArguments

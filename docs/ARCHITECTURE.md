@@ -22,7 +22,6 @@ reported and fixed. Section 11 lists the behaviour not confirmed there yet.
 Related documents:
 
 - [CASE_MANAGER.md](CASE_MANAGER.md) – operating the dialog, configuration file, fallbacks
-- [REPORT_MIGRATION.md](REPORT_MIGRATION.md) – data contract 5.0 → 6.0 and template changes
 - [TEST_MATRIX.md](TEST_MATRIX.md) – V01–V40 and tests A–E with their verification status
 - [superpowers/specs/2026-10-23-n1-settings-design.md](superpowers/specs/2026-10-23-n1-settings-design.md) – design of parts 1 and 2 (n-1 preparation, settings)
 - German version: [de/ARCHITEKTUR.md](de/ARCHITEKTUR.md) and the other files in [de/](de/)
@@ -97,8 +96,8 @@ design and are historical.
 | P6 | `AddCopy` of the `ElmRes` a QDS wrote into, made after the run; renaming | result objects per case | probed 24 Oct 2026: the copy keeps rows, columns, values and IntMon, also after the next QDS run |
 | P7 | writing `IntPlannedout.starttime/endtime` | own dates per case | not used (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
 | P8 | writing `ComStatsim.startTime/endTime` and initial state of time-coupled models | – | not used; shorter QDS windows were removed |
-| P9 | `tkinter` / Tcl/Tk inside PowerFactory's Python | case manager | tested only with `ui/FS_CaseManager_GUI_Test_PowerFactory2026.py` design; result not recorded |
-| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` lists time-coupled models | state consistency for part 3 | not verified; counted by `ui/probe_contingency.py` |
+| P9 | `tkinter` / Tcl/Tk inside PowerFactory's Python | case manager | tested only with `ui/preview_case_manager.py` design; result not recorded |
+| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` lists time-coupled models | state consistency for part 3 | not verified; counted by `powerfactory_tests/inspect_contingency_interface.py` |
 
 ---
 
@@ -697,7 +696,7 @@ problem report usually belongs to one of them:
 5. The report renders: one page per chapter, the n-1 chapters 15 and 16 and the TOC with 21 entries (locally rendered with Stimulsoft 2025.3.5, 26 Oct 2026; not yet in PowerFactory).
 6. Memory and run time of a full-year run with 10 cases.
 
-Own dates per case need their own probe first (`ui/probe_planned_outages.py`
+Own dates per case need their own probe first (`powerfactory_tests/inspect_planned_outages.py`
 is the place), then a decision to enable them. Shorter QDS windows are removed
 and not planned.
 
@@ -705,16 +704,16 @@ and not planned.
 
 ## 12. Part 1 and part 2, and what part 3 needs
 
-Part 1 (released 23 October 2026): `ui/probe_contingency.py`, strictly read
+Part 1 (released 23 October 2026): `powerfactory_tests/inspect_contingency_interface.py`, strictly read
 only (no `Execute`, `CreateObject`, `SetAttribute`, no `GetFromStudyCase`, which
-creates a missing command; `tests/test_probe_contingency.py` checks the source).
+creates a missing command; `tests/test_inspect_contingency_interface.py` checks the source).
 Probe 1.0 reported ComSimoutage, ComStatsim, contingency definitions,
 contingency `ElmRes`, the `ElmRes` interface and storage candidates with names
 and values. Since 23 October 2026 probe 2.0 runs in **strict privacy mode**:
 fixed labels and status tokens only, no name, path, value, study time or count,
 every PowerFactory call through a read-only gateway (see the spec,
 section 2.1). Its output may be shared; the other tools are local only.
-`ui/test_contingency.py` prepares a very small test calculation on an
+`powerfactory_tests/run_contingency_checks.py` prepares a very small test calculation on an
 explicitly named project copy; it is disabled (`ENABLED = False`), asks before
 every write, restores and verifies – and its release is separate.
 
@@ -731,7 +730,7 @@ disabled.
 | still read only | category-B parameters other than the contingency grids, post-fault voltage limits, native storage of settings and of `GL_<scenario>_CLASSIFICATION`, n-1 report chapters (part 4) |
 
 Prerequisites of part 3 (each answered by the probe output or by an approved
-run of `ui/test_contingency.py`):
+run of `powerfactory_tests/run_contingency_checks.py`):
 
 1. ComSimoutage time sweep: attributes, and proof that it computes exactly the
    ComStatsim time steps (start, end, step, last step).

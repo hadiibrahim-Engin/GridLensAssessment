@@ -8,7 +8,7 @@ import pytest
 
 from _paths import tool
 
-PROBE = tool("probe_report_write.py")
+PROBE = tool("benchmark_report_writes.py")
 if PROBE is None:
     pytest.skip("development tool not in this checkout", allow_module_level=True)
 

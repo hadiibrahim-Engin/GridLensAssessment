@@ -1,18 +1,9 @@
-# Python 3.11 development and CI toolchain; the PowerFactory runtime itself needs none.
-# Source of truth for direct and transitive versions. CI installs the generated
-# ci/requirements.lock with --require-hashes and checks it against this group.
+# Test tools only; the PowerFactory runtime needs none. Install with
+# `python -m pip install --group dev` (pip 25.1 or newer). Versions stay open on purpose.
 [dependency-groups]
 dev = [
-    "pip==26.2.2",
-    "pytest==9.1.1",
-    "pytest-cov==7.1.0",
-    "coverage==7.17.0",
-    "ruff==0.17.3",
-    "iniconfig==2.3.0",
-    "packaging==26.3",
-    "pluggy==1.6.0",
-    "Pygments==2.21.0",
-    "colorama==0.4.6; sys_platform == 'win32'",
+    "pytest>=9",
+    "ruff>=0.17",
 ]
 
 [tool.pytest.ini_options]
@@ -29,12 +20,3 @@ target-version = "py311"
 [tool.ruff.lint]
 # Start with correctness checks; avoid a repository-wide formatting migration.
 select = ["E9", "F63", "F7", "F82"]
-
-[tool.coverage.run]
-branch = true
-source = ["outage-assessment"]
-relative_files = true
-
-[tool.coverage.report]
-show_missing = false
-precision = 2

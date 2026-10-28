@@ -9,7 +9,7 @@ import pytest
 
 from _paths import tool
 
-TOOL = tool("test_contingency.py")
+TOOL = tool("run_contingency_checks.py")
 if TOOL is None:
     pytest.skip("development tool not in this checkout", allow_module_level=True)
 

@@ -4854,7 +4854,7 @@ def starting_configuration(app, scratch):
     return empty_case_config(project_key), copy, "empty configuration"
 
 
-PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use ui/probe_contingency.py (strict privacy)."
+PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use powerfactory_tests/inspect_contingency_interface.py (strict privacy)."
 
 
 def run(app):

@@ -9,7 +9,7 @@ import pytest
 
 from _paths import delivered, tool
 
-PROBE = tool("probe_grid_filter.py")
+PROBE = tool("inspect_network_scope.py")
 if PROBE is None:
     pytest.skip("development tool not in this checkout", allow_module_level=True)
 
