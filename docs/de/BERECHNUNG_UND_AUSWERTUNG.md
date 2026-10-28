@@ -1,8 +1,8 @@
 # GridLens – Berechnung und Auswertung, und wie GridLens Zeit spart
 
-Wie GridLens 8.0 rechnet und auswertet, welche Stunden jeder Schritt abdeckt,
+Wie GridLens rechnet und auswertet, welche Stunden jeder Schritt abdeckt,
 wo die Filter wirken und jede Maßnahme, die Rechen- oder Auswertezeit spart.
-Stand: 25. Oktober 2026. Englische Fassung:
+Englische Fassung:
 [`docs/CALCULATION_AND_EVALUATION.md`](../CALCULATION_AND_EVALUATION.md);
 beide werden gemeinsam gepflegt. Wie GridLens mit PowerFactory arbeitet,
 beschreibt [`POWERFACTORY.md`](POWERFACTORY.md).

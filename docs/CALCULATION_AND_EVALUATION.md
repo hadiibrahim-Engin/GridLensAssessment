@@ -1,8 +1,8 @@
 # GridLens – calculation and evaluation, and how GridLens saves time
 
-How GridLens 8.0 calculates and evaluates, which hours each step covers, where
+How GridLens calculates and evaluates, which hours each step covers, where
 the filters act, and every measure that saves calculation or evaluation time.
-As of 25 October 2026. German version:
+German version:
 [`docs/de/BERECHNUNG_UND_AUSWERTUNG.md`](de/BERECHNUNG_UND_AUSWERTUNG.md); both
 are maintained together. How GridLens talks to PowerFactory is described in
 [`POWERFACTORY.md`](POWERFACTORY.md).

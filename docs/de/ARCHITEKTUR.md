@@ -1,321 +1,334 @@
-# GridLens 8.0 – Planungsfall-Manager: Architektur und Methodik
+# GridLens – wie das Werkzeug arbeitet
 
-Historischer Entwurfsstand. Aktueller Lieferumfang, Versionen und
-Betriebsanleitung für 8.0.1 stehen in der [README](../../README.md).
+GridLens ist ein ComPython für DIgSILENT PowerFactory 2026. Es bewertet
+**Planungsfälle**, die der Ingenieur festlegt – Mengen von Planned Outages
+(`IntPlannedout`) –, mit der quasi-dynamischen Simulation (QDS) und auf Wunsch
+mit der Contingency Analysis (n-1). Jeder Fall wird **zum selben Zeitschritt**
+mit einer Referenz verglichen; die Ergebnisse werden als Tabellen an einen
+PowerFactory-Bericht (`IntReport`) übergeben und als Haupt- und Detailbericht
+gerendert.
 
-Stand: 23. Oktober 2026 · Publisher 8.0.0 · MRT 6.2.0 · Datenvertrag 6.2 (n-1-Kapitel; Namen ohne Ziffern; eine Vorlagenseite je Kapitel) · Settings 1.0 · Klassifizierungsregeln 1.0
+Das Ergebnis ist eine technische **Vorprüfung**. Es ist keine Freigabe einer
+Außerbetriebnahme und kein Nachweis für n-1-Sicherheit, Versorgungssicherheit,
+Schutzkoordination oder sichere elektrische Trennung.
 
-GridLens 8 erweitert die Einzel-Vorprüfung von 7.x zu einer Bewertung **vom
-Ingenieur definierter Planungsfälle**. Ein Planungsfall ist eine beliebige
-Menge von Freischaltungs-Vorkommen (FS); PowerFactory wendet jede in ihrem
-eigenen Zeitfenster während einer quasi-dynamischen Simulation (QDS) an. Ein
-Fall durchläuft dadurch mehrere Netzzustände. Jeder Fall wird **zum selben
-Zeitschritt** mit einer Referenz verglichen. LODF ist vollständig entfernt.
+Aktuelle Versionen: Skript `8.0.1` (`PUBLISHER_VERSION`), Berichtsseiten
+`7.0.0` (`TEMPLATE_VERSION`), Datenvertrag `7.0` mit 38 Tabellen
+(`DATA_CONTRACT_VERSION`), Einstellungen `1.0`, Klassifikationsregeln `1.0`.
 
-Alles, was GridLens in PowerFactory tut (Objekte, Schalter, Planned Outages,
-QDS, Contingency Analysis, Falldefinition, geprüftes und offenes
-API-Verhalten), beschreibt [`POWERFACTORY.md`](POWERFACTORY.md).
+Weitere Dokumente:
 
-`main.py` wird geprüft, indem es in PowerFactory eingesetzt wird; dort
-gefundene Probleme werden gemeldet und behoben. Abschnitt 11 nennt das
-Verhalten, das dort noch nicht bestätigt ist.
-
-Weitere Dokumente (deutsch):
-
-- [FALLMANAGER.md](FALLMANAGER.md) – Bedienung des Dialogs, Konfigurationsdatei, Rückfallwege
-- [TESTMATRIX.md](TESTMATRIX.md) – V01–V40 und Tests A–E mit Prüfstatus
-- [../superpowers/specs/2026-10-23-n1-settings-design.de.md](../superpowers/specs/2026-10-23-n1-settings-design.de.md) – Entwurf von Teil 1 und 2 (n-1-Vorbereitung, Settings)
-
-Englische Fassung: [../ARCHITECTURE.md](../ARCHITECTURE.md). Code, Logs und
-Berichtstexte bleiben englisch; die Begriffe in Klammern sind die Namen im Code
-bzw. im Bericht.
+- [FALLMANAGER.md](FALLMANAGER.md) – Bedienung des Fallmanager-Fensters
+- [BERECHNUNG_UND_AUSWERTUNG.md](BERECHNUNG_UND_AUSWERTUNG.md) – Formeln und Regeln der Bewertung im Detail
+- [POWERFACTORY.md](POWERFACTORY.md) – jedes PowerFactory-Objekt und -Attribut, das GridLens liest oder schreibt
+- [BERICHTSTABELLEN.md](BERICHTSTABELLEN.md) – die 38 Berichtstabellen und ihre Felder
+- Englische Fassung: [../ARCHITECTURE.md](../ARCHITECTURE.md)
 
 ---
 
-## 1. Der zentrale Wechsel
+## 1. Bestandteile der Auslieferung
 
-| | GridLens 7.x | GridLens 8.0 |
-|---|---|---|
-| Fall | eine Freischaltung = ein automatischer Fall | ein vom Ingenieur definierter Planungsfall = beliebig viele FS-Vorkommen |
-| Kombination | FS1 + FS2 nie gemeinsam gerechnet | gemeinsam gerechnet, wenn sie im selben Fall stehen |
-| Aktive Menge über die Zeit | eine FS, ein Fenster | Folge von Netzzuständen (elementare Intervalle) |
-| Vergleich | Fall-Maximum − REF-Maximum im Fenster | Fall(t) − REF(t) in jedem Zeitschritt, danach aggregiert |
-| Referenz | immer „ohne Freischaltung“ | R0 (keine) oder Rfix (feste Hintergrund-Freischaltungen) |
-| Leitungsranking | LODF aus `ComVstab` | entfernt; nur echte QDS-Lastflüsse |
-| Ergebnisobjekte | temporäres `ElmRes`, nach dem Auslesen gelöscht | ein `ElmRes` je Fall, bleibt im Study Case |
-| QDS-Zeitraum | gesamter `ComStatsim`-Zeitraum | gesamter Zeitraum mit dem ComStatsim-Zeitschritt; keinerlei Zeitoptimierung (mit Teil 2 entfernt: keine vorgeschlagenen Fenster, kein `QDS_WINDOW_MODE`) |
+| Teil | Inhalt |
+|---|---|
+| `outage-assessment/main.py` | das vollständige Werkzeug mit dem Fallmanager in tkinter (Standardbibliothek) |
+| `outage-assessment/main_qt.py` | dasselbe Werkzeug mit dem Fallmanager in PyQt6 oder PyQt5; alles andere ist identisch |
+| `designer-pages/MASTER_GRIDLENS/` | Hauptbericht: ein `.dct`-Dictionary und eine `.pg`-Datei je Seite |
+| `designer-pages/MASTER_GRIDLENS_DETAIL/` | Detailbericht, gleicher Aufbau |
 
----
-
-## 2. Ist–Soll-Analyse (Lieferteil A)
-
-### 2.1 Was 7.x konnte und bleibt
-
-| Bereich | Funktion(en) | 8.0 |
-|---|---|---|
-| Kontext, Einstellungsprotokoll | `execute_gridlens` (Schritte 1–2), `_log_qds_settings` | unverändert |
-| Erkennung der Freischaltungen | `_find_project_outages`, `_outage_details`, `outage_window` | unverändert; jeder Datensatz trägt jetzt den stabilen Schlüssel (voller Pfad) und alle Komponenten-Schlüssel |
-| Klassifikation | `classify_planned_outages` | unverändert; dient nur noch dem Modus „je Freischaltung ein Fall“ und dem Dialog |
-| QDS-Ausführung | `_run_calculation` | gleicher Aufruf; das Ergebnisobjekt bleibt erhalten und trägt den Fallnamen |
-| Ergebnisauslese | `collect_series` | behält die Werte in voller Auflösung; eindeutige Zeitlabels auch bei Zeitumstellung |
-| Zustandsschutz | `StateGuard`, `_restore_study_time`, `_restore_planned_outage_option`, `_restore_results_binding` | unverändert, für jeden Fall verwendet |
-| Tabellen über den Gesamtzeitraum | `apply_reference`, Kreise, Radar, Zählungen, Top 10, Zeitplots, Anhänge | unverändert (als Differenz der Maxima dokumentiert) |
-| Publikation | `validate_payload`, `publish_report` | unverändert |
-
-### 2.2 Erweitert oder ersetzt
-
-| 7.x | 8.0 | Grund |
-|---|---|---|
-| `_isolate_outage(guard, active, records)` | `_isolate_outages(guard, active_keys, records, label)` | eine Menge statt einer FS |
-| `_run_outage_case` | `_run_planning_case` + `_reused_result` | Mehrfach-FS-Fälle, Wiederverwendung identischer Fälle |
-| Referenzblock in `execute_gridlens` | `_run_reference` | R0 mit `iopt_maint=0`, Rfix mit `iopt_maint=1` und nur den festen FS |
-| `window_bounds` (Ende inklusive, `bisect_right`) | `window_rows` (halboffen `[Beginn, Ende)`, `bisect_left`) | einheitliche Intervallkonvention |
-| `window_statistics` je FS-Index | `compare_case` / `compare_element` | zeitgleicher Vergleich, Dauern, Abdeckung, Spill-over |
-| `paired(..., windowed=True)` | liefert die zeitgleichen Datensätze | alle fallbezogenen Tabellen nutzen den zeitgleichen Vergleich |
-| `limit_status` (5 Zustände) | `step_status` je Zeitschritt + Rangfolge; neu IMPROVED, DE-ENERGISED, OUT OF SERVICE | Vorgabe Abschnitt 20 |
-| `assess_case` | neue Urteile DE-ENERGISED NODES und INCOMPLETE COVERAGE | keine positive Aussage aus fehlenden Daten |
-| `_case_rows` (Zeile je FS) | Zeile je Planungsfall + übersprungene FS | Vorgabe Abschnitt 39 |
-| `_temporary_result` + `_delete_temporary_results` | `_case_result_object` + `ResultStore` | Ergebnisobjekte bleiben in PowerFactory |
-
-### 2.3 Entfernt (LODF)
-
-`CALCULATE_LODF`, alle `LODF_*`-Konstanten, `LodfError`, `_contents`,
-`_lodf_create`, `contingency_keys`, `_prepare_lodf`, `_lodf_result`,
-`_read_lodf_matrix`, `_execute_lodf`, `_clean_up_lodf`, `calculate_lodf`,
-`_lodf_ranking`, `_lodf_text`, die LODF-Qualitätsprüfung, jede Verwendung von
-`ComVstab` / `ComSimoutage` / `ComOutage`, Tabelle `ScriptedLodfRanking`, Feld
-`lodf_text`, Kapitel 12 der Vorlage. Tests stellen sicher, dass weder Skript
-noch Vorlage LODF erwähnen. Die Dokumente unter `docs/superpowers/` beschreiben
-den Stand 7.0 und sind historisch.
-
-### 2.4 Zu prüfende PowerFactory-API-Annahmen
-
-| # | Annahme | Wofür | Stand |
-|---|---|---|---|
-| P1 | `iopt_maint=1` wendet jede `IntPlannedout` mit `outserv=0` in ihrem Fenster an | jeder Fall | im Feld für eine FS bestätigt (28.09.2026) |
-| P2 | `outserv=1` an einer `IntPlannedout` schließt sie bei `iopt_maint=1` aus | Isolation der Fallmenge | nicht geprüft |
-| P3 | mehrere aktive FS wirken gleichzeitig und enden je an ihrem eigenen Ende | Mehrfach-FS-Fälle, T01–T13 | nicht geprüft |
-| P4 | zwei FS auf demselben Betriebsmittel: Verhalten, wenn die erste endet | V13 | unbekannt; sich überlappende FS sind normale Planung und keine Warnung |
-| P5 | `ElmRes`-Zeitstempel und Fenstergrenzen (02:00-Effekt im Test vom 29.09.) | halboffene Fenster | offen; die Spill-over-Prüfung erkennt und bewertet solche Effekte |
-| P6 | `AddCopy` des `ElmRes`, in das eine QDS schrieb, nach dem Lauf; Umbenennen | Ergebnisobjekt je Fall | geprüft am 24.10.2026: die Kopie behält Zeilen, Spalten, Werte und IntMon, auch nach dem nächsten QDS-Lauf |
-| P7 | Schreiben von `IntPlannedout.starttime/endtime` | eigene Termine je Fall | nicht genutzt (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
-| P8 | Schreiben von `ComStatsim.startTime/endTime` und Anfangszustand zeitgekoppelter Modelle | – | nicht genutzt; kürzere QDS-Fenster sind entfernt |
-| P9 | `tkinter` / Tcl/Tk in PowerFactorys Python | Fall-Manager | Probe-Werkzeug vorhanden, Ergebnis in PowerFactory nicht dokumentiert |
-| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` listet zeitgekoppelte Modelle | Zustandskonsistenz für Teil 3 | nicht geprüft; gezählt von `powerfactory_tests/inspect_contingency_interface.py` |
-
----
-
-## 3. Änderungs- und Risikomatrix
-
-| Änderung | Risiko | Gegenmaßnahme | Restrisiko |
-|---|---|---|---|
-| Mehrere FS in einer QDS | P2/P3 falsch → ein Fall enthält mehr oder weniger FS als angezeigt | Log und Nachweistabelle nennen je Lauf aktive und ignorierte FS; jedes `outserv` wird zurückgesetzt und zurückgelesen | PF-Test V02/V03 nötig |
-| Zeitgleicher Vergleich | Speicher: volle Reihen je Element | `array('d')` (8 Byte je Wert) nur für die Referenz dauerhaft; Fallreihen nach dem Vergleich freigegeben; Budget vor jedem Lauf geprüft | sehr große Modelle erreichen `MAX_RUN_CELLS` |
-| Spill-over-Bewertung | numerisches Rauschen außerhalb der Fenster als Wirkung gezählt | Toleranz 0,1 pp / 0,001 p.u.; zuerst exakter Array-Vergleich | keines bekannt |
-| Ergebnisobjekte bleiben | Study Case wächst je Lauf und Fall um ein `ElmRes` | Namen `GridLens_<yymmdd-HHMMSS>_<Fall>`; im Bericht aufgeführt | Speicherbedarf bei Jahresläufen; alte Läufe löscht der Ingenieur |
-| Fall-Manager in PowerFactory | Tk startet nicht oder blockiert | Dialog vor jeder Zustandsänderung; Fehler → gespeicherte Konfiguration → je FS ein Fall; Abbrechen ändert nichts | Tk-Verhalten in PF ungeprüft (P9) |
-| Konfiguration außerhalb des Projekts | Datei verloren oder von Hand verändert | Schema, Version und alle Feldtypen werden geprüft; beschädigte Datei stoppt den Lauf mit Pfad | nicht mit dem Projekt versioniert |
-| Eigene Termine je Fall | Überschreiben des Originals | in 8.0 nicht angewendet; Fall NOT EVALUATED | keines |
-| Settings (Teil 2) | ein Override ändert die n-0-Bewertung unbemerkt | Overrides werden geprüft und in Log und Bericht genannt (Zeile *Settings*, WARNING); Standards reproduzieren den bisherigen Bericht exakt | vorläufig außerhalb des Projekts gespeichert |
-| LODF entfernt | Ranking fehlt | Ranking nach zeitgleichem Delta in Metric View, Zeitplot und Übersicht | keines |
-
----
-
-## 4. Logischer Aufbau
-
-Eine Datei `outage-assessment/main.py`, in Abschnitte gegliedert:
+Das Skript braucht nur die Python-Standardbibliothek, das PowerFactory-Modul
+und für den Fallmanager tkinter (bzw. PyQt bei `main_qt.py`). Es importiert
+keine andere Datei des Repositorys.
 
 ```mermaid
 flowchart LR
     subgraph PF["PowerFactory 2026"]
-        OL[("Outage Library<br/>IntPlannedout")]
+        OL[("IntPlannedout<br/>Outage-Bibliothek")]
         QDS["ComStatsim"]
-        RES[("ElmRes je Fall")]
-        REP["IntReport-Tabellen"]
+        CA["ComSimoutage<br/>(n-1)"]
+        RES[("ElmRes-Kopien<br/>GridLens_&lt;stamp&gt;_&lt;Fall&gt;")]
+        REP["IntReport<br/>Scripted…-Tabellen"]
     end
     subgraph GL["main.py"]
-        AD["PowerFactory-Adapter<br/>_find_project_outages, _run_calculation,<br/>_isolate_outages, StateGuard"]
-        CM["Fallverwaltung<br/>resolve_request, validate_case_config,<br/>load/save_case_config"]
-        GUI["GUI-Adapter (nur Konfiguration, keine Ergebnisse)<br/>run_case_manager, CaseManagerDialog: drei Bereiche (tkinter)<br/>CaseEditor (Logik, ohne Fenster)"]
-        TP["Zeit- und Zustandsplaner<br/>network_states, interval_relation,<br/>calculation_windows"]
-        OR["Berechnungssteuerung<br/>execute_gridlens, _run_reference,<br/>_run_planning_case, _reused_result"]
-        AE["Bewertung<br/>compare_case, step_status,<br/>assess_case"]
-        RA["Berichtsadapter<br/>build_cases_payload, publish_report"]
+        IN["Outages, Netze,<br/>Fehlerfälle lesen"]
+        CM["Fallmanager<br/>(Fenster oder Datei)"]
+        RQ["Fälle auflösen:<br/>Fenster, Zustände, Regeln"]
+        P1["Phase 1: rechnen<br/>REF, Fälle, n-1"]
+        P2["Phase 2: erhaltene Ergebnisse<br/>lesen und vergleichen"]
+        RP["38 Tabellen bauen,<br/>prüfen, veröffentlichen"]
     end
-    CFG[("Gespeicherte Konfiguration<br/>~/GridLens/cases/*.json")]
-    OL --> AD --> CM
-    GUI <--> CM
+    CFG[("~/GridLens/cases/*.json")]
+    OL --> IN --> CM --> RQ --> P1
     CFG <--> CM
-    CM --> TP --> OR
-    OR --> AD
-    AD --> QDS --> RES --> AD
-    OR --> AE --> RA --> REP
+    P1 --> QDS --> RES
+    P1 --> CA --> RES
+    RES --> P2 --> RP --> REP
 ```
 
 ---
 
-## 5. Ablauf eines Laufs
+## 2. Was PowerFactory bereitstellen muss
+
+| Voraussetzung | Wozu | Fehlt sie |
+|---|---|---|
+| ein aktiver Study Case | alles wird darin gelesen und geschrieben | der Lauf stoppt vor jeder Änderung |
+| genau der ComStatsim des Study Case, konfiguriert (Zeitraum, Zeitschritt, Lastprofile, Berechnungsoptionen) | GridLens rechnet ihn für jeden Fall unverändert | der Lauf stoppt |
+| `ComStatsim.results` auf ein Ergebnisobjekt gebunden, das **keine** `GridLens_…`-Kopie ist | die QDS schreibt hinein; eine erhaltene Kopie würde überschrieben | der Lauf stoppt mit dem gebundenen Namen |
+| die Option *Planned Outages* (`iopt_maint`) am ComStatsim | der einzige Schalter, mit dem PowerFactory Planned Outages anwendet | der Lauf stoppt |
+| aufgezeichnete Variablen: `c:loading` oder `m:loading` von Leitungen (`ElmLne`) und Transformatoren (`ElmTr2`, `ElmTr3`), `m:u` oder `m:u1` von Knoten (`ElmTerm`) | die bewerteten Größen | der Lauf stoppt direkt nach dem ersten QDS-Lauf und nennt, was stattdessen aufgezeichnet ist |
+| Planned Outages als `IntPlannedout` in der Outage-Bibliothek (sonst irgendwo im Projekt) | der Stoff der Planungsfälle | ohne sie kann nur die Referenz gerechnet werden |
+| das ComPython unterhalb des `IntReport` | nötig, um die Tabellen zu veröffentlichen | der Lauf rechnet und prüft alles, veröffentlicht aber nichts (eigenständiger Lauf) |
+| für n-1: höchstens ein `ComSimoutage` im Study Case | GridLens verwendet ihn; ohne legt es einen eigenen an | bei mehreren wird n-1 mit Grund nicht bewertet |
+
+---
+
+## 3. Ablauf eines Laufs
+
+Das Ausgabefenster zeigt den Lauf in sieben Schritten (`STEP n/7`). Zu jedem
+Schritt steht unten, was gelesen und geändert wird und wann der Lauf stoppt.
 
 ```mermaid
 flowchart TD
-    S1["1 Start: Skript, Study Case, IntReport, ComStatsim, ElmRes, iopt_maint, SetTime"] --> S2["2 ComStatsim-Einstellungen protokollieren"]
-    S2 --> S3["3 Freischaltungen lesen (nur lesend)<br/>gegen den simulierten Zeitraum einordnen<br/>Vorkommen zu technischen FS gruppieren"]
+    S1["1 Start und Kontext"] --> S2["2 ComStatsim-Einstellungen (Log)"]
+    S2 --> S3["3 Planned Outages und Planungsfälle"]
     S3 --> SRC{"CASE_SOURCE"}
-    SRC -- per_outage --> PO["je FS im Zeitraum ein Fall"]
-    SRC -- saved --> SV["gespeicherte Konfiguration laden"]
-    SRC -- gui --> G["Fall-Manager öffnen"]
-    G -- Abbrechen --> X(["Ende: nichts gerechnet, nichts geändert"])
-    G -- "Tk nicht verfügbar<br/>oder Dialog nicht aufbaubar" --> FB{"gespeicherte Konfiguration?"}
+    SRC -- gui --> G["Fallmanager-Fenster"]
+    SRC -- saved --> SV["gespeicherte Konfiguration"]
+    SRC -- per_outage --> PO["je Außerbetriebnahme ein Fall"]
+    G -- Abbrechen --> X(["Stopp: nichts gerechnet,<br/>nichts geändert"])
+    G -- "Fenster öffnet nicht" --> FB{"gespeicherte Konfiguration?"}
     FB -- ja --> SV
     FB -- nein --> PO
-    G -- OK --> RQ
+    G -- "Start calculation" --> RQ
     SV --> RQ
-    PO --> RQ["resolve_request: Mitglieder, Fenster, Regeln,<br/>Netzzustände, Konflikte, Fingerabdrücke"]
-    RQ --> S4["4 Referenzlauf<br/>R0: iopt_maint=0 · Rfix: iopt_maint=1 + feste FS"]
-    S4 --> LOOP{"nächster Fall READY"}
-    LOOP -- "gleicher Fingerabdruck wie ein gerechneter Fall" --> REUSE["Ergebnis übernehmen, Herkunft REUSED"]
-    LOOP -- neu --> RUN["StateGuard: outserv=0 für Fall + feste FS,<br/>outserv=1 für alle anderen → QDS → ElmRes lesen"]
-    RUN --> CMP["mit REF zum selben Zeitschritt vergleichen;<br/>Fallreihen freigeben; Speicherbudget prüfen"]
-    CMP --> LOOP
-    REUSE --> LOOP
-    LOOP -- fertig --> S6["6 Wiederherstellen: Studienzeit, iopt_maint;<br/>erhaltene Ergebnisobjekte auflisten"]
-    S6 --> S7["7 23 Tabellen bilden, prüfen, publizieren"]
+    PO --> RQ["Fälle auflösen: Mitglieder, Fenster,<br/>Regeln, Netzzustände, Fingerabdrücke"]
+    RQ --> S4["4 Phase 1: REF, jeden Fall, n-1 rechnen<br/>jeder Lauf als GridLens_&lt;stamp&gt;_&lt;Fall&gt; erhalten"]
+    S4 --> S5["5 PowerFactory-Zustand zurücksetzen und prüfen"]
+    S5 --> S6["6 Phase 2: erhaltene Ergebnisse lesen,<br/>mit REF vergleichen, n-1 klassifizieren"]
+    S6 --> S7["7 Berichtstabellen bauen, prüfen, veröffentlichen"]
 ```
 
-Ein Fall mit einem gewöhnlichen Fehler bleibt als `FAILED` bzw.
-`NOT EVALUATED` mit Grund im Bericht; der nächste Fall läuft. Ein nicht
-rücksetzbarer Zustand (`StateRestoreError`) stoppt den Lauf. Das
-Wiederherstellen steht in einem `finally`-Block und läuft daher auch nach
-einem Fehler in der Referenz oder beim Auslesen.
+### Schritt 1 – Start und Kontext
 
-### 5.1 Ein Fall im Detail
+GridLens findet das laufende ComPython, den aktiven Study Case, den
+übergeordneten `IntReport` (falls vorhanden), den ComStatsim und das gebundene
+Ergebnisobjekt. Es prüft jede Voraussetzung aus Abschnitt 2, die sich ohne
+Rechnung prüfen lässt, und liest die Option *Planned Outages*. Es merkt sich
+die Studienzeit (`SetTime.cDate`, `cTime`), um sie nach jedem Lauf
+zurückzusetzen. Noch wird nichts geändert.
 
-```mermaid
-sequenceDiagram
-    participant OR as Steuerung
-    participant SG as StateGuard
-    participant IP as IntPlannedout (alle)
-    participant CS as ComStatsim
-    participant ER as ElmRes-Kopie
-    OR->>SG: öffnen
-    loop jede Freischaltung
-        SG->>IP: outserv lesen, merken
-        SG->>IP: 0 schreiben (Fall / fest) oder 1 (andere)
-    end
-    OR->>CS: Execute() wie konfiguriert
-    CS-->>CS: QDS in sein eigenes ElmRes (PowerFactory wendet die aktiven FS in ihren Fenstern an)
-    OR->>ER: AddCopy(ElmRes des Laufs), Name GridLens_<stamp>_<Fall>
-    OR->>ER: Load, Reihen lesen, Release
-    OR->>SG: schließen
-    loop umgekehrte Reihenfolge
-        SG->>IP: Original-outserv schreiben, zurücklesen, vergleichen
-    end
-    OR->>OR: Studienzeit wiederherstellen, mit REF vergleichen
-```
+### Schritt 2 – ComStatsim-Einstellungen
+
+Die Berechnungseinstellungen des ComStatsim (Zeitraum, Zeitschritt,
+Lastfluss-Optionen, Ergebnisobjekt und seine Variablenauswahl) werden
+protokolliert. GridLens ändert keine davon, außer der Option *Planned
+Outages* während der Läufe.
+
+### Schritt 3 – Planned Outages und Planungsfälle
+
+1. **Planned Outages werden gelesen** (nur lesend) aus dem Outage-Ordner des
+   Projekts; nur wenn er keine enthält, wird das ganze Projekt durchsucht. Zu
+   jeder `IntPlannedout` behält GridLens den vollständigen Pfad (die
+   Identität), Namen, Fenster (`starttime`, `endtime` in Epoch-Sekunden),
+   Betriebsmittel, Priorität und das Flag *Ignored* (`outserv`).
+   Außerbetriebnahmen, die dieselben Betriebsmittel schalten, werden zu einer
+   technischen Außerbetriebnahme zusammengefasst (`definition_id`).
+2. **Jede Außerbetriebnahme wird eingeordnet** gegenüber dem simulierten
+   Zeitraum: `CONSIDERED` oder `SKIPPED` mit Grund (außerhalb des Zeitraums,
+   *Ignored*, unlesbares Fenster). Ist die Frage nicht entscheidbar, bleibt sie
+   `CONSIDERED`, wird über die ganze Zeitachse bewertet, und ihre
+   Objektattribute werden als `DIAGNOSTIC` protokolliert.
+3. **Netze, Fehlerfälle und erhaltene Läufe werden gelesen** (nur lesend) für
+   den Fallmanager: die Netze des Modells, die Fehlerfälle der Contingency
+   Analysis des Study Case und die Zeitstempel früherer GridLens-Läufe.
+4. **Die Planungsfälle werden bestimmt** nach `CASE_SOURCE`:
+
+   | `CASE_SOURCE` | Verhalten |
+   |---|---|
+   | `'gui'` (Standard) | der Fallmanager öffnet sich; PowerFactory wartet, bis er geschlossen ist. *Start calculation* übergibt die Konfiguration, *Cancel* beendet den Lauf ohne jede Änderung. Kann das Fenster nicht öffnen, gilt die gespeicherte Konfiguration; ohne sie wird jede Außerbetriebnahme im Zeitraum ein eigener Fall. |
+   | `'saved'` | die für dieses Projekt gespeicherte Konfiguration, ohne Fenster |
+   | `'per_outage'` | je Außerbetriebnahme im simulierten Zeitraum ein Fall, ohne Fenster |
+
+5. **Die Fälle werden aufgelöst** (`resolve_request`): Mitglieder, wirksame
+   Fenster, Netzzustände, Regelprüfung und ein Fingerabdruck je Fall
+   (Abschnitt 5). Ein Fall, der nicht gerechnet werden kann, behält Status und
+   Grund und wird im Bericht genannt.
+6. **Die Einstellungen werden festgelegt** für den ganzen Lauf
+   (`activate_settings`): die Standardwerte plus die Abweichungen aus der
+   Konfiguration. Log und Bericht nennen jede Abweichung.
+
+### Schritt 4 – Phase 1: Berechnung
+
+Phase 1 rechnet und erhält nur; gelesen wird noch nichts.
+
+1. **Referenz (REF).** Ohne feste Hintergrund-Außerbetriebnahmen ist REF
+   **R0**: *Planned Outages* aus (`iopt_maint=0`). Mit festen
+   Außerbetriebnahmen ist sie **Rfix**: *Planned Outages* an, nur die festen
+   aktiv. Der REF-Lauf lässt sich in den Einstellungen abschalten;
+   Verletzungen lassen sich dann nicht in neu und vorbestehend trennen.
+2. **Eine QDS je Fall.** *Planned Outages* wird eingeschaltet. Für jeden Fall
+   mit Status READY setzt GridLens das Flag *Ignored* **jeder** Planned Outage:
+   `0` für die Außerbetriebnahmen des Falls und die festen, `1` für alle
+   anderen. PowerFactory wendet dann jede aktive Außerbetriebnahme während der
+   QDS in ihrem eigenen Fenster an. Der ComStatsim läuft genau wie
+   konfiguriert.
+3. **Gleiche Fälle werden einmal gerechnet.** Ein Fall mit denselben
+   Außerbetriebnahmen, Fenstern und festen Außerbetriebnahmen wie ein bereits
+   gerechneter (gleicher Fingerabdruck) übernimmt dessen Ergebnis und wird als
+   *reused* gekennzeichnet.
+4. **Jeder Lauf bleibt erhalten.** PowerFactory schreibt jede QDS in sein
+   eigenes Ergebnisobjekt und überschreibt es beim nächsten Lauf. Direkt nach
+   jedem Lauf kopiert GridLens es in den Study Case als
+   `GridLens_<yymmdd-HHMMSS>_<Fall>` (REF: `…_REF`) und schreibt Fall und
+   Fingerabdruck in die Beschreibung der Kopie. Die Kopien bleiben; GridLens
+   löscht sie nie.
+5. **Aufzeichnungsprüfung.** Direkt nach dem ersten Lauf prüft GridLens, dass
+   die Kopie mindestens eine bewertete Variable enthält. Wenn nicht, stoppt der
+   Lauf sofort, statt die übrigen Fälle umsonst zu rechnen.
+6. **Nach jedem Lauf** werden die *Ignored*-Flags zurückgesetzt und
+   zurückgelesen, die Studienzeit wird zurückgesetzt, und Schalter, die anders
+   stehen als vor dem Lauf, werden protokolliert (GridLens ändert keine
+   Schalter).
+7. **n-1**, wenn im Fallmanager angekreuzt: siehe Abschnitt 8.
+
+Vor jedem Lauf mit Planned Outages zeigt das Log, was PowerFactory anwenden
+wird: den Wert der Option und jede Außerbetriebnahme mit *Ignored* = 0.
+
+### Schritt 5 – Zurücksetzen
+
+In einem `finally`-Block, also auch nach einem Fehler oder Abbruch:
+Studienzeit und Option *Planned Outages* werden zurückgesetzt und
+zurückgelesen, die Bindung von `ComStatsim.results` wird protokolliert, und
+die erhaltenen Ergebnisobjekte werden aufgelistet. Lässt sich ein Wert nicht
+zurücksetzen, stoppt der Lauf mit erwartetem und gefundenem Wert; der Study
+Case ist dann von Hand zu prüfen.
+
+### Schritt 6 – Phase 2: Auswertung
+
+1. Ergebnisse werden spaltenweise in einen temporären `IntVec` gelesen
+   (`GridLens_column_buffer`, im laufenden ComPython angelegt und am Ende des
+   Schritts gelöscht). Ohne ihn ist jeder Wert ein Aufruf (langsam); die
+   Laufzusammenfassung zeigt, welcher Weg genutzt wurde.
+2. Zuerst wird REF gelesen, dann jeder Fall aus seiner Kopie, dann mit REF
+   verglichen (Abschnitt 7).
+3. Für jede Außerbetriebnahme prüft GridLens, ob sie gewirkt hat und ob sie
+   nach ihrem Fenster weiterwirkt (Abschnitt 7.6).
+4. n-1-Ergebnisse werden gelesen und klassifiziert (Abschnitt 8).
+5. Ein Speicherbudget (`MAX_RUN_CELLS`) stoppt die Auswertung vor dem nächsten
+   Fall, nicht nach dem letzten; alles Gerechnete bleibt erhalten.
+6. Jeder Fall wird **einmal** beurteilt; Log, Falltabelle und Zusammenfassung
+   verwenden dieses Urteil.
+
+### Schritt 7 – Bericht
+
+GridLens baut die 38 Tabellen (siehe [BERICHTSTABELLEN.md](BERICHTSTABELLEN.md)),
+prüft jede Zeile gegen den Datenvertrag und veröffentlicht sie an den
+`IntReport`. Der Bericht wird danach in PowerFactory aus diesem `IntReport`
+als eigener Schritt erzeugt. Ohne übergeordneten `IntReport` protokolliert
+GridLens die Zeilenzahl je Tabelle und veröffentlicht nichts.
+
+Rückgabecode: 0 nach einem veröffentlichten Bericht oder einem eigenständigen
+Lauf; 1, wenn nichts veröffentlicht wurde (Fehler), damit der `IntReport`
+keine fehlenden oder veralteten Tabellen rendert. *Cancel* im Fallmanager
+wird als Abbruch an den Aufrufer weitergegeben.
 
 ---
 
-## 6. Datenmodell (Lieferteil C)
+## 4. Was GridLens in PowerFactory ändert
 
-```mermaid
-classDiagram
-    class OutageDefinition {
-        definition_id  "D + Hash der Komponenten"
-        component_keys
-    }
-    class OutageOccurrence {
-        key  "voller Pfad der IntPlannedout"
-        name, window (Beginn, Ende)
-        priority, equipment, originally_ignored
-    }
-    class PlanningCase {
-        id, name, description
-        outages (Vorkommen-Schlüssel)
-        enabled, overrides
-    }
-    class AssessmentRequest {
-        source, revision, mode
-        background (Rfix-Vorkommen)
-        cases (aufgelöst), skipped, warnings
-    }
-    class ResolvedPlan {
-        members, windows, states
-        relations, calc_windows
-        status, reason, warnings, fingerprint
-    }
-    class CalculationWindow {
-        "(Beginn, Ende) Vorschlag"
-    }
-    class ReferenceRun
-    class CaseRun {
-        result_object, provenance, elapsed
-    }
-    class AssessmentResult {
-        comparison je Element
-        assessment: rows, coverage, spill, caused_hours
-    }
-    OutageDefinition "1" --> "*" OutageOccurrence
-    PlanningCase "*" --> "*" OutageOccurrence : CaseMembership
-    AssessmentRequest "1" --> "*" ResolvedPlan
-    ResolvedPlan "1" --> "*" CalculationWindow
-    ResolvedPlan "1" --> "0..1" CaseRun
-    AssessmentRequest "1" --> "1" ReferenceRun
-    CaseRun "1" --> "1" AssessmentResult
-```
+GridLens ändert nur diese Werte, vorübergehend, und setzt jeden zurück (vor
+dem Schreiben gemerkt, in umgekehrter Reihenfolge zurückgesetzt, zurückgelesen
+und verglichen):
 
-| Entität | Umsetzung | Hinweise |
-|---|---|---|
-| `OutageDefinition` (technische FS) | `assign_definitions(records)` setzt `definition_id` | Vorkommen, die dieselben Komponenten schalten, gehören zu einer technischen FS |
-| `OutageOccurrence` (FS-Vorkommen) | Datensatz einer `IntPlannedout` (`_outage_record`) | Identität = voller PowerFactory-Pfad, nie der Anzeigename |
-| `CaseMembership` (Fallzuordnung) | `cases[].outages` (Liste von Vorkommen-Schlüsseln) | viele-zu-viele; ein Vorkommen darf in beliebig vielen Fällen stehen |
-| `PlanningCase` (Bewertungsfall) | `cases[]` der Konfiguration | ID: Buchstaben, Ziffern, `_`, `-`, höchstens 16 Zeichen, nicht `REF` (Teil des `ElmRes`-Namens; ein Punkt würde als Klassentrenner gelesen) |
-| `AssessmentRequest` (Bewertungsauftrag) | Ergebnis von `resolve_request(...)` | Quelle, Revision, Modus, Hintergrund, aufgelöste Fälle, Warnungen |
-| `CalculationWindow` (Berechnungsfenster) | `calculation_windows(...)` | 24 h Vorlauf je Fenster, Fenster mit < 48 h Abstand zusammengefasst; nur Vorschlag |
-| `ReferenceRun` | Ergebnis mit ID `REF` | R0 oder Rfix, `run_note` nennt welche |
-| `CaseRun` | Ergebnis von `_run_planning_case` oder `_reused_result` | `result_object`, `provenance`, `elapsed` |
-| `AssessmentResult` | `result['comparison']`, `result['assessment']`, `assess_case(...)` | je Element und je Fall |
+| Objekt | Attribut | Wann | Zurückgesetzt |
+|---|---|---|---|
+| ComStatsim | `iopt_maint` (*Planned Outages*) | REF- und Fallläufe | Schritt 5 |
+| jede `IntPlannedout` | `outserv` (*Ignored*) | jeder Falllauf, Rfix, jeder n-1-Sweep | direkt nach diesem Lauf |
+| Studienzeit `SetTime` | `cDate`, `cTime` | ändert PowerFactory während eines Laufs | nach jedem Lauf und in Schritt 5 |
+| ComSimoutage (nur n-1) | `calcPeriod`, Schrittweite, `startTime`, `endTime`, `stepNumber`, `isPlannedOutages` | jeder n-1-Sweep | direkt nach diesem Sweep |
+| Fehlerfälle `ComOutage` (nur n-1) | *Not analysed* für Fehlerfälle außerhalb des n-1-Filters | jeder n-1-Sweep | direkt nach diesem Sweep |
 
-**Unabhängige Fälle.** Jeder Fall enthält nur seine direkt zugeordneten
-FS-Vorkommen. Für eine gemeinsame Planung beide FS direkt einem dritten Fall
-zuordnen. Ändern, Ausschließen oder Löschen eines Falls verändert keinen anderen
-Fall. Kopieren erzeugt eine unabhängige Variante. Voraussetzungen und
-Alternativgruppen zwischen Fällen gibt es nicht mehr.
+Objekte, die GridLens **anlegt und behält**:
 
-**Gespeicherte Konfiguration.** Schemaversion 2 speichert direkte Zuordnungen.
-`upgrade_case_config` überführt Version 1 beim Laden: übernommene FS und ihre
-zuerst wirksamen eigenen Termine werden direkte Zuordnungen; Voraussetzungen
-und Ausschlüsse entfallen. Problems and warnings und Log zeigen einen Umstellungshinweis.
-Laden schreibt die Datei nicht neu. Ungültige alte Verweise/Kreise stoppen die Umstellung.
+- `GridLens_<stamp>_<Fall>` – Kopie jedes QDS-Ergebnisses (`ElmRes`)
+- `GridLens_<stamp>_<Fall>_N1`, `…_N1P` – Kopien der n-1- und (n-1)'-Ergebnisse
+- `GridLens_<stamp>_N1` – eine Contingency Analysis mit einem Fehlerfall je
+  Element, nur wenn der Study Case keine hat
 
-**Regeln zwischen FS-Vorkommen.**
-
-| Regel | Konfiguration | Prüfung |
-|---|---|---|
-| B01 gleicher Fall | `outages` | gemeinsame Zeitachse |
-| B08/F11 dürfen nicht überlappen | Regel `not_overlap` | überlappende Fenster abgelehnt |
-| B09/F10 Reihenfolge | Regel `order` | die zweite FS muss nach dem Ende der ersten beginnen |
-| B10 nur gemeinsam | Regel `together` | beide vorhanden und überlappend |
-| F15/V13 gleiches Betriebsmittel | automatisch | keine: Überlappung ist normale Planung, nur ihre Beziehung wird festgehalten |
+Der temporäre `IntVec` aus Schritt 6 wird im selben Lauf angelegt und
+gelöscht. GridLens wendet nie selbst eine Außerbetriebnahme an
+(`IntPlannedout` hat in PowerFactory 2026 kein `Apply` oder `Reset`), ändert
+nie Netzmodell, Bemessungswerte, Schalter, Zeitraum oder Zeitschritt des
+ComStatsim und legt keine Operation Scenarios, Variationen oder Study Cases an.
 
 ---
 
-## 7. Methodik
+## 5. Planungsfälle
 
-### 7.1 Aktive Menge und Netzzustände
+### 5.1 Was ein Fall ist
 
-Für die Vorkommen `O_c` eines Falls gilt `A_c(t) = { o ∈ O_c | a_o ≤ t < b_o }`.
-`network_states` sammelt alle Beginne und Enden, sortiert sie und liefert die
-elementaren Intervalle mit ihrer aktiven Menge; Nachbarn mit gleicher Menge
-werden zusammengefasst, leere Intervalle (∅) bleiben erhalten. Das gilt für
-beliebig viele Vorkommen; die 13 Beziehungen zweier Intervalle (T01–T13) sind
-nur der Sonderfall, den `interval_relation` je Paar meldet.
+Ein Planungsfall ist eine benannte Menge von Planned-Outage-**Vorkommen**.
+Jeder Fall enthält nur die ihm direkt zugeordneten Außerbetriebnahmen; eine
+Außerbetriebnahme kann in beliebig vielen Fällen stehen. Fälle sind
+unabhängig: Ändern, Ausschließen oder Löschen eines Falls berührt keinen
+anderen, und GridLens kombiniert Fälle nie automatisch. Um zwei
+Außerbetriebnahmen gemeinsam zu bewerten, beide in einen Fall legen.
+
+| Feld | Bedeutung |
+|---|---|
+| `id` | erzeugt `C1`, `C2`, …; Teil des Ergebnisobjektnamens; Buchstaben, Ziffern, `_`, `-`, höchstens 16 Zeichen, nie `REF` |
+| `name`, `description` | freier Text für Log und Bericht |
+| `enabled` | das Flag *Run*; ein ausgeschlossener Fall bleibt gespeichert, wird aber weder gerechnet noch berichtet |
+| `outages` | vollständige Pfade der zugeordneten `IntPlannedout` |
+| `overrides` | eigene Termine je Außerbetriebnahme; **nur erfasst, nicht angewendet** (der Fall wird NOT EVALUATED berichtet) |
+
+### 5.2 Feste Hintergrund-Außerbetriebnahmen
+
+Als fest markierte Außerbetriebnahmen sind in der Referenz (dann Rfix) und in
+jedem Fall aktiv. Eine Außerbetriebnahme kann nicht zugleich fest und in einem
+Fall sein.
+
+### 5.3 Regeln zwischen Außerbetriebnahmen
+
+| Regel | Prüfung | Bei Verstoß |
+|---|---|---|
+| must not overlap | ein Fall mit beiden wird abgelehnt, wenn ihre Fenster überlappen | Fall NOT EVALUATED |
+| second only after the first | die zweite darf erst beginnen, wenn die erste geendet hat | Fall NOT EVALUATED |
+| only together | ein Fall mit einer muss die andere enthalten, zeitlich überlappend | Fall NOT EVALUATED |
+
+Zwei Außerbetriebnahmen auf demselben Betriebsmittel sind normale Planung und
+keine Regel.
+
+### 5.4 Auflösung und Status
+
+`resolve_request` macht aus der Konfiguration rechenbare Pläne:
+
+| Status | Bedeutung |
+|---|---|
+| READY | wird gerechnet |
+| NOT EVALUATED | keine Außerbetriebnahme zugeordnet, eine existiert nicht mehr, eigene Termine, eine verletzte Regel, ein unlesbares Fenster |
+| NOT SIMULATED | keine Außerbetriebnahme des Falls liegt im simulierten Zeitraum |
+| excluded | das Flag *Run* ist aus |
+
+Der **Fingerabdruck** eines Falls umfasst seine Außerbetriebnahmen, deren
+Fenster und die festen Außerbetriebnahmen. Gleiche Fingerabdrücke teilen eine
+Rechnung.
+
+### 5.5 Netzzustände
+
+Während einer QDS ändert sich die Menge der aktiven Außerbetriebnahmen über
+die Zeit. GridLens berechnet diese Zustände für Log, Vorschau und Bericht;
+PowerFactory wendet sie an. Für die Außerbetriebnahmen `O` eines Falls ist die
+aktive Menge zur Zeit `t` gleich `A(t) = { o ∈ O | Beginn_o ≤ t < Ende_o }`
+(halboffene Fenster). Alle Beginn- und Endzeiten werden zu elementaren
+Intervallen sortiert; Nachbarn mit gleicher Menge werden zusammengefasst, leere
+Intervalle bleiben erhalten.
 
 ```mermaid
 gantt
-    title Test B – drei überlappende FS, fünf Netzzustände
+    title Drei überlappende Außerbetriebnahmen, fünf Netzzustände
     dateFormat HH:mm
     axisFormat %H:%M
-    section Freischaltungen
+    section Außerbetriebnahmen
     FS1 :a1, 08:00, 13:00
     FS2 :a2, 10:00, 15:00
     FS3 :a3, 11:00, 14:00
@@ -327,56 +340,76 @@ gantt
     FS2           :s5, 14:00, 15:00
 ```
 
-GridLens schaltet diese Zustände nicht selbst. PowerFactory wendet jede aktive
-FS in ihrem eigenen Fenster während der QDS an (`iopt_maint=1`); GridLens
-bestimmt nur, welche FS aktiv sind (`outserv`). Die berechneten Zustände
-dokumentieren, was PowerFactory tun soll; sie stehen in Vorschau, Log und
-Bericht (`states_text`).
+### 5.6 Beispiel: zwei weit auseinanderliegende Außerbetriebnahmen
 
-### 7.2 Zeitgleicher Vergleich
+FS1 in KW 10 und FS2 in KW 40 in einem Fall A, ComStatsim über ein Jahr:
 
-Für Element `e`, Zeilen `k` und Schrittdauern `Δt_k = t_{k+1} − t_k` (die
-letzte Zeile wiederholt den vorigen Schritt):
+1. REF: eine QDS über das Jahr mit `iopt_maint=0`, erhalten als `GridLens_<stamp>_REF`.
+2. Fall A: eine QDS über das Jahr mit FS1 und FS2 aktiv, alle anderen
+   *Ignored*, erhalten als `GridLens_<stamp>_A`. PowerFactory wendet FS1 in
+   KW 10 und FS2 in KW 40 an; Netzzustände `FS1 | ∅ | FS2`.
+3. Vergleich: die Zeilen von KW 10 und KW 40 mit REF zu denselben
+   Zeitschritten, dazu jede Zeile dazwischen, in der Fall und REF sich
+   unterscheiden (Spill-over).
+4. Bericht: eine Zeile für Fall A mit beiden Fenstern, Abdeckung beider Wochen
+   und dem Urteil.
 
-- zeitgleiches Delta: `D_max(e) = max_k [ y_c(e,t_k) − y_R(e,t_k) ]` (Spannung: größte betragsmäßige Änderung, mit Vorzeichen)
-- Differenz der Maxima (getrennt, so benannt): `max_k y_c − max_k y_R`
-- Überschreitung: Auslastung `max(0, L − 100 %)`; Spannung `max(0, U_min − U, U − U_max)`
-- Dauer verursachter Verletzungen eines Falls: `Σ Δt_k` über die Vereinigung aller Zeilen, in denen ein Element NEW oder WORSENED ist
+Aufwand: ein REF-Lauf für alle Fälle plus ein Lauf je unterschiedlichem Fall;
+kein Lauf wird verkürzt.
 
-Test A der Vorgabe: REF 80 %, 60 %; Fall 70 %, 85 % → Differenz der Maxima
-+5 pp, zeitgleiches Delta +25 pp.
+---
 
-### 7.3 Welche Zeilen bewertet werden
+## 6. Ergebnisse lesen
+
+| Punkt | Regel |
+|---|---|
+| bewertete Elemente | Leitungen `ElmLne`, Transformatoren `ElmTr2`/`ElmTr3` (Auslastung), Knoten `ElmTerm` (Spannung) |
+| Variablen | die erste aufgezeichnete von `c:loading`, `m:loading` für Zweige; `m:u`, `m:u1` für Knoten; Winkel werden nicht gelesen |
+| Zeitachse | Spalte −1 des `ElmRes`, absolute Epoch-Sekunden; sie muss streng steigen, sonst scheitert der Fall |
+| Berichtsfilter | optionale Netzauswahl (Settings → Network scope); das Netz eines Elements kommt aus `cpGrid`, sonst aus dem `ElmNet` in seinem Pfad. Ohne Auswahl wird jedes Netz bewertet (bzw. `GRID_NAME_FILTER`, wenn im Skript gesetzt) |
+| DC-Knoten | `ElmTerm.systype == 1` werden nicht bewertet und auf der Qualitätsseite gezählt |
+| spannungslos | eine Spannung unter *De-energised below* (Standard 0,1 p.u.) oder NaN ist kein Messwert; der Knoten gilt in diesem Schritt als spannungslos |
+| ungültige Werte | NaN, ±∞, `None`, Booleans und unlesbare Zellen sind keine Messwerte; eine ungültige Auslastungszelle lässt den Fall scheitern, eine ungültige Spannungszelle zählt als spannungslos |
+| fehlende Reihen | ausgeschaltete oder nicht aufgezeichnete Betriebsmittel erhalten keine Reihe; keine künstlichen Nullen |
+| Namen | der Bericht zeigt nur `loc_name`; vollständige Pfade sind interne Identitäten |
+| Größengrenzen | höchstens 35 040 Zeilen (`MAX_RESULT_ROWS`) und 20 000 000 Zellen je Ergebnisobjekt (`MAX_RESULT_CELLS`), 120 000 000 Zellen je Lauf (`MAX_RUN_CELLS`) |
+
+---
+
+## 7. Bewertung eines Falls (n-0)
+
+Formeln und Grenzfälle: [BERECHNUNG_UND_AUSWERTUNG.md](BERECHNUNG_UND_AUSWERTUNG.md).
+
+### 7.1 Bewertete Zeitschritte
 
 ```mermaid
 flowchart TD
-    W["Fenster der FS-Vorkommen des Falls<br/>(halboffen, Epoch-Sekunden)"] --> IN["Zeilen in irgendeinem Fenster"]
-    AX{"absolute Zeitachse<br/>und Fenster lesbar?"} -- nein --> ALL["ganze Achse bewertet;<br/>Hinweis: Fenster nicht zuordenbar"]
+    W["Fenster der Außerbetriebnahmen des Falls<br/>(halboffen, Epoch-Sekunden)"] --> IN["Zeilen in irgendeinem Fenster"]
+    AX{"absolute Zeitachse<br/>und Fenster lesbar?"} -- nein --> ALL["ganze Achse bewertet;<br/>Hinweis in Log und Bericht"]
     AX -- ja --> IN
-    IN --> SP["Spill-over: Zeilen außerhalb der Fenster, in denen<br/>Fall und REF über die Toleranz abweichen"]
-    SP --> E["bewertete Zeilen = innerhalb ∪ Spill-over"]
-    E --> C["je Element: Status je Zeitschritt, zeitgleiches Delta,<br/>Dauern, Statistik"]
-    IN --> COV["Abdeckung = von Zeilen repräsentierte Zeit<br/>÷ Freischaltzeit"]
+    IN --> SP["Spill-over: Zeilen außerhalb der Fenster,<br/>in denen Fall und REF über die Toleranz abweichen"]
+    SP --> E["bewertete Zeilen = innen ∪ Spill-over"]
+    E --> C["je Element und Schritt: Status,<br/>zeitgleiches Delta, Dauern"]
+    IN --> COV["Abdeckung = durch Zeilen vertretene Zeit<br/>÷ Außerbetriebnahmezeit"]
 ```
 
-In einem Fall unterscheiden sich nur seine eigenen FS von der Referenz. Jede
-Abweichung außerhalb ihrer Fenster bedeutet daher, dass PowerFactory sie
-versetzt anwendet oder ein Schaltzustand die FS überdauert (F14). Diese Zeilen
-werden mitbewertet, und die Qualitätsseite nennt den Fall. Das erfasst auch den
-02:00-Effekt aus dem Test vom 29. September.
+Nur die eigenen Außerbetriebnahmen des Falls unterscheiden ihn von REF. Jede
+Abweichung außerhalb ihrer Fenster bedeutet, dass PowerFactory sie versetzt
+angewendet hat oder ein Schaltzustand die Außerbetriebnahme überdauert. Diese
+Zeilen werden mitbewertet, und die Qualitätsseite nennt den Fall.
 
-### 7.4 Klassifikation
+### 7.2 Status je Zeitschritt
 
 ```mermaid
 flowchart TD
     A{"Fallwert vorhanden?"} -- "nein, REF vorhanden (Knoten)" --> DE["DE-ENERGISED"]
     A -- ja --> B{"REF-Wert vorhanden?"}
-    B -- nein --> EX{"Fall über der Grenze?"}
+    B -- nein --> EX{"Fall über Grenze?"}
     EX -- ja --> EXC["EXCEEDED"]
     EX -- nein --> OK1["OK"]
-    B -- ja --> C{"Fall über der Grenze?"}
+    B -- ja --> C{"Fall über Grenze?"}
     C -- "ja, REF innerhalb" --> NEW["NEW"]
-    C -- "ja, REF auch darüber" --> D{"Überschreitung Fall vs. REF"}
+    C -- "ja, REF darüber" --> D{"Überschreitung Fall vs. REF"}
     D -- "> + Toleranz" --> WO["WORSENED"]
     D -- "< − Toleranz" --> IM["IMPROVED"]
     D -- "sonst" --> PE["PRE-EXISTING"]
@@ -384,395 +417,267 @@ flowchart TD
     C -- "nein, REF innerhalb" --> OK2["OK"]
 ```
 
-Ein Element erhält den schwersten Zustand seiner Zeitschritte (NEW >
-WORSENED > EXCEEDED > DE-ENERGISED > PRE-EXISTING > IMPROVED > RESOLVED > OK).
-Betriebsmittel, die der Fall selbst ausschaltet, sind OUT OF SERVICE, nie
-RESOLVED. Werte genau auf der Grenze sind keine Verletzung. Auslastungsgrenze
-standardmäßig 100 % (die Bemessung der Elemente steckt bereits in
-`c:loading`), ein Spannungsband in p.u. der Nennspannung für jede Spannungsebene; beides sind seit
-Teil 2 Einstellungen (7.5).
+- Auslastung liegt über der Grenze, wenn sie **echt größer** ist als die
+  Grenze (Leitungen und Transformatoren getrennt, Standard 100 %).
+- Spannung liegt außerhalb des Bands, wenn sie echt unter dem Minimum oder
+  über dem Maximum liegt (ein Band für jede Spannungsebene, Standard
+  0,95–1,05 p.u.).
+- Ein Wert genau auf der Grenze ist keine Verletzung.
+- Toleranzen: 0,1 %-Punkte für Auslastung, 0,001 p.u. für Spannung.
 
-Urteil je Fall, die erste zutreffende Zeile gilt:
+Ein Element erhält seinen schwersten Status: NEW > WORSENED > EXCEEDED >
+DE-ENERGISED > PRE-EXISTING > IMPROVED > RESOLVED > OK. Betriebsmittel, die der
+Fall selbst ausschaltet, sind OUT OF SERVICE, nie RESOLVED.
+
+### 7.3 Werte je Element
+
+- **zeitgleiches Delta** `max_t [Fall(t) − REF(t)]` (Spannung: größte absolute
+  Änderung, mit Vorzeichen) – die maßgebliche Änderung, immer zum selben
+  Zeitschritt
+- **Differenz der Maxima** `max Fall − max REF`, getrennt ausgewiesen und so
+  benannt
+- **Überschreitung** Auslastung `max(0, L − Grenze)`; Spannung
+  `max(0, U_min − U, U − U_max)`
+- **Dauer** verursachter Verletzungen: die Summe der Zeitschritte `Δt_k` über
+  alle Zeilen, in denen irgendein Element NEW oder WORSENED ist
+
+### 7.4 Abdeckung
+
+Abdeckung ist der Anteil der Außerbetriebnahmezeit, den Ergebniszeilen
+vertreten. Unter 99,9 % kann ein Fall nie NO LIMIT EXCEEDED sein; er ist
+INCOMPLETE COVERAGE. Eine Außerbetriebnahme kürzer als ein Zeitschritt hat
+Abdeckung 0.
+
+### 7.5 Urteil des Falls
+
+Die erste zutreffende Zeile gilt:
 
 | Urteil | Bedingung | Farbe |
 |---|---|---|
 | OVERLOAD + VOLTAGE BAND / OVERLOAD / VOLTAGE BAND | ein Auslastungs- und/oder Spannungselement NEW, WORSENED oder EXCEEDED | rot |
 | DE-ENERGISED NODES | ein Knoten verliert im Fall seine Spannung | gelb |
-| INCOMPLETE COVERAGE | nichts gefunden, aber die Ergebnisse decken < 99,9 % der Freischaltzeit ab | gelb |
-| NO ADDITIONAL VIOLATION | nur PRE-EXISTING oder IMPROVED | gelb |
-| NO LIMIT EXCEEDED | nichts über einer Grenze | keine |
-| NO RESULT DATA IN WINDOW | keine Zeile zu bewerten | keine |
-| NOT EVALUATED / NOT SIMULATED | Lauf fehlgeschlagen, Regelkonflikt, Zeitachse abweichend / außerhalb des Zeitraums | keine |
+| INCOMPLETE COVERAGE | nichts gefunden, aber die Ergebnisse decken weniger als 99,9 % der Außerbetriebnahmezeit ab | gelb |
+| NO ADDITIONAL VIOLATION | nur PRE-EXISTING- oder IMPROVED-Verletzungen | gelb |
+| NO LIMIT EXCEEDED | nichts über einer Grenze | – |
+| NO RESULT DATA IN WINDOW | keine Zeile zu bewerten | – |
+| NOT EVALUATED / NOT SIMULATED | gescheiterter Lauf, Regelkonflikt, geänderter Fingerabdruck / außerhalb des Zeitraums | – |
 
-Fehlende oder fehlerhafte Ergebnisse ergeben nie NO LIMIT EXCEEDED.
+REF selbst ist BASELINE. Fehlende oder unvollständige Ergebnisse ergeben nie
+NO LIMIT EXCEEDED.
 
-### 7.5 Settings (Teil 2)
+### 7.6 Haben die Außerbetriebnahmen gewirkt?
 
-Jeder Grenzwert und jede Toleranz der Bewertung ist eine **Einstellung**
-(`SETTINGS` in `main.py`, Version `SETTINGS_VERSION = '1.0'`).
-Standards sind die Werte des Codes: Warnschwelle 80 %, n-0-Auslastungsgrenze
-100 % (Leitungen und Transformatoren getrennt), ein Spannungsband von
-0,95–1,05 p.u. für jede Spannungsebene (als GridLens-Vorschlag gekennzeichnet;
-die kV-Bänder je Spannungsebene sind seit dem 23. Oktober 2026 ersetzt),
-Änderungstoleranzen 0,1 %-Punkte / 0,001 p.u. Die früheren Skriptkonstanten
-TOP_N, MAX_PLOT_POINTS, ENERGIZED_MIN_PU, die Anhang-Schwellen,
-RUN_REFERENCE_CASE, MAX_CASES und MAX_N1_TIMES sind die Standards gleichnamiger
-Settings (`setting_value()`). CASE_SLOTS, die Versionen und die Startoptionen
-bleiben Konstanten: Davon hängen MRT oder Start ab.
+Für jede Außerbetriebnahme eines Falls, innerhalb ihres eigenen Fensters:
 
-Rechnung und Veröffentlichung sind getrennt: Ein ComPython, das nicht unter
-einem IntReport liegt, rechnet, baut und prüft alle Berichtstabellen und
-protokolliert die Ergebnisse, veröffentlicht aber nichts (eigenständiger Lauf,
-Exit-Code 0).
+| Status | Bedeutung |
+|---|---|
+| APPLIED | ein aufgezeichnetes Betriebsmittel trägt im Fall keine Last, in REF schon |
+| EFFECT SEEN | ihre Betriebsmittel sind nicht aufgezeichnet, aber das Netz weicht von REF ab |
+| NO EFFECT | der Fall gleicht REF im Fenster – höchstwahrscheinlich nicht angewendet; als Warnung protokolliert |
+| NOT CHECKABLE | keine REF auf derselben Zeitachse oder keine Ergebniszeile im Fenster |
 
-Ein Lauf hat **zwei Phasen**. Phase 1 (Log-Schritt 4) rechnet nur: REF und
-jeden Fall in sein eigenes, behaltenes `GridLens_<Stempel>_<Fall>`, und jeden
-n-1-Durchlauf in eine behaltene Kopie seines Ergebnisobjekts (`…_<Fall>_N1`,
-`…_<Fall>_N1P`; verweigert PowerFactory die Kopie, wird dieser Durchlauf sofort
-gelesen). Jedes behaltene Objekt nennt in seiner Beschreibung seinen Fall, den
-Fingerabdruck des Falls und bei n-1 die Aufzeichnungsgrenzen. Schritt 5 setzt
-den PowerFactory-Zustand zurück; Phase 2 (Schritt 6) liest, vergleicht und
-klassifiziert die behaltenen Objekte; Schritt 7 baut und veröffentlicht den
-Bericht. Das Speicherbudget stoppt Phase 2, bevor der nächste Fall gelesen
-wird; alles Gerechnete bleibt erhalten.
+Nach dem Fenster zählt GridLens die Schritte, in denen ein Betriebsmittel
+weiterhin keine Last trägt, während es in REF eine trägt (Nachwirkung), und
+berichtet, wie lange die Außerbetriebnahme nachwirkt. Die Qualitätsseite hat
+eine Zeile je Fall.
 
-**Neu auswerten ohne Rechnung:** Die Auswahl *Results* im Fallmanager listet
-die behaltenen Läufe des Study Case (`kept_stamps`). Wer einen wählt,
-überspringt Phase 1 ganz – nichts wird gerechnet, PowerFactory nicht verändert –
-und Phase 2 liest die Objekte dieses Laufs mit den aktuellen Settings
-(`kept_runs`). Ein Fall, dessen FS oder Fenster sich seitdem geändert haben
-(anderer Fingerabdruck) oder dessen Objekt fehlt, ist NOT EVALUATED mit Grund;
-ein geänderter REF stoppt den Lauf.
+### 7.7 Aussage A und Aussage B
 
-**Werden die Außerbetriebnahmen wirklich angewendet?** Drei Prüfungen machen
-das in Log und Bericht sichtbar:
+Aussage A – was die Planned Outages hinzufügen – bewerten die Fälle.
+Aussage B – ob das Netz über den ganzen Zeitraum zulässig ist – beschreibt nur
+REF. Ein Fall, der nichts hinzufügt, belegt Aussage B nicht.
 
-- Ob n-1 läuft, steht immer im Log: „n-1 is not calculated: it is not ticked
-  in the case manager“, „… no planning case can be calculated“ oder die
-  verwendete Contingency Analysis.
-- Vor jedem QDS-Lauf mit Außerbetriebnahmen und vor jedem n-1-Sweep liest
-  GridLens zurück, was PowerFactory anwenden wird (`applied_text`): die Option
-  (`iopt_maint` bzw. `isPlannedOutages`) und jede Außerbetriebnahme mit
-  „Ignored“ = 0; steht die Option auf 0, meldet die Zeile, dass keine gilt.
-- In Phase 2 wird jede Außerbetriebnahme eines Falls in ihrem eigenen Fenster
-  gegen REF geprüft (`outage_effects`): **APPLIED** (ein aufgezeichnetes
-  Betriebsmittel ist im Fall lastfrei, in REF nicht), **EFFECT SEEN**
-  (Betriebsmittel nicht aufgezeichnet, das Netz weicht aber von REF ab),
-  **NO EFFECT** (der Fall gleicht REF im Fenster; vermutlich nicht angewendet,
-  Warnung im Log), **NOT CHECKABLE** (kein REF auf derselben Zeitachse oder
-  keine Ergebniszeile im Fenster). Die Model-Quality-Seite trägt je Fall eine
-  Zeile `outages_<case>`.
+---
 
-**Erhaltene Ergebnisobjekte: eine Kopie nach jedem Lauf.** GridLens bindet
-`ComStatsim.results` nicht. PowerFactory schreibt eine QDS in sein eigenes
-Ergebnisobjekt im Study Case: Hat das gebundene Objekt keine Variablenauswahl
-(etwa ein temporäres im Benutzerordner `Set\Tmp`), bindet PowerFactory ein
-Ergebnisobjekt mit seiner Standard-Variablenauswahl und schreibt dort hinein;
-jeder Lauf überschreibt es. Direkt nach jedem Lauf kopiert GridLens dieses
-Objekt als `GridLens_<stamp>_<Fall>` in den Study Case (geprüft: die Kopie
-behält Zeilen, Spalten, Werte und IntMon, auch nach dem nächsten Lauf). Die
-Bindung von PowerFactory bleibt, wie ein Lauf von Hand sie hinterlässt. Ist ein
-erhaltenes GridLens-Objekt gebunden, stoppt der Lauf vor jeder Rechnung, weil
-die QDS es überschreiben würde.
+## 8. n-1 und (n-1)'
 
-**Aufzeichnungsprüfung nach dem ersten Lauf.** Direkt nach dem ersten
-QDS-Lauf (REF oder, ohne REF, dem ersten Fall) liest GridLens die Spaltenliste
-seiner erhaltenen Kopie (`check_recording`). Zeichnet sie keine der bewerteten
-Variablen auf (`c:loading`, `m:loading`, `m:u`, `m:u1`), bricht GridLens sofort
-mit einem `RecordingError` ab, statt alle weiteren Fälle und n-1 umsonst zu
-rechnen. Der Fehler nennt, was Kopie und PowerFactory-Ergebnisobjekt
-aufzeichnen, dessen Variablenauswahl (IntMon) und die vermutliche Ursache.
+Im Fallmanager angekreuzt (*Calculation*). n-0 wird immer gerechnet.
 
-**n-1-Time-Sweep als Zeitraum.** Mit `calcPeriod` 4 rechnet die Contingency
-Analysis von `startTime` bis `endTime` (exklusiv) in Schritten von
-`stepSize`/`stepUnit` und ignoriert `studyTime` (geprüft am 24.10.2026).
-GridLens schreibt diesen Zeitraum je Sweep (`calcPeriod`, Schritt,
-`startTime`, `endTime`, `stepNumber`; verifiziert zurückgesetzt): vom ersten
-bis zum letzten QDS-Schritt in den FS-Fenstern des Falls (`sweep_period`).
-Schritte zwischen auseinanderliegenden Fenstern werden gerechnet, aber nicht
-bewertet; ein Zeitraum über dem n-1-Limit wird abgelehnt. Vor jedem Sweep
-liest GridLens die Einstellungen zurück (`sweep_settings_text`); direkt danach
-prüft es, ob jeder Zeitpunkt in den Fenstern gerechnet wurde (`cnttime` der
-Teilergebnisse). Fehlt einer, endet n-1 dieses Falls mit gewünschten,
-fehlenden und gerechneten Zeitpunkten und den Einstellungen.
+| Bewertung | Was gerechnet wird | Aktive Planned Outages |
+|---|---|---|
+| n-1 | Contingency Analysis der Referenz | nur die festen Hintergrund-Außerbetriebnahmen |
+| (n-1)' | Contingency Analysis des Planungsfalls; braucht n-1 | die Außerbetriebnahmen des Falls und die festen |
 
-**Fehlerbericht.** Ein fehlgeschlagener Lauf gibt vor der Laufübersicht einen
-Block *FAILURE REPORT* aus (`log_failure`): Fehler, Ort (Schritt und Fall zum
-Zeitpunkt des Fehlers), Ursachenkette, Detailzeilen
-(`GridLensError.details`), Codestelle (Funktion und Zeile in
-`main.py`), PowerFactory-Zustand nach der Wiederherstellung,
-erhaltene Ergebnisobjekte, letzte Warnungen und Abhilfe
-(`GridLensError.hint`). Scheitert nur ein Fall oder sein n-1, stehen dessen
-Detailzeilen unter seiner Fehlermeldung.
-
-Jeder Lauf endet mit einer **Laufübersicht** (`RunStats`, `log_run_summary`),
-auch ein fehlgeschlagener: Zeit und Aufrufe je Dienst (FS lesen, Grids und
-Fehlerfälle lesen, der Fallmanager mit Fensteraufbau und Aktualisierungen, jede
-QDS und Contingency Analysis in PowerFactory, Ergebnisse lesen, Vergleich und
-Klassifizierung, Zurücksetzen, Berichtstabellen bauen und veröffentlichen) und
-die Zahl der Berechnungen (QDS-Läufe und Zeitschritte, wiederverwendete Fälle,
-gelesene Reihen und Werte, angelegte und gerechnete Contingency Analyses,
-n-1-Zeitpunkte, Lastflüsse je Fehlerfall, eingestufte n-1-Ergebnisse,
-Berichtszeilen).
-
-Ergebnisse werden spaltenweise gelesen: `ElmRes.GetColumnValues(IntVec, Spalte)`
-füllt einen temporären IntVec `GridLens_column_buffer`, der im laufenden
-ComPython für den Lauf angelegt und beim Zurücksetzen gelöscht wird. Ohne ihn
-wäre jeder Wert ein eigener `GetValue`-Aufruf; die Laufübersicht zählt beide
-Lesearten, ein langsamer Lauf zeigt also sofort, ob das Blocklesen gegriffen
-hat. Eine Spannungsspalte eines n-1-Unterergebnisses mit einer 0 wird
-zellweise gelesen, weil nicht verifiziert ist, was das Blocklesen in eine Zelle
-innerhalb der Aufzeichnungsgrenzen (Code 3) schreibt. Geplante Freischaltungen
-werden je FS in einem Durchgang gelesen, das ganze Projekt wird nur durchsucht,
-wenn der Outage-Ordner keine enthält, und ohne Grid-Auswahl wird je
-Ergebnisspalte kein Grid abgefragt.
-
-| Kategorie | Bedeutung | Beispiele | Änderbar |
-|---|---|---|---|
-| A – Bewertung | deutet berechnete Ergebnisse; ändert nie Lastfluss, Bemessung oder Modell | Warnschwellen, Bewertungsgrenzen, Spannungsbänder, Toleranzen | ja, geprüft |
-| B – Berechnung | würde ändern, was PowerFactory rechnet | Contingency-Set, Post-Fault-Phasen, Remedial Actions, AC/DC, Inselbildung, nicht versorgte Last, Lastabwurf | **nein**: schreibgeschützt bis zur Verifikation |
-
-Zu Beginn eines Laufs (nach dem Schließen des Fallmanagers) hält
-`activate_settings` einen Snapshot fest: Werte, Herkunft je Wert (`GridLens`,
-`PowerFactory`, `user`), Overrides, Settings- und Klassifizierungsversion. Die
-Bewertung liest Grenzen nur über `loading_limit()`, `loading_warning()`,
-`voltage_bands()`, `default_voltage_limits()` und `change_tolerance()`;
-`reset_settings()` stellt am Ende die Standards wieder her. Mit den Standards
-sind die publizierten Berichtstabellen identisch mit der Vorversion (Test
-`test_default_settings_reproduce_the_n0_report_exactly`, exakte Gleichheit jeder
-Zeile außer der Erzeugungszeit). Der Bericht nennt die Settings in *Model
-Quality Assurance* (Zeile *Settings*, WARNING bei aktivem Override).
-
-Ablage: nur Overrides, unter `settings` in der Konfigurationsdatei der Fälle
-(JSON). **Vorläufig** – eine native Ablage im PowerFactory-Projekt und ein
-unveränderliches Snapshot-Objekt je Lauf sind offen, bis die Probe (Teil 1) ein
-geeignetes Objekt zeigt. Settings und Ergebnisse werden nie vermischt: Die Datei
-enthält kein Ergebnis.
-
-### 7.6 Klassifizierung n-1 gegen (n-1)' (Teil 2, Regelversion 1.0)
-
-`classify_comparison(reference, scenario, parameters)` ist eine reine Funktion
-für jedes Szenario (`CLASSIFICATION_VERSION = '1.0'`). Sie ist implementiert und
-getestet, **wird aber noch von keiner Berechnung genutzt**: n-1 und (n-1)' folgen
-in Teil 3. Die n-0-QDS behält ihre eigenen Status (`step_status`:
-`PRE-EXISTING`, `DE-ENERGISED`, …) unverändert.
-
-Vergleichbar nur bei gleichem Zeitschritt, Fehlerfall, überwachtem
-Betriebsmittel, Ergebnisgröße, Post-Fault-Phase und Grenzwertdefinition. Mit
-Szenario `c`, Fehlerfall `k`, Element `e` und Zeit `t`:
-
-- zeitgleiche Differenz `ΔL = L(n-1)',c,k(e,t) − L(n-1),k(e,t)` in %-Punkten; nie
-  eine Differenz unabhängiger Maxima,
-- Auslastungsverletzung `V_L = max(0, L − L_lim)`,
-- Spannungsverletzung `V_U = max(0, U_min − U, U − U_max)`.
+1. **Contingency Analysis.** GridLens verwendet den `ComSimoutage` des Study
+   Case. Gibt es keinen, legt es `GridLens_<stamp>_N1` an, mit einem Fehlerfall
+   je Zweig, Transformator, Drossel, Kompensation und FACTS-Element (keine
+   Generatoren, Lasten oder Sammelschienen), und behält ihn. Bei mehr als
+   einem `ComSimoutage` wird n-1 nicht bewertet.
+2. **Filter.** Die n-1-Filter der Einstellungen (Netze der ausfallenden
+   Betriebsmittel, ausfallende Elemente) setzen jeden anderen Fehlerfall für
+   den Sweep auf *Not analysed*; danach zurückgesetzt. Der Berichtsfilter
+   entscheidet, welche überwachten Elemente bewertet werden.
+3. **Studienzeitpunkte.** Die QDS-Zeitschritte in den Fenstern der
+   Außerbetriebnahmen des Falls, höchstens *n-1 study times per case*
+   (Standard 2000). Ein Sweep rechnet den Zeitraum vom ersten bis zum letzten
+   davon mit dem QDS-Schritt; Schritte zwischen auseinanderliegenden Fenstern
+   werden gerechnet, aber nicht bewertet.
+4. **Sweep.** Zeitraum, Schrittweite und `isPlannedOutages` werden für den
+   Sweep geschrieben, die *Ignored*-Flags wie bei der QDS gesetzt, und alles
+   wird direkt danach zurückgesetzt. GridLens prüft, dass jeder
+   Studienzeitpunkt gerechnet wurde; fehlt einer, stoppt das n-1 dieses Falls
+   mit gewünschten und gefundenen Zeitpunkten.
+5. **Erhaltene Ergebnisse.** Jeder Sweep wird als `GridLens_<stamp>_<Fall>_N1`
+   und `…_N1P` kopiert. Fälle mit denselben Studienzeitpunkten teilen sich
+   einen n-1-Referenz-Sweep.
+6. **Klassifikation.** (n-1)' wird mit n-1 verglichen, zum selben
+   Studienzeitpunkt, Fehlerfall, überwachten Element und zur selben Größe, je
+   Kriterium *Auslastung*, *Spannung tief*, *Spannung hoch*:
 
 | Code | Status | Bedingung |
 |---|---|---|
 | 0 | OK | keine Seite verletzt |
-| 1 | NEW | nur das Szenario verletzt |
-| 2 | WORSENED | beide verletzt, `V_s − V_r > WORSENED-Toleranz + numerische Toleranz` |
+| 1 | NEW | nur (n-1)' verletzt |
+| 2 | WORSENED | beide verletzt, Zunahme > WORSENED-Toleranz |
 | 3 | PRE_EXISTING | beide verletzt, Änderung innerhalb der Toleranzen |
-| 4 | IMPROVED | beide verletzt, `V_r − V_s > IMPROVED-Toleranz + numerische Toleranz` |
-| 5 | RESOLVED | nur die Referenz verletzt |
-| 90 | FAILED | Berechnung fehlgeschlagen oder nicht konvergiert; nie eine nachgewiesene Verletzung |
-| 91 | NOT_EVALUATED | Wert oder Grenze fehlt oder ist ungültig (NaN, ±∞, None, Boolean, Text) |
-| 92 | NOT_APPLICABLE | Fehlerfall nicht anwendbar, z. B. sein Betriebsmittel ist bereits durch eine FS ausgeschaltet |
-| 93 | NOT_COMPARABLE | Zeit, Fehlerfall, Element, Größe, Phase oder Grenzwertdefinition unterscheiden sich |
+| 4 | IMPROVED | beide verletzt, Abnahme > IMPROVED-Toleranz |
+| 5 | RESOLVED | nur n-1 verletzt |
+| 90 | FAILED | eine Rechnung ist gescheitert oder nicht konvergiert |
+| 91 | NOT_EVALUATED | ein Wert oder die Grenze fehlt oder ist ungültig |
+| 92 | NOT_APPLICABLE | der Fehlerfall ist nicht anwendbar, z. B. weil sein Element schon durch eine Planned Outage ausgeschaltet ist |
+| 93 | NOT_COMPARABLE | Zeit, Fehlerfall, Element, Größe oder Grenzdefinition weichen ab |
 
-Eine Seite ist verletzt, wenn `V > Grenzwerttoleranz + numerische Toleranz`
-(Standard 0 und 1e-9: genau auf der Grenze ist keine Verletzung,
-Rundungsrauschen auch nicht).
+Prüfreihenfolge: FAILED, NOT_APPLICABLE, NOT_COMPARABLE, NOT_EVALUATED, dann
+die numerische Entscheidung. Eine Seite ist verletzt, wenn ihre
+Überschreitung die Grenztoleranz plus die numerische Toleranz übersteigt
+(Standard 0 und 1e-9). Fehlende Werte werden nie durch Null ersetzt.
+*Reduced margin* markiert ein OK-Ergebnis, dessen Reserve zur Grenze um mehr
+als die WORSENED-Toleranz geschrumpft ist, bei Auslastung erst ab der Schwelle
+*Reduced margin warning* (Standard 80 %).
 
-Entscheidungsreihenfolge: 1 FAILED, 2 NOT_APPLICABLE, 3 NOT_COMPARABLE,
-4 NOT_EVALUATED, 5 numerische Entscheidung. Die Anwendbarkeit wird vor fehlenden
-Werten geprüft, weil ein nicht anwendbarer Fehlerfall zu Recht keinen Wert hat
-und diesen Grund behalten muss. Jeder nicht numerische Befund bleibt in
-`reasons`, die Rangfolge verdeckt also keine zweite Ursache. Fehlende Werte
-werden nie durch null ersetzt. `MARGIN_REDUCED` ist ein Zusatzindikator, nie ein
-Status: ein OK-Ergebnis, dessen Reserve zur Grenze um mehr als die
-WORSENED-Toleranz geschrumpft ist (bei Auslastung erst ab der Warnschwelle für
-reduzierte Reserve, Standard 80 %).
-
-Standards und Begründung: Grenzwerttoleranz 0 (bestehende Regel „auf der Grenze
-ist keine Verletzung“); numerische Toleranz 1e-9 (weit unter jedem fachlich
-relevanten %-Punkt- oder p.u.-Unterschied); WORSENED- und IMPROVED-Toleranz
-0,1 %-Punkte / 0,001 p.u. (die bestehenden n-0-Änderungstoleranzen, damit beide
-Bewertungen dieselbe Auflösung haben); n-1-Grenzen „use PowerFactory limits“ =
-100 % der Bemessung, auf die PowerFactory die Auslastung bezieht (ob das die
-Post-Fault-Bemessung ist, ist offen, siehe 12).
-
-### 7.7 Aussage A und Aussage B
-
-Der Bericht trennt auf der Fallseite: Aussage A (was die Freischaltungen
-hinzufügen) bewerten die Fälle. Aussage B (das Netz ist über den ganzen
-Zeitraum zulässig) beschreibt nur die Referenz; ein Fall ohne zusätzliche
-Verletzung beweist sie nicht.
+n-1-Auslastungsgrenze: standardmäßig die Bemessung, auf die PowerFactory
+`c:loading` bezieht (*use PowerFactory limits*), oder eine globale
+Bewertungsgrenze. In beiden Fällen ändert sie nur die Bewertung, nie eine
+Bemessung.
 
 ---
 
-## 8. Beispiel: FS1 in KW10, FS2 in KW40 (Lieferteil E)
+## 9. Einstellungen
 
-```mermaid
-gantt
-    title Fall A – ein Fall, zwei weit auseinanderliegende FS
-    dateFormat YYYY-MM-DD
-    axisFormat KW%V
-    section Simulierter Zeitraum (ComStatsim)
-    ganzes Jahr                :2026-01-01, 2026-12-31
-    section Fall A
-    FS1                        :crit, 2026-03-02, 7d
-    FS2                        :crit, 2026-09-28, 7d
-```
+Einstellungen interpretieren Ergebnisse; Einstellungen der Kategorie B würden
+ändern, was PowerFactory rechnet, und werden nur angezeigt.
 
-1. **Einlesen.** Beide `IntPlannedout` werden gelesen (Schlüssel, Fenster, Komponenten).
-2. **Zuordnen.** Der Ingenieur legt FS1 und FS2 in Fall A.
-3. **Zustände.** `FS1 | ∅ | FS2` (Beziehung T01).
-4. **Zeitbasis.** Kein verkürztes Fenster: Jeder Lauf deckt den ganzen
-   ComStatsim-Zeitraum mit seinem Zeitschritt ab (seit Teil 2 keine Zeitoptimierung).
-5. **Referenz.** Ein REF-Lauf über den ganzen Zeitraum (`iopt_maint=0`),
-   erhalten als `GridLens_<stamp>_REF`.
-6. **Fall-Lauf.** Eine QDS über den ganzen Zeitraum mit FS1 und FS2 aktiv
-   (`outserv=0`), alle anderen FS ignoriert, erhalten als `GridLens_<stamp>_A`.
-   PowerFactory wendet FS1 in KW10 und FS2 in KW40 an.
-7. **Vergleich.** Die Zeilen von KW10 und KW40 werden zum selben Zeitschritt
-   mit REF verglichen; jede Abweichung dazwischen (z. B. ein Schaltzustand,
-   der FS1 überdauert) wird als Spill-over bewertet und gemeldet.
-8. **Bericht.** Eine Zeile für Fall A: beide Zeiträume, beide FS, die
-   Fall-Definition, Abdeckung beider Wochen, das Urteil und die
-   Nachweistabelle mit beiden Läufen und ihren Ergebnisobjekten.
-
-Aufwand: ein Ganzjahres-Lauf für die Referenz (für beliebig viele Fälle
-gemeinsam) plus einer je unterschiedlichem Fall. Kein Lauf wird verkürzt.
-
----
-
-## 9. Fehlerbehandlung und Robustheit
-
-| Situation | Verhalten | Wo |
+| Abschnitt | Einstellung | Standard |
 |---|---|---|
-| Konfigurationsdatei mit falschen Typen, IDs, Regeln, eigenen Terminen | jedes Problem mit Fall genannt; der Lauf stoppt **vor** jeder Änderung in PowerFactory | `validate_case_config` |
-| Konfiguration unlesbar oder anderes Schema | Lauf stoppt mit Dateipfad; nie stillschweigend übergangen | `load_case_config` |
-| FS seit dem Speichern gelöscht oder umbenannt | dieser Fall NOT EVALUATED mit Pfad | `resolve_request` |
-| Fenster endet vor seinem Beginn | dieser Fall NOT EVALUATED | `resolve_request` |
-| feste FS unbekannt oder in PowerFactory „Ignored“ | Warnung in Log und Qualitätsseite | `resolve_request`, `_model_quality` |
-| Tk fehlt oder Dialog lässt sich nicht aufbauen | gilt als „Dialog nicht verfügbar“: gespeicherte Konfiguration, sonst je FS ein Fall; der Bericht nennt die Quelle | `run_case_manager`, `obtain_case_request` |
-| Fehler in einer Dialog-Schaltfläche | in einem Meldungsfenster angezeigt; Dialog bleibt offen; nichts gerechnet | `report_callback_exception` |
-| Dialog bricht während der Bedienung ab | Lauf stoppt, nichts gerechnet | `run_case_manager` |
-| Abbrechen | Lauf endet, nichts gerechnet, gespeichert oder publiziert; `main` protokolliert CANCELLED und reicht den Abbruch an den aufrufenden Reportablauf weiter, statt normal zurückzukehren. Der Aufrufer erhält damit keinen erfolgreichen Skriptabschluss. | `GridLensCancelled`, `main`; tatsächliche Behandlung durch IntReport noch in PowerFactory prüfen |
-| `outserv` nicht schreibbar | dieser Fall FAILED; Einstellungen zurückgesetzt | `_isolate_outages`, `StateGuard` |
-| QDS scheitert oder `ElmRes` nicht lesbar | dieser Fall FAILED; der nächste Fall läuft | `_run_planning_case` |
-| Vergleich scheitert unerwartet | dieser Fall NOT EVALUATED mit Grund; sein `ElmRes` bleibt; der nächste Fall läuft | `_run_planning_case` |
-| Speicherbudget (`MAX_RUN_CELLS`) überschritten | Stopp vor dem nächsten Lauf, nicht nach dem letzten; Zustand zurückgesetzt | `check_run_budget` |
-| Einstellung nicht rücksetzbar | Lauf stoppt mit erwartetem und gelesenem Wert | `StateRestoreError` |
-| Referenz scheitert | Lauf stoppt (kein Fall vergleichbar); Zustand zurückgesetzt | `_run_reference` |
-| Ergebnisobjekt zeichnet weder Auslastung noch Spannung auf (kein `c:loading`/`m:loading` von Leitungen und Trafos, kein `m:u`/`m:u1` von Knoten) | die Meldung nennt, was gebraucht wird, listet, was das `ElmRes` stattdessen aufzeichnet, und sagt, die Variablen in den Result Variables der QDS zu ergänzen oder einen anderen Study Case zu wählen; nur spannungslose Knoten werden als solche benannt | `collect_series`, `missing_series_message` |
-| Lauf scheitert ohne Publikation | das Skript endet mit Exit-Code 1 (`NO_REPORT_EXIT_CODE`), damit PowerFactory den Bericht nicht erzeugt; die letzte Logzeile sagt das (ein von Hand erzeugter Bericht scheitert mit „Scripted... not found“ in `ReportsNet.log`); ein erfolgreicher Lauf endet mit 0 und nennt den IntReport | `main`, `exit_code`, `NO_REPORT_DATA`; in PowerFactory zu prüfen |
-| Lauf scheitert ohne Publikation | die letzte Logzeile sagt, dass keine Berichtstabellen publiziert wurden und das Erzeugen des Berichts daher mit „Scripted... not found“ in `ReportsNet.log` scheitert; ein erfolgreicher Lauf nennt den IntReport, aus dem der Bericht erzeugt wird. Abbrechen nimmt den separaten Pfad mit Weitergabe des Abbruchs oben. | `main`, `NO_REPORT_DATA`, `execute_gridlens` |
-| Abdeckung unter 99,9 % | nie „NO LIMIT EXCEEDED“; der Text zeigt nie „100 %“ | `assess_case`, `percent_text` |
-| Fenster nicht auf der Zeitachse platzierbar | jeder Zeitschritt wird verglichen (langsamer); Warnung im Log, Hinweis im Bericht | `compare_case`, `_run_planning_case` |
-| mehrfach berechnetes Urteil könnte abweichen | jeder Fall wird nach den Läufen einmal beurteilt; Log, Falltabelle und Übersicht lesen dieses Urteil | `judge_cases`, `judged` |
+| Network scope | Report filter: assessed equipment, grids | jedes Netz |
+| Network scope | n-1 filter: grids of the outaged equipment | jedes Netz |
+| Network scope | n-1 filter: outaged elements | jedes Element |
+| Thermal limits | Warning threshold, lines / transformers | 80 % |
+| Thermal limits | Maximum loading for n-0, lines / transformers | 100 % |
+| Thermal limits | Limits for n-1 and (n-1)' | use PowerFactory limits |
+| Thermal limits | Global assessment limit for n-1 and (n-1)' | 100 % |
+| Voltage limits | Minimum / maximum voltage, every voltage level | 0,95 / 1,05 p.u. |
+| Voltage limits | De-energised below | 0,1 p.u. |
+| Classification | n-0 change tolerance, loading / voltage | 0,1 %-Punkte / 0,001 p.u. |
+| Classification | Limit tolerance, loading / voltage | 0 |
+| Classification | Numerical comparison tolerance | 1e-9 |
+| Classification | WORSENED / IMPROVED versus PRE_EXISTING, loading | 0,1 %-Punkte |
+| Classification | WORSENED / IMPROVED versus PRE_EXISTING, voltage | 0,001 p.u. |
+| Classification | Reduced margin warning from, loading | 80 % |
+| Report | Appendix: also list a loading / voltage change from | 1,0 %-Punkte / 0,005 p.u. |
+| Report | Rows of the Top-N lists | 10 (höchstens 50) |
+| Report | Points per time plot, at most | 200 (höchstens 2000) |
+| Run | Reference case (REF) | an |
+| Run | Planning cases, at most | 5 (höchstens 20) |
+| Run | n-1 study times per case, at most | 2000 (höchstens 20 000) |
+| Contingency analysis | Contingency Set, Kategorien, überwachter Umfang, AC/DC, Inselbildung, nicht versorgte Last, Lastabwurf, Post-Fault-Phasen, Abhilfemaßnahmen | nur lesend (Kategorie B) |
 
-Alle Wiederherstellungsschritte stehen in `finally` und laufen daher auch nach
-einem Fehler oder einem `KeyboardInterrupt`.
+Das Spannungsband 0,95–1,05 p.u. ist ein Vorschlag von GridLens und für das
+Netz zu bestätigen. Gespeichert werden nur Abweichungen, unter `settings` in
+der Fallkonfigurationsdatei. Der Bericht nennt jede Abweichung auf der
+Qualitätsseite (Zeile *Settings*, WARNING, wenn eine aktiv ist).
 
 ---
 
-## 10. Performance (Lieferteil H)
+## 10. Gespeicherte Konfiguration
 
-| Größe | Wo sie steht |
+Datei: `~/GridLens/cases/<Projekt>_<Hash>.v2.json` (Ordner änderbar mit
+`CASE_CONFIG_DIR`). Sie enthält Fälle, feste Außerbetriebnahmen, Regeln,
+Bewertungen und Einstellungsabweichungen, mit Schema, Revision, Benutzer und
+Zeit – nie Ergebnisse. Sie wird beim Laden Feld für Feld geprüft; eine
+beschädigte Datei stoppt den Lauf mit ihrem Pfad. *Save configuration* im
+Fallmanager schreibt sie; das Projekt bleibt unberührt.
+
+---
+
+## 11. Einen erhaltenen Lauf neu auswerten
+
+Die Auswahl *Results* im Fallmanager listet die erhaltenen Läufe des Study
+Case. Wird einer gewählt, entfällt Phase 1: Es wird nichts gerechnet und
+PowerFactory nicht verändert. Phase 2 liest die Objekte dieses Laufs mit den
+**aktuellen** Einstellungen (Grenzen, Toleranzen, Netze). Ein Fall, dessen
+Außerbetriebnahmen oder Fenster sich seitdem geändert haben (anderer
+Fingerabdruck) oder dessen Objekt fehlt, ist mit Grund NOT EVALUATED; eine
+geänderte REF stoppt den Lauf. Die n-1-Filter können in einer Neuauswertung nur
+Fehlerfälle weglassen, keine hinzufügen, die nicht gerechnet wurden.
+
+---
+
+## 12. Log
+
+| Teil | Inhalt |
 |---|---|
-| geplante QDS-Läufe | Vorschau im Fall-Manager: „Calculation runs: 1 reference + n case run(s)“ |
-| vermiedene Läufe | identische Fälle (gleiche FS, Fenster, feste FS) übernehmen das Ergebnis: Vorschau im Fall-Manager „n identical case(s) reused“, Nachweistabelle „CASE (reused)“ |
-| Zeitschritte je Lauf | Nachweistabelle `time_steps` |
-| gemessene Laufzeit | Nachweistabelle `elapsed_text`, Log (QDS und Vergleich getrennt) |
-| Zeitbasis | immer der ganze ComStatsim-Zeitraum; `qds_mode_text` sagt das im Bericht; vorgeschlagene Fenster gibt es nicht |
-
-Die GUI aktualisiert geänderte Tabellenzeilen, statt alle zu löschen und neu
-anzulegen. Filter blenden Zeilen aus und wieder ein; aus den Daten entfernte
-Zeilen werden auch dann gelöscht, wenn ein Filter sie verbirgt. Scrollposition
-und sichtbare Auswahl bleiben erhalten; der Tastaturfokus wird beim Ausfiltern
-zurückgesetzt. Ohne FS-Regeln entfällt das Sortieren aller FS-Namen je Aktualisierung.
-Ein lokales Tk-8.6-Profil mit 5.000 künstlichen FS, vier Fallwechseln und einem
-Häkchen benötigte vorher 0,758 s, danach 0,358 s: aus 25.000 neu angelegten Zeilen
-wurden 81 Zeilenupdates, ohne Neuanlegen/Löschen nach dem Öffnen. Das sind lokale
-GUI-Messungen, keine PowerFactory- oder QDS-Laufzeitmessungen.
-
-Grobes Modell (Vorgabe Abschnitt 27): `T ≈ (1 + m_unterschiedlich) · (τ_I + n · τ_L)`.
-Es wird keine Beschleunigung behauptet; in PowerFactory ist nichts gemessen.
+| Schritte | Abschnitte `STEP n/7`; ein Block je Falllauf |
+| Plan | jeder Fall mit Status, Außerbetriebnahmen, Fenstern, Netzzuständen, Wiederverwendung |
+| angewendete Außerbetriebnahmen | vor jedem Lauf: die Option und jede Außerbetriebnahme mit *Ignored* = 0 |
+| Ergebnisse | Urteil je Fall, Wirkung der Außerbetriebnahmen, Nachwirkung, n-1-Zusammenfassung |
+| Fehlerbericht | bei einem Fehler: der Fehler, Schritt und Fall, Ursachenkette, Details, Codestelle, PowerFactory-Zustand nach dem Zurücksetzen, erhaltene Ergebnisobjekte, letzte Warnungen, was zu tun ist |
+| Laufzusammenfassung | immer: Zeit und Aufrufe je Dienst (Outages lesen, Fallmanager, jede QDS und Contingency Analysis, Ergebnisse lesen, Vergleich, Zurücksetzen, Veröffentlichung) und Zählungen (QDS-Läufe, Zeitschritte, wiederverwendete Fälle, gelesene Werte, n-1-Studienzeitpunkte, Berichtszeilen) |
 
 ---
 
-## 11. Noch zu bestätigendes Verhalten in PowerFactory
+## 13. Fehlerbehandlung
 
-`ui/pf_acceptance_tests.py` stellt eigene native Abnahmeprüfungen bereit. `main.py` selbst wird in
-PowerFactory 2026 eingesetzt; dort gefundene Probleme werden gemeldet und dann
-behoben. Die folgenden Punkte sind in PowerFactory noch nicht bestätigt; eine
-Problemmeldung gehört meist zu einem davon:
-
-1. P2/P3: ein Fall mit zwei überlappenden FS – das Log nennt beide aktiv;
-   Auslastungen mit zwei Einzelfällen vergleichen (V02, V03).
-2. P5: eine Fenstergrenze bei Stundenschritten – erscheint die Wirkung in den
-   Fensterzeilen oder in den Spill-over-Zeilen?
-3. P6: die Ergebnisobjekte `GridLens_<stamp>_<Fall>` erscheinen im Study Case
-   und lassen sich öffnen.
-4. P9: der Fall-Manager öffnet sich, OK / Abbrechen funktionieren,
-   PowerFactory reagiert danach normal (V30, V31).
-5. Der Bericht rendert: eine Seite je Kapitel, die n-1-Kapitel 15 und 16 und
-   das Inhaltsverzeichnis mit 21 Einträgen (lokal mit Stimulsoft 2025.3.5
-   gerendert, 26.10.2026; in PowerFactory noch nicht).
-6. Speicher und Laufzeit eines Ganzjahreslaufs mit 10 Fällen.
-
-Eigene Termine je Fall brauchen zuerst eine eigene Probe
-(`powerfactory_tests/inspect_planned_outages.py` ist der Ort), dann eine Entscheidung, sie
-freizuschalten. Kürzere QDS-Fenster sind entfernt und nicht vorgesehen.
-
----
-
-## 12. Teil 1 und Teil 2, und was Teil 3 braucht
-
-Teil 1 (freigegeben am 23. Oktober 2026): `powerfactory_tests/inspect_contingency_interface.py`, streng
-lesend (kein `Execute`, `CreateObject`, `SetAttribute`, kein `GetFromStudyCase`,
-das einen fehlenden Befehl anlegt; `tests/test_inspect_contingency_interface.py` prüft den
-Quelltext). Probe 1.0 meldete ComSimoutage, ComStatsim, Contingency-Definitionen,
-Contingency-`ElmRes`, die `ElmRes`-Schnittstelle und Ablage-Kandidaten mit
-Namen und Werten. Seit dem 23. Oktober 2026 läuft Probe 2.0 im **strikten
-Privacy-Modus**: nur feste Labels und Status-Tokens, kein Name, Pfad, Wert,
-Zeitpunkt oder Zähler, jeder PowerFactory-Aufruf über ein lesendes Gateway
-(siehe Spezifikation, Abschnitt 2.1). Ihre Ausgabe darf weitergegeben werden;
-die übrigen Werkzeuge sind nur lokal. `powerfactory_tests/run_contingency_checks.py` bereitet eine
-sehr kleine Testrechnung auf einer ausdrücklich benannten Projektkopie vor; es ist abgeschaltet
-(`ENABLED = False`), fragt vor jedem Schreiben, stellt wieder her und prüft – und
-wird gesondert freigegeben.
-
-Teil 2: Fallmanager mit zwei Reitern, Settings mit Prüfung und vorläufiger
-Ablage, Tooltips, `classify_comparison` mit Tests. n-1 und (n-1)' bleiben
-deaktiviert.
-
-| Status | Funktion |
+| Situation | Verhalten |
 |---|---|
-| implementiert und lokal getestet (Unit-Tests) | Settings-Modell, Prüfung, Snapshot, `classify_comparison`, Entfernen der Zeitoptimierung, n-0 mit Settings (Regression mit Standards) |
-| nur mit Mock-Objekten oder lokalem Tk getestet | Fallmanager mit zwei Reitern, Settings-Reiter, Tooltips (Tk 8.6 unter macOS); die Probe gegen nachgebildete PowerFactory-Objekte |
-| braucht einen echten PowerFactory-2026-Test | der Probe-Lauf selbst; Tk in PowerFactory; der n-0-Lauf mit Settings-Overrides; die Berichtszeile *Settings* im gerenderten PDF |
-| Teil 3 (n-1-Lauf), mit Mock-Objekten getestet | n-1 und (n-1)' über `run_n1` / `run_n1_case` / `run_n1_sweep`, Zeitpunkte auf dem QDS-Raster in den Fenstern des Falls, Contingency-Grid-Filter, `compare_n1`, Zeilen *n-1 <Fall>* auf der QA-Seite (`tests/test_n1_core.py`); braucht einen echten PowerFactory-Lauf |
-| weiterhin nur gelesen | Parameter der Kategorie B außer den Contingency-Grids, Post-Fault-Spannungsgrenzen, native Ablage der Settings und von `GL_<Szenario>_CLASSIFICATION`, n-1-Berichtskapitel (Teil 4) |
+| Konfiguration mit falschen Typen, IDs, Regeln oder Terminen | jedes Problem mit seinem Fall genannt; der Lauf stoppt **vor** jeder Änderung in PowerFactory |
+| Konfigurationsdatei unlesbar oder mit anderem Schema | der Lauf stoppt mit dem Dateipfad |
+| Außerbetriebnahme seit dem Speichern gelöscht oder umbenannt | dieser Fall NOT EVALUATED mit dem Pfad |
+| feste Außerbetriebnahme unbekannt oder in PowerFactory *Ignored* | Warnung im Log und auf der Qualitätsseite |
+| Fallmanager-Fenster kann nicht öffnen | gespeicherte Konfiguration, sonst je Außerbetriebnahme ein Fall; der Bericht nennt das |
+| Fehler in einer Schaltfläche des Fensters | in einem Meldungsfenster angezeigt; das Fenster bleibt offen; nichts gerechnet |
+| Abbrechen | nichts gerechnet, gespeichert oder veröffentlicht; Abbruch an den Aufrufer weitergegeben |
+| `outserv` lässt sich nicht schreiben | dieser Fall FAILED; Werte zurückgesetzt; der nächste Fall läuft |
+| QDS scheitert oder ihr Ergebnis ist nicht lesbar | dieser Fall FAILED; der nächste Fall läuft |
+| Vergleich scheitert | dieser Fall NOT EVALUATED mit Grund; sein Ergebnisobjekt bleibt erhalten |
+| Referenz scheitert | der Lauf stoppt (kein Fall wäre vergleichbar); Zustand zurückgesetzt |
+| keine bewertete Variable aufgezeichnet | der Lauf stoppt nach der ersten QDS und nennt, was aufgezeichnet ist |
+| Speicherbudget überschritten | Stopp vor dem nächsten Fall; Zustand zurückgesetzt; gerechnete Läufe bleiben erhalten |
+| ein Wert lässt sich nicht zurücksetzen | der Lauf stoppt mit erwartetem und gefundenem Wert |
+| Fenster lassen sich nicht auf der Zeitachse platzieren | jeder Zeitschritt wird verglichen; Hinweis in Log und Bericht |
+| Abdeckung unter 99,9 % | nie NO LIMIT EXCEEDED |
+| nichts veröffentlicht | Rückgabecode 1; die letzte Logzeile sagt, dass keine Berichtstabellen veröffentlicht wurden |
 
-Voraussetzungen für Teil 3 (jede beantwortet durch die Ausgabe der Probe oder
-einen freigegebenen Lauf von `powerfactory_tests/run_contingency_checks.py`):
+Alle Rücksetzschritte laufen in `finally`, also auch nach einem Fehler oder
+einem Abbruch.
 
-1. Time Sweep des ComSimoutage: Attribute und Nachweis, dass er genau die
-   ComStatsim-Zeitschritte rechnet (Beginn, Ende, Schritt, letzter Schritt).
-2. Ob der Time Sweep `IntPlannedout` in ihren Fenstern mit derselben
-   `iopt_maint`-/`outserv`-Semantik wie die QDS anwendet.
-3. Das Objekt des Contingency-Sets, unverändert gemeinsam für n-1 und (n-1)'.
-4. Ergebnisstruktur: wie eine Zeile Fehlerfall, Zeitschritt und Post-Fault-Phase
-   benennt; dicht oder dünn besetzt; wie die vollständige Menge der Kombinationen
-   Fehlerfall × Zeitpunkt nachgewiesen wird.
-5. Das Ergebnis von PowerFactory für einen Fehlerfall, dessen Betriebsmittel
-   bereits ausgeschaltet ist (→ NOT_APPLICABLE).
-6. Auf welche Bemessung sich `c:loading` nach einem Fehlerfall bezieht
-   (Post-Fault-Bemessung).
-7. Eine `ElmRes`-Schreibmethode, die Klassifizierungscodes speichert und
-   unverändert zurückliest (`GL_<Szenario>_CLASSIFICATION`), und ein natives
-   Projektobjekt für Settings, Snapshots und Fallkonfigurationen.
-8. Zustandskonsistenz zeitgekoppelter Modelle (`ElmQdsl`) zwischen QDS und
-   Time Sweep.
+---
+
+## 14. Laufzeit
+
+`T ≈ (1 + m) · (τ_I + n · τ_L)` mit `m` unterschiedlichen Fällen, `n`
+Zeitschritten, `τ_I` der Initialisierung und `τ_L` einem Lastfluss der QDS;
+n-1 fügt einen Fehlerfall-Sweep je unterschiedlicher Menge von
+Studienzeitpunkten und einen je (n-1)'-Fall hinzu. Jeder Lauf umfasst den
+vollständigen ComStatsim-Zeitraum. Die Vorschau im Fallmanager zeigt die Zahl
+der Läufe vor dem Start („1 reference + n case run(s)“, „n identical case(s)
+reused“); der Bericht zeigt die gemessene Zeit je Lauf.
+
+---
+
+## 15. Worauf in PowerFactory zu achten ist
+
+Diese Verhaltensweisen von PowerFactory sind in einem echten Lauf noch nicht
+bestätigt. Eine Problemmeldung gehört meist zu einer davon:
+
+1. Mehrere aktive Außerbetriebnahmen in einem Fall: das Log nennt alle als
+   aktiv; die Auslastungen passen zu zwei Einzelfällen.
+2. Eine Fenstergrenze: erscheint die Wirkung in den Fensterzeilen oder in den
+   Spill-over-Zeilen (eine um einen Schritt verspätete Wirkung wird als
+   Spill-over bewertet)?
+3. Die Ergebnisobjekte `GridLens_<stamp>_<Fall>` erscheinen im Study Case und
+   lassen sich öffnen.
+4. Der Fallmanager öffnet sich, *Start calculation* und *Cancel* funktionieren,
+   PowerFactory reagiert danach normal.
+5. Der Bericht rendert mit einer Seite je Kapitel.
+6. Speicher und Laufzeit eines Ganzjahreslaufs mit vielen Fällen.

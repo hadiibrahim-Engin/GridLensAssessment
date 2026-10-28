@@ -4,7 +4,7 @@ Dieses Dokument beschreibt alles, was GridLens in PowerFactory 2026 tut: wie es
 Objekte findet und liest, was es schreibt und wieder zurücksetzt, wie Planned
 Outages wirken, wie die quasi-dynamische Simulation (QDS) und die Contingency
 Analysis (n-1) laufen und wie aus der Fallkonfiguration Rechnungen werden.
-Stand: GridLens 8.0.0, 24. Oktober 2026. Englische Fassung:
+Englische Fassung:
 [`docs/POWERFACTORY.md`](../POWERFACTORY.md). Beide Fassungen werden gemeinsam
 gepflegt.
 
@@ -428,8 +428,8 @@ neu auswerten.
 | Zwei Außerbetriebnahmen auf demselben Betriebsmittel | offen |
 | Fall-Manager (tkinter) innerhalb von PowerFactory | genutzt |
 
-Weitere Annahmen (P1–P10) und die Testmatrix stehen in
-[`ARCHITEKTUR.md`](ARCHITEKTUR.md) und [`TESTMATRIX.md`](TESTMATRIX.md).
+Worauf bei einem echten Lauf zu achten ist, steht in
+[`ARCHITEKTUR.md`, Abschnitt 15](ARCHITEKTUR.md#15-worauf-in-powerfactory-zu-achten-ist).
 
 ---
 

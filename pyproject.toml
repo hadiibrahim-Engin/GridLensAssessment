@@ -10,7 +10,7 @@ dev = [
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
-    "gui: requires a real interactive desktop (Tk or optional PyQt)",
+    "gui: automated native GUI test, opt-in with --run-gui; requires a graphical session",
     "optional_qt: native Qt smoke test requiring a separately managed PyQt installation",
 ]
 

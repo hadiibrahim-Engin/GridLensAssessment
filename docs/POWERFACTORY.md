@@ -3,8 +3,7 @@
 This document describes everything GridLens does in PowerFactory 2026: how it
 finds and reads objects, what it writes and puts back, how planned outages take
 effect, how the quasi-dynamic simulation (QDS) and the contingency analysis
-(n-1) run, and how the case configuration becomes calculations. As of GridLens
-8.0.0, 24 October 2026. German version:
+(n-1) run, and how the case configuration becomes calculations. German version:
 [`docs/de/POWERFACTORY.md`](de/POWERFACTORY.md). Both versions are maintained
 together.
 
@@ -417,8 +416,8 @@ manager.
 | two planned outages on the same element | open |
 | the case manager (tkinter) inside PowerFactory | used |
 
-Further assumptions (P1–P10) and the test matrix are in
-[`ARCHITECTURE.md`](ARCHITECTURE.md) and [`TEST_MATRIX.md`](TEST_MATRIX.md).
+The points to watch in a real run are listed in
+[`ARCHITECTURE.md`, section 15](ARCHITECTURE.md#15-points-to-watch-in-powerfactory).
 
 ---
 

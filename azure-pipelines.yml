@@ -45,8 +45,8 @@ jobs:
       - script: python -m ruff check . --output-format=azure
         displayName: Ruff
 
-      - script: python -m pytest -q -ra -m "not gui" --junitxml="$(Agent.TempDirectory)/pytest.xml"
-        displayName: Tests ($(runtime))
+      - script: python -m pytest -v -ra -m "not gui" --gui-timeout=60 --junitxml="$(Agent.TempDirectory)/pytest.xml"
+        displayName: Unattended tests ($(runtime), no native GUI)
         env:
           GRIDLENS_TEST_RUNTIME: $(runtime)
           PYTHONUTF8: '1'

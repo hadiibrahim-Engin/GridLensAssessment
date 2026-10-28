@@ -1,404 +1,288 @@
-# GridLens Fall-Manager – Bedienungsanleitung
+# GridLens Fallmanager – Bedienungsanleitung
 
 Englische Fassung: [../CASE_MANAGER.md](../CASE_MANAGER.md)
 
-Der Fall-Manager ist das Fenster, das GridLens beim Start des ComPython öffnet
-(`CASE_SOURCE = 'gui'`). Er **konfiguriert** nur die Berechnung. Er zeigt keine
-Ergebnisse: Ergebnisse, Grenzwertverletzungen und Diagramme stehen im
-PDF-Bericht, den die bestehende GridLens-Publikation nach der Rechnung erzeugt.
-PowerFactory wartet, solange das Fenster offen ist; vor **Start calculation**
-wird nichts gerechnet und nichts verändert. Die Beschriftungen im Fenster sind
-englisch wie Code, Log und Bericht; hier stehen sie kursiv.
+Der Fallmanager ist das Fenster, das GridLens öffnet, wenn das ComPython mit
+`CASE_SOURCE = 'gui'` läuft. Es **konfiguriert** nur die Rechnung: welche
+Planungsfälle, welche festen Hintergrund-Außerbetriebnahmen und Regeln, welche
+Bewertungen und welche Einstellungen. Es zeigt keine Ergebnisse; die stehen im
+Bericht. PowerFactory wartet, solange das Fenster offen ist, und vor **Start
+calculation** wird im Projekt nichts gerechnet oder geändert.
 
-Technik: `tkinter` / `ttk` des Python, das PowerFactory ausführt, einheitlich
-über `ttk.Style` (Thema `clam`); `tk.Canvas` nur für die Zeitachse. Kein
-weiteres Paket.
+`main.py` zeichnet das Fenster mit tkinter/ttk, `main_qt.py` mit PyQt6 oder
+PyQt5 (wählbar mit `QT_BINDING`). Beide bieten dieselben Funktionen und
+übergeben GridLens dieselbe Konfiguration.
 
 ## Aufbau
 
-Das Fenster öffnet mittig mit etwa 86 % des Bildschirms (höchstens 1480 × 860, nie größer als der Bildschirm).
-**Genau zwei Reiter**, *Case Manager* und *Settings*; einen Ergebnis-Reiter gibt es nicht.
-Statuszeile und Aktionsleiste bleiben auf beiden Reitern sichtbar:
+Zwei Seiten, *Case Manager* und *Settings*. Eine Statuszeile und die
+Aktionsleiste (*Save configuration*, *Load saved configuration*, *Cancel*,
+*Start calculation*) bleiben auf beiden sichtbar.
 
 ```
  [ Case Manager (1) ] [ Settings ]
 +--------------------------------------+------------------------------------+------------------------+
-| Available planned outages            | Case A - Sommermaßnahmen           | Planning cases  2 of 5 |
-| In case  Planned outage Equip. Start | 2 case outages · 1 fixed backgr.   | Planning case Outg Stat|
-| ☑ in case FS Bedarf 1 NE_L1  ...     | FS Bedarf 1    NE_L1  ...          | Sommer         2  ready|
-| ☐       FS Bedarf 3    NE_L7  ...    | FS Bedarf 2    NE_L2  ...          | Nord-Ost       1  ready|
+| Available planned outages            | Case C1 - Sommermaßnahmen          | Planning cases  2 of 5 |
+| In case  Planned outage Equip. Start | 2 case outages · 1 fixed backgr.   | Run Planning case Stat.|
+| ☑        FS Bedarf 1    NE_L1  ...   | FS Bedarf 1    NE_L1  ...          | ☑   Sommer       ready |
+| ☐        FS Bedarf 3    NE_L7  ...   | FS Bedarf 2    NE_L2  ...          | ☑   Nordost      ready |
 | [Add to case] [Set as fixed] [Det.]  | [Remove from case] [Details]       | [New][Copy][Delete]    |
 |                                      | Timeline of the case               |                        |
 +--------------------------------------+------------------------------------+------------------------+
 | Calculation                                  | Problems and warnings                                 |
-| [x] n-0 - reference QDS                      | Where        Problem                                  |
-| [ ] n-1 - reference contingency analysis     | Leer         Not calculated: no planned outage ...    |
+| n-0 always                                   | Where        Problem                                  |
+| [ ] n-1 - reference contingency analysis     | C3           Not calculated: no planned outage ...    |
 | [ ] (n-1)' - ... planned-outage scenarios    |                                                       |
-| QDS: ...        [Show calculation preview]   |                                                       |
+| QDS ...   Results: Calculate now             |                                                       |
+| Show calculation preview                     |                                                       |
 +----------------------------------------------+-------------------------------------------------------+
- QDS ... · n-0 · 3 of 4 cases ready · 1 problem · default settings
- [Save configuration] [Load saved]                                    [Cancel] [Start calculation]
+ QDS ... · n-0 · 2 of 3 cases ready · 1 problem or warning · default settings
+ [Save configuration] [Load saved configuration]                       [Cancel] [Start calculation]
 ```
 
-- **Case Manager** – oben die drei Bereiche, etwa 40 % / 38 % / 22 %, Trennlinien verschiebbar.
-  Von links nach rechts der Weg einer FS: aus der Library in den gewählten
-  Fall, der rechts ausgewählt wird.
-  - **Verfügbare Freischaltungen** (links): alle FS (`IntPlannedout`) der Library mit *In case*
-    (`in case`, `fixed`, leer; auch als Zeilenfarbe), *Planned outage,
-    Equipment, Start, End, Status*; *Add to case* (oder Enter, für alle markierten Zeilen),
-    *Set as fixed background*, *Details* (auch Doppelklick auf eine Zeile).
-    Die erste Spalte *In case* ist ein **Häkchen**: anhaken (Klick oder
-    Leertaste) nimmt die FS in den gewählten Fall auf, abhaken beendet die
-    Zuordnung; `☑ in case`, `☐` frei, `fixed` (nicht anhakbar). Demand
-    Transfers (`IntOutage`) werden nicht gelesen: Sie verschieben Last und
-    schalten kein Betriebsmittel.
-  - **Der gewählte Fall** (Mitte): Titel *Case A - Name*, die Zeile *n case outages ·
-    m fixed background outages*, die Tabelle *Planned outage, Equipment, Start,
-    End, Priority*, *Remove from case*, *Details* und die Zeitachse des Falls.
-  - **Planungsfälle** (rechts) – **höchstens 5**; der Zähler *2 of 5 cases* steht über der
-    Tabelle, bei fünf sind *New* und *Copy* gesperrt. Tabelle *Planning case, Outages*
-    (Zahl der FS), *Status* (`ready`, `not calculated`, `excluded`). Niemand
-    vergibt eine ID: GridLens nummeriert die Fälle selbst (C1 … C5, die kleinste
-    freie Nummer) und nutzt die ID nur intern (Ergebnisobjekte
-    `GridLens_<stamp>_C1`, Bericht). Darunter *New, Copy, Delete*, *One
-    case per planned outage* (legt höchstens fünf an) sowie für den gewählten Fall
-    *Run*. Jeder Fall enthält nur seine direkt zugeordneten
-    Freischaltungen. Kopieren, Ändern oder Löschen verändert die anderen Fälle nicht.
-  - **Calculation** (unten links): *n-0 - reference QDS*, *n-1 - reference
-    contingency analysis* und *(n-1)' - contingency analysis with
-    planned-outage scenarios*. n-0 (die QDS von REF und jedem Fall) wird immer
-    gerechnet und hat kein Bedienelement; (n-1)' braucht n-1 (ein Haken bei
-    (n-1)' setzt n-1). *Results*: *Calculate now* oder *Re-evaluate the kept
-    run of <Datum Zeit>* – dann wird nichts gerechnet, und die behaltenen
-    Ergebnisobjekte dieses Laufs werden mit den aktuellen Settings neu bewertet;
-    ein seitdem geänderter Fall ist NOT EVALUATED. Die Auswahl wird nicht mit den
-    Fällen gespeichert. Dazu der QDS-Zeitraum des aktiven
-    ComStatsim und *Show calculation preview* (einklappbar, siehe unten).
-  - **Problems and warnings** (unten rechts): alles, was die Berechnung
-    verhindert oder einschränkt, auch ungültige Settings. Der Reiter zeigt die
-    Zahl, z. B. *Case Manager (1)*.
-- **Settings** – eine Leiste (*Restore defaults*, *Apply settings*, *Save
-  settings*, Zustand der Settings) und sechs Seiten:
-  - *Network scope*: zwei Listen mit **jedem Grid des Modells** (inaktive
-    gekennzeichnet; das Summary Grid eines Study Case wird nicht angeboten)
-    und eine Betriebsmittel-Liste. *Report filter: assessed equipment*: nur
-    Leitungen, Transformatoren und Knoten in den gewählten Grids werden
-    bewertet (n-0 und die in n-1 beobachteten Betriebsmittel); keine Auswahl =
-    jedes Grid; keine Wirkung auf die Rechnung, wirkt vollständig bei der
-    Neuauswertung eines erhaltenen Laufs; *Select all grids*, *Clear
-    selection*. *n-1 filter: contingencies by grid*: *Every grid (no filter)*
-    oder *Own selection*; darunter die Vorschau „x of y contingencies … in
-    scope“. *n-1 filter: outaged elements* (darunter in derselben Karte):
-    durchsuchbare Liste der Betriebsmittel, die die Fehlerfälle ausschalten;
-    nur Fehlerfälle mit einem gewählten Betriebsmittel werden gerechnet, keine
-    Auswahl = jedes Betriebsmittel. Der n-1-Lauf setzt die von
-    beiden n-1-Filtern ausgelassenen Fehlerfälle für den Lauf auf *Not analysed*
-    und setzt sie zurück; bei einer Neuauswertung bleiben sie aus der
-    Auswertung. Eine Auswahl wirkt sofort. Siehe
-    [`BERECHNUNG_UND_AUSWERTUNG.md`](BERECHNUNG_UND_AUSWERTUNG.md).
-  - *Limits*: thermische Grenzwerte (Warnschwellen und n-0-Grenzen, Leitungen
-    und Transformatoren getrennt; Grenzwertbehandlung für n-1 und (n-1)') und
-    Spannungsgrenzen (ein Band in p.u. der Nennspannung für jede Spannungsebene,
-    Standard 0,95–1,05 p.u., als GridLens-Vorschlag gekennzeichnet; die
-    Spannungslos-Schwelle 0,1 p.u.; Post-Fault-Spannungsgrenzen schreibgeschützt).
-  - *Report and run*: Anhang-Schwellen (1 %-Punkt, 0,005 p.u.), Zeilen der
-    Top-N-Listen (10), Punkte je Zeitplot (200), der Referenzfall REF (an/aus),
-    höchstens Planungsfälle (5, bis 20) und höchstens n-1-Zeitpunkte je Fall
-    (2000). Die Fall-Grenze wirkt sofort im Reiter Case Manager.
-  - *Classification*: n-0-Änderungstoleranzen und die Parameter der
-    n-1-/(n-1)'-Klassifizierung (Regelversion 1.0).
-  - *Contingency analysis*: Contingency-Set, Kategorien, überwachter Bereich,
-    AC/DC, Inselbildung, nicht versorgte Last, Lastabwurf, Post-Fault-Phasen,
-    Remedial Actions – Kategorie B, **schreibgeschützt** (`not verified yet`).
-    Ohne Contingency Analysis im Study Case legt GridLens für n-1 selbst eine
-    an (siehe Berechnungsoptionen).
-  - *QDS time base*: Beginn, Ende, Zeitschritt und Zeitdefinition des aktiven
-    ComStatsim, schreibgeschützt.
-  - *Fixed background & rules*: der bisherige Reiter dieses Namens, unverändert:
-    die festen Hintergrund-FS (Rfix) mit *Remove from fixed background* und die
-    Regeln zwischen FS mit drei Auswahllisten, *Add rule*, *Remove rule*.
-- **Statuszeile** (beide Reiter): QDS-Zeitraum, Bewertung, rechenbare Fälle,
-  Problemzahl in Rot, Zahl der Settings-Overrides; ein Klick öffnet *Case Manager*.
+### Seite *Case Manager*
 
-### Settings-Felder
+Die drei Bereiche folgen dem Weg einer Außerbetriebnahme: aus der Bibliothek
+(links) in den gewählten Fall (Mitte), der rechts ausgewählt wird. Die Trenner
+lassen sich ziehen.
 
-Jede Zeile: *Setting, Value, Unit, Source, Category* und eine Meldung. *Source*
-ist `GridLens` (GridLens-Standard), `PowerFactory` (aus Modell oder
-Berechnungskonfiguration gelesen – derzeit nur die schreibgeschützten Felder der
-Kategorie B, angezeigt als `not verified yet`), `user` (übernommener Override)
-oder `edited, not applied`. *Category* ist `A · evaluation` (deutet Ergebnisse,
-ändert nie Lastfluss, Bemessung oder Modell) oder `B · calculation` (würde
-ändern, was PowerFactory rechnet; bis zur Verifikation schreibgeschützt).
+- **Available planned outages** (links): jede `IntPlannedout` des Projekts mit
+  *In case, Planned outage, Equipment, Start, End, Status*.
+  - *In case* ist ein Kontrollkästchen: ankreuzen (Klick oder Leertaste), und
+    die Außerbetriebnahme gehört zum gewählten Fall; Haken entfernen, und die
+    Zuordnung endet. Eine feste Hintergrund-Außerbetriebnahme zeigt *fixed*
+    und lässt sich nicht ankreuzen.
+  - *Status*: *in simulated period*, *outside simulated period* (in diesem
+    Lauf ohne Wirkung) oder *Ignored in PowerFactory* (nur in einem Fall
+    angewendet, der sie enthält).
+  - *Add to case* (oder Enter) ordnet alle markierten Zeilen zu, *Set as fixed
+    background* macht sie fest, *Details* (oder Doppelklick) öffnet das
+    Detailfenster.
+  - Lastverlagerungen (`IntOutage`) werden nicht gelistet: sie verschieben
+    Last und schalten keine Betriebsmittel.
+- **Der gewählte Fall** (Mitte): sein Name, die Beschreibung (Doppelklick in
+  `main.py`, Klick in `main_qt.py`), die Zählzeile *n case outages · m fixed
+  background outages*, seine Außerbetriebnahmen mit *Planned outage,
+  Equipment, Start, End, Priority*, *Remove from case*, *Details* und die
+  Zeitleiste.
+- **Planning cases** (rechts): höchstens so viele, wie *Settings → Report and
+  run → Planning cases, at most* erlaubt (Standard 5, bis 20); der Zähler *2 of
+  5 cases* wird an der Grenze rot, *New*/*Copy* sind dann gesperrt.
+  - *Run* (erste Spalte): angekreuzt = gerechnet und berichtet; leer =
+    ausgeschlossen, bleibt in der Konfiguration, wird aber weder gerechnet noch
+    berichtet.
+  - *Planning case*: der Name; Doppelklick, F2 oder Enter bearbeitet ihn direkt
+    in der Zeile.
+  - *Outages*: die Zahl der zugeordneten Außerbetriebnahmen.
+  - *Status*: *ready*, *not calculated* (der Grund steht unter *Problems and
+    warnings*) oder *excluded*.
+  - *New*, *Copy*, *Delete*, *One case per planned outage*.
+  - IDs (`C1`, `C2`, …) werden erzeugt, nie eingetippt. Sie benennen die
+    Ergebnisobjekte (`GridLens_<stamp>_C1`) und bleiben beim Umbenennen.
+- **Calculation** (unten links):
+  - n-0 (die QDS von REF und jedem Fall) wird immer gerechnet.
+  - *n-1 – reference contingency analysis* und *(n-1)' – contingency analysis
+    with planned-outage scenarios*. (n-1)' braucht n-1: Ankreuzen von (n-1)'
+    kreuzt n-1 an, Abwählen von n-1 wählt (n-1)' ab.
+  - Der QDS-Zeitraum des aktiven ComStatsim.
+  - *Results*: *Calculate now* oder *Re-evaluate the kept run of <Datum Zeit>*.
+    Die Neuauswertung rechnet nichts; sie liest die Ergebnisobjekte dieses
+    Laufs mit den aktuellen Einstellungen. Die Auswahl wird nicht gespeichert.
+  - *Show calculation preview*: die schreibgeschützte Vorschau dessen, was
+    gerechnet wird.
+- **Problems and warnings** (unten rechts): alles, was die Rechnung stoppt oder
+  einschränkt, mit dem Ort. Der Seitenreiter zeigt die Zahl, z. B. *Case
+  Manager (1)*.
 
-Jede Eingabe wird beim Tippen geprüft: endliche Zahl, positive Grenzen,
-nicht negative Toleranzen, ein Wert aus der Liste für die n-1-Grenzwertbehandlung.
-Bei *Apply* zusätzlich Spannungslos-Schwelle < Minimum < Maximum der Spannung und
-Warnschwelle ≤ Grenze. Ein ungültiges Feld wird rot mit seiner Meldung, der Reiter heißt
-*Settings (!)*, und *Start calculation* sowie *Save* lehnen mit der Liste der
-Probleme ab. *Start calculation* und *Save* übernehmen geänderte Werte zuerst.
-*Restore defaults* entfernt jeden Override.
+### Seite *Settings*
 
-Gespeichert werden nur Overrides, unter `settings` in der Konfigurationsdatei
-der Fälle. **Diese JSON-Ablage ist vorläufig** (Teil 2); eine native Ablage im
-PowerFactory-Projekt und ein gespeicherter Settings-Snapshot je Lauf folgen,
-sobald die Probe ein geeignetes Objekt gefunden hat. Zu Beginn eines Laufs
-werden die Settings als Snapshot festgehalten (Werte, Herkunft, Overrides,
-Settings-Version 1.0, Klassifizierungsregeln 1.0) und im Log sowie im Bericht
-genannt (*Model Quality Assurance*, Zeile *Settings*).
+Eine Aktionsleiste (*Restore defaults*, *Apply settings*, *Save settings*, der
+Zustand der Einstellungen) und sieben Bereiche:
 
-### Filtern und Sortieren – jede Tabelle
+| Bereich | Inhalt |
+|---|---|
+| Network scope | *Report filter: assessed equipment* (Netze, deren Leitungen, Transformatoren und Knoten bewertet werden; keine Auswahl = jedes Netz; ohne Wirkung auf die Rechnung); *n-1 filter: contingencies by grid* (*Every grid* oder *Own selection*, mit der Zahl der Fehlerfälle im Umfang); *n-1 filter: outaged elements* (nur Fehlerfälle, die ein gewähltes Element ausfallen lassen, werden gerechnet). Eine Auswahl wirkt sofort. |
+| Limits | Warnschwellen und n-0-Grenzen (Leitungen und Transformatoren getrennt), die n-1-Grenzbehandlung, das Spannungsband in p.u. für jede Spannungsebene, die Spannungslos-Schwelle; Post-Fault-Spannungsgrenzen nur lesend |
+| Classification | n-0-Änderungstoleranzen und die Klassifikationsparameter für n-1 / (n-1)' |
+| Report and run | Anhangsschwellen, Top-N-Zeilen, Punkte je Zeitplot, REF an/aus, die Fallgrenze, n-1-Studienzeitpunkte je Fall |
+| Contingency analysis | Contingency Set, Kategorien, überwachter Umfang, AC/DC, Inselbildung, nicht versorgte Last, Lastabwurf, Post-Fault-Phasen, Abhilfemaßnahmen – nur lesend |
+| QDS time base | Beginn, Ende, Zeitschritt des aktiven ComStatsim, nur lesend |
+| Fixed background & rules | die festen Hintergrund-Außerbetriebnahmen und die Regeln zwischen Planned Outages |
 
-- Eine **Filterzeile** direkt unter den Spaltenköpfen: ein Textfeld je
-  Textspalte (zeigt Zeilen, die den Text enthalten, ohne Groß/Klein) und eine
-  Auswahlliste je Kategoriespalte (*Status*, *In case*, *Rule*; *All* schaltet
-  sie ab). Filter mehrerer Spalten gelten zusammen.
-- Unter der Tabelle: *12 of 48 shown · Clear filters* (nur solange ein Filter
-  aktiv ist).
-- Ein **Klick auf einen Spaltenkopf** sortiert nach der Spalte, ein zweiter
-  kehrt die Reihenfolge um (▲/▼ hinter der Überschrift); Zahlen nach Wert.
-- Filtern und Sortieren ändern nur die Anzeige, nie die Konfiguration. Köpfe
-  und Filter folgen der Tabellenbreite; auf schmalen Bildschirmen schrumpfen
-  alle Spalten anteilig.
+Jede Einstellungszeile zeigt *Setting, Value, Unit, Source, Category* und eine
+Meldung:
 
-### Hilfe beim Überfahren mit der Maus
+- *Source*: `GridLens` (Standard), `PowerFactory` (aus dem Modell gelesen),
+  `user` (eine übernommene Abweichung) oder `edited, not applied`.
+- *Category*: `A · evaluation` interpretiert Ergebnisse und ändert nie einen
+  Lastfluss, eine Bemessung oder das Modell. `B · calculation` würde ändern,
+  was PowerFactory rechnet, und ist nur lesend.
 
-Bleibt die Maus etwa eine halbe Sekunde auf einem Bedienelement, erscheint
-eine Erklärung, was es für die Berechnung bewirkt: jede Schaltfläche, *Run*, Name und Beschreibung, der Fallzähler, die Spaltenköpfe mit
-Kategorien (*Status*, *In case*, *Outages*, *Priority*, *Rule*; jeder nennt auch das
-Sortieren), jedes Filterfeld, die Legende der Zeitachse, die Regelauswahl,
-n-0, n-1, (n-1)', der QDS-Zeitraum, die Statuszeile sowie jedes Feld und jede
-Schaltfläche unter *Settings*. Die Verzögerung beträgt 450 ms; der Text
-verschwindet beim Verlassen, bei einem Klick oder einer Taste. Bindungen werden
-ergänzt (`add='+'`), nie ersetzt, und ein Tooltip startet nie eine Berechnung.
-Die Texte stehen englisch in `HELP_TEXTS`, `SETTING_HELP` und `COLUMN_HELP` von
-`main.py` (Klasse `Tooltip`, nur Standardbibliothek); die Texte zu
-n-0, n-1, (n-1)', Planned Outages, QDS-Zeitschritt, Contingency-Set,
-Grenzwerten, Klassifizierung und Settings folgen dem Master-Prompt, ins
-Englische übersetzt.
+Jeder Wert wird beim Tippen geprüft: endliche Zahl, positive Grenzen,
+nicht-negative Toleranzen, ein Wert aus der Liste. *Apply* prüft zusätzlich
+Spannungslos-Schwelle < Minimum < Maximum und Warnung ≤ Grenze. Ein ungültiges
+Feld wird rot mit seiner Meldung, der Seitenreiter zeigt *Settings (!)*;
+*Start calculation* und *Save* lehnen ab, bis es behoben ist. *Start
+calculation* und *Save* übernehmen bearbeitete Werte zuerst. *Restore
+defaults* entfernt jede Abweichung. Standardwerte und Bedeutung jeder
+Einstellung: [ARCHITEKTUR.md, Abschnitt 9](ARCHITEKTUR.md#9-einstellungen).
 
-## Gestaltung und direkt sichtbare Hilfe
+### Statuszeile
 
-Eine dunkelblaue Kopfzeile kennzeichnet den Planungsbereich. Tabellen nutzen
-einheitliche Blau-Grautöne, größere native Schriften, 26 Pixel hohe Zeilen und
-eine deutliche Auswahl. Hinweise brechen passend zur Spaltenbreite um; die
-Statuszeile steht über der Aktionszeile und verdrängt weder Cancel noch Start
-calculation. Strg+Tab wechselt zwischen Reitern. Die erste Spalte der Falltabelle zeigt das Run-Häkchen (☑/☐). Ein Klick oder die Leertaste auf der fokussierten Zeile schaltet den Fall ein/aus. Abgewählte Fälle bleiben gespeichert und entfallen aus Berechnung und Bericht. Der separate Bereich Selected case entfällt. Die Regelauswahl ist beschriftet und passt sich der Breite an. Es
-bleibt bei Standard-Tk/ttk, ohne neue Abhängigkeit oder Animation. Publisher und
-eigenständiges GUI-Testskript zeigen dieselbe Gestaltung.
+QDS-Zeitraum, Bewertungen, bereite Fälle, Zahl der Probleme (rot) und
+Einstellungsabweichungen. Ein Klick öffnet die Seite *Case Manager*.
 
-## Unabhängige Planungsfälle
+## Mit Fällen arbeiten
 
-Jeder Fall wird durch direkte Zuordnung seiner Freischaltungen gestaltet. Beispiel:
+Jeder Fall enthält nur die ihm direkt zugeordneten Außerbetriebnahmen.
+Dieselbe Außerbetriebnahme kann in mehreren Fällen stehen. Beispiel:
 
 - C1: FS Nord.
 - C2: FS Süd.
-- C3: FS Nord und FS Süd, beide direkt zugeordnet.
+- C3: FS Nord und FS Süd, beide direkt zugeordnet – die gemeinsame Planung.
 
-Dieselbe Freischaltung darf in mehreren Fällen stehen. Kein Fall übernimmt
-Freischaltungen eines anderen Falls oder setzt ihn voraus; Kombinationen werden
-nicht durch Fallbeziehungen eingeschränkt. Für eine Variante einen Fall kopieren
-und die Kopie anpassen. Löschen oder Ausschließen von C1 lässt C2 und C3 unverändert.
+Kein Fall erbt von einem anderen, hängt von ihm ab oder schließt eine
+Kombination aus. Für eine Variante einen Fall kopieren und die Kopie ändern;
+Löschen oder Ausschließen von C1 lässt C2 und C3 unverändert.
 
-Gespeicherte Konfigurationen der Version 1 werden beim Öffnen im Speicher in
-Version 2 überführt: bisher übernommene Freischaltungen und ihre wirksamen eigenen
-Termine werden direkt zugeordnet; Voraussetzungen und Alternativbeziehungen
-entfallen. Falls Beziehungen vorhanden waren, zeigt *Problems and warnings* einen Hinweis
-zur Prüfung der Zuordnungen. Die ursprüngliche Datei bleibt bis zum Speichern
-unverändert. Ungültige alte Verweise oder Kreise werden mit Dateipfad gemeldet,
-statt Zuordnungen stillschweigend zu verlieren.
+**Feste Hintergrund-Außerbetriebnahmen** (*Settings → Fixed background &
+rules*) sind in der Referenz (dann Rfix) und in jedem Fall aktiv. Eine
+Außerbetriebnahme, die einem Fall zugeordnet ist, kann nicht fest werden; so
+wirkt sie nie doppelt.
 
-Die Regeln auf *Fixed background & rules* gelten zwischen zwei
-**Freischaltungen** in jedem Fall: *must not overlap* (Fenster dürfen sich
-nicht überschneiden), *second only after the first* (die zweite beginnt erst
-nach dem Ende der ersten), *only together* (ein Fall mit der einen enthält
-auch die andere, mit überlappenden Zeitfenstern). Ein Fall, der eine Regel bricht, wird
-nicht gerechnet und gemeldet.
+**Regeln** gelten in jedem Fall: *must not overlap* (Fenster dürfen sich nicht
+überlappen), *second only after the first* (die zweite beginnt erst, wenn die
+erste geendet hat), *only together* (ein Fall mit einer enthält die andere,
+zeitlich überlappend). Ein Fall, der eine Regel verletzt, wird nicht gerechnet
+und berichtet.
+
+**Eigene Termine je Außerbetriebnahme** lassen sich im Detailfenster eingeben.
+Sie werden nur erfasst, nicht angewendet; ein solcher Fall wird NOT EVALUATED
+berichtet. Für einen anderen Termin in PowerFactory eine Planned Outage mit
+diesem Termin anlegen.
+
+## Jede Tabelle: filtern und sortieren
+
+- Eine Filterzeile direkt unter den Spaltenköpfen: ein Textfeld je Textspalte
+  (enthält den Text, Groß-/Kleinschreibung egal) und eine Auswahlliste je
+  Kategoriespalte (*All* schaltet sie ab). Filter mehrerer Spalten wirken
+  zusammen.
+- Unter der Tabelle: *12 of 48 shown · Clear filters*, solange ein Filter
+  aktiv ist.
+- Ein Klick auf einen Spaltenkopf sortiert nach dieser Spalte; ein zweiter
+  kehrt die Reihenfolge um. Zahlen sortieren nach Wert.
+- Filtern und Sortieren ändern nur die Anzeige, nie die Konfiguration. Eine
+  ausgefilterte Zeile wird von der Leertaste nie geändert.
+
+## Hover-Hilfe
+
+Ruht die Maus etwa eine halbe Sekunde auf einem Element, erscheint, was es an
+der Rechnung bewirkt: jede Schaltfläche, *Run*, Name und Beschreibung, der
+Fallzähler, die Spaltenköpfe, jeder Filter, die Zeitleiste, die Regelfelder,
+n-0, n-1, (n-1)', der QDS-Zeitraum, die Statuszeile und jede Einstellung. Die
+Texte stehen in `HELP_TEXTS`, `SETTING_HELP` und `COLUMN_HELP` im Skript.
+
+## Zeitleiste
+
+Nur eine Planungsprüfung, ohne Lastfluss oder Ergebnis. Eine Zeile je
+Außerbetriebnahme des Falls (blau) und je fester Außerbetriebnahme (grau);
+Schattierung markiert Zeiten, in denen mehr als eine aktiv ist. Überlappende
+Außerbetriebnahmen sind normale Planung, weder Warnung noch Fehler. Ein langer
+leerer Zeitraum (z. B. zwischen KW 10 und KW 40) wird kurz gezeichnet, damit
+weit auseinanderliegende Außerbetriebnahmen lesbar bleiben; Balkenlängen über
+eine solche Lücke sind nicht maßstäblich.
 
 ## Tastatur
 
-Jede Liste lässt sich ohne Maus bedienen (`KEYBOARD_SHORTCUTS` in `main.py`). Unter macOS wirkt Command wie Strg.
+Unter macOS wirkt Command wie Ctrl.
 
 | Taste | Wo | Was |
 |---|---|---|
-| Entf / BackLeertaste | Fallliste | gewählten Fall löschen (fragt vorher) |
-| Entf / BackLeertaste | FS des Falls | gewählte FS aus dem Fall entfernen |
-| Entf / BackLeertaste | feste Hintergrund-FS | gewählte FS aus dem festen Hintergrund entfernen |
-| Entf / BackLeertaste | Regeln | gewählte Regeln entfernen |
-| Leertaste | Fallliste | Run-Flag des fokussierten Falls umschalten |
-| Leertaste | verfügbare FS | fokussierte FS an- oder abhaken |
-| Enter | verfügbare FS | alle gewählten FS dem Fall hinzufügen |
+| Entf / Rücktaste | Fallliste | gewählten Fall löschen (fragt vorher) |
+| Entf / Rücktaste | Außerbetriebnahmen des Falls | gewählte aus dem Fall entfernen |
+| Entf / Rücktaste | feste Hintergrund-Außerbetriebnahmen | aus dem festen Hintergrund entfernen |
+| Entf / Rücktaste | Regeln | gewählte Regeln entfernen |
+| Leertaste | Fallliste | Flag *Run* des fokussierten Falls umschalten |
+| Leertaste | verfügbare Außerbetriebnahmen | fokussierte ankreuzen oder abwählen |
+| Enter | verfügbare Außerbetriebnahmen | alle markierten dem Fall zuordnen |
 | F2 / Enter | Fallliste | Fall direkt umbenennen |
-| Strg+A | jede Tabelle | alle angezeigten Zeilen wählen |
-| Strg+N | Fenster | neuer Fall |
-| Strg+F | Fenster | verfügbare FS durchsuchen |
-| Strg+S | Fenster | Konfiguration speichern |
-| Strg+O | Fenster | gespeicherte Konfiguration laden |
-| Strg+Enter | Fenster | Berechnung starten |
-| Esc | Fenster | direkte Bearbeitung beenden, sonst abbrechen |
+| Ctrl+A | jede Tabelle | jede angezeigte Zeile markieren |
+| Ctrl+N | Fenster | neuer Fall |
+| Ctrl+F | Fenster | verfügbare Außerbetriebnahmen durchsuchen |
+| Ctrl+S | Fenster | Konfiguration speichern |
+| Ctrl+O | Fenster | gespeicherte Konfiguration laden |
+| Ctrl+Enter | Fenster | Rechnung starten |
+| Ctrl + / Ctrl − / Ctrl 0 | Fenster | Fenster für diese Sitzung zoomen |
+| Escape | Fenster | eine direkte Bearbeitung beenden (in `main_qt.py` auch ein Filterfeld leeren), sonst abbrechen |
 
 ## Was ein Klick bewirkt
 
 | Aktion | Wirkung |
 |---|---|
-| Klick auf einen Fall rechts (`<<TreeviewSelect>>`) | die Mitte zeigt sofort seine Freischaltungen; links sind sie als `in case` markiert; Beschreibung, Zeitachse, die anderen Reiter und die Statuszeile folgen. Kein weiteres Fenster. |
-| Text in ein Filterfeld tippen / Filterliste wählen | die Tabelle zeigt sofort nur passende Zeilen; *Clear filters* zeigt wieder alle |
-| Klick auf einen Spaltenkopf | sortiert nach der Spalte; ein zweiter Klick kehrt die Reihenfolge um |
-| Klick auf einen Fall in einer Beziehungsliste | wählt ihn aus (hervorgehoben) oder hebt die Auswahl auf; die Beziehung gilt sofort |
-| Maus auf einem Bedienelement ruhen lassen | nach etwa einer halben Sekunde erscheint eine Erklärung; sie schließt beim Verlassen oder bei einem Klick |
-| Klick auf die Statuszeile | öffnet *Case Manager* |
-| Eingabe in ein *Settings*-Feld | sofort geprüft: rot mit Grund, wenn ungültig; *edited, not applied*, bis übernommen |
-| *Apply settings* / *Save settings* / *Restore defaults* | prüft und übernimmt / speichert zusätzlich die Konfigurationsdatei / entfernt jeden Override |
-| *Show calculation preview* | öffnet oder schließt die schreibgeschützte Vorschau unter den Problemen |
-| Häkchen in der ersten Spalte der linken Liste setzen oder entfernen (oder Leertaste) | genau diese FS kommt sofort in den gewählten Fall oder verlässt ihn; eine feste FS lässt sich nicht anhaken und nennt den Grund |
-| *Add to case* oder Enter in der linken Liste | die gewählten FS werden zugeordnet; Falltabelle, Zahl der FS, Markierungen und Vorschau aktualisieren sich sofort. Eine FS, die schon im Fall oder fest ist, wird mit Grund abgelehnt. |
-| *Remove from case* oder Entf-Taste in der Mitte | nur die Zuordnung endet; die Freischaltung in PowerFactory bleibt unberührt. |
-| Doppelklick in der Mitte oder *Details* | ein kompaktes Fenster mit den PowerFactory-Daten der FS (Objekt, Klasse, Betriebsmittel, Schalthandlungen, Fenster, Priorität, Status, verwendet in Fällen) und ihren eigenen Terminen in diesem Fall. |
-| *Set as fixed background* | die FS wird Teil der Referenz und jedes Falls (Rfix). Abgelehnt, solange sie einem Fall zugeordnet ist – sie wirkt so nie doppelt. |
-| *New* | legt *Case n* mit der nächsten generierten ID an (C1 … C5) und wählt ihn aus; kein weiteres Fenster. Bei fünf Fällen gesperrt. |
-| *Copy* | neue generierte ID, Name *… (copy)*, gleiche FS und eigene Termine; vollständig unabhängig. Bei fünf Fällen gesperrt. |
-| Doppelklick auf einen Fall (oder F2 / Enter) in der Fallliste | der Name wird direkt in seiner Zeile bearbeitbar; Enter oder ein Klick daneben übernimmt, Escape bricht nur die Bearbeitung ab; ein leerer Name behält den alten. Die generierte ID für Ergebnisobjekte bleibt. |
-| Doppelklick auf die Beschreibung neben dem Fallnamen in der Mitte | die Beschreibung wird ebenso direkt bearbeitbar; ohne Beschreibung steht dort *(double-click to add a description)* |
-| Doppelklick auf eine Zeile der linken Liste | das Detailfenster dieser Freischaltung |
-| *Delete* | fragt einmal nach und entfernt nur den gewählten Fall. Andere Fälle und die Freischaltungen in PowerFactory bleiben unverändert. |
-| *One case per planned outage* | ersetzt die Fälle durch einen je FS im simulierten Zeitraum, höchstens fünf (mit Hinweis, wenn FS übrig bleiben); ignorierte und feste FS bekommen keinen. |
-| *Save configuration* / *Load saved configuration* | schreibt / liest die JSON-Datei des Projekts mit Revision, Benutzer und Zeit; das Projekt bleibt unberührt. |
-| *Cancel*, Escape, Fenster schließen | beendet den Lauf: nichts gerechnet, gespeichert oder publiziert, nichts im Projekt geändert. Der Abbruch wird an den aufrufenden Reportablauf weitergegeben; die Erweiterung endet nicht normal zur anschließenden Berichtserzeugung. Das IntReport-Verhalten muss noch in PowerFactory geprüft werden. |
-| *Start calculation* | prüft (siehe unten), schließt das Fenster und übergibt die Konfiguration an GridLens; danach laufen die bestehende Berechnung und PDF-Publikation. Es folgt kein Ergebnisfenster. |
-
-## Zeitachse
-
-Die Zeitachse dient nur der Planungskontrolle (keine Lastfluss-, Spannungs-
-oder sonstigen Ergebnisse). Eine Zeile je Fall-FS (blau) und je feste FS
-(grau); hellblau schattiert sind Zeiten, in denen mehr als eine FS aktiv ist.
-Sich überlappende FS sind normale Planung, weder Warnung noch Fehler. Die
-Zeitachse zeigt keine Daten und keine Zahlen, nur Reihenfolge und Überlappung. Ein langer leerer
-Zeitraum (z. B. zwischen KW10 und KW40) erscheint als schmales helles Band,
-damit weit auseinanderliegende FS lesbar bleiben (`timeline_scale`).
-
-## Berechnungsoptionen
-
-- **n-0 – Referenz-QDS**: der Grundzustand ohne geplante Freischaltungen und
-  ohne zusätzliche Fehlerfälle, mit den Last- und Einspeiseprofilen des
-  ComStatsim. Wird immer gerechnet: Der Bericht baut darauf auf.
-- **n-1 – Referenz-Ausfallanalyse** und **(n-1)' – Ausfallanalyse mit
-  FS-Szenarien**: gerechnet mit der Contingency Analysis (ComSimoutage) des
-  aktiven Study Case, zu den QDS-Zeitschritten in den FS-Fenstern jedes Falls
-  (GridLens schreibt für den Lauf den Zeitraum vom ersten bis zum letzten,
-  `calcPeriod` 4 mit `startTime`/`endTime`). n-1 rechnet nur mit den
-  festen FS, (n-1)' mit den FS des Falls; jedes Ergebnis von (n-1)' wird gegen
-  n-1 zum selben Zeitpunkt und Fehlerfall eingestuft. Ohne Contingency Analysis
-  im aktiven Study Case (z. B. dem QDS-Study-Case) legt GridLens dort
-  `GridLens_<Stempel>_N1` an, mit je einem Fehlerfall pro Leitung/Zweig,
-  Transformator, Drossel, Kompensationsanlage und FACTS-Element der aktivierten
-  Contingency-Grids – keine Erzeuger, Lasten oder Sammelschienen – und behält sie
-  nach dem Lauf. Ein Fehlerfall, dessen
-  Betriebsmittel der Fall schon ausschaltet, ist NOT_APPLICABLE. Bis der Bericht
-  n-1-Kapitel hat (Teil 4), steht das Ergebnis im Log und als Zeile *n-1 <Fall>*
-  auf der Seite Model Quality Assurance.
-- **QDS-Zeitraum**: aus dem aktiven ComStatsim, nur angezeigt (auch unter
-  *Settings → QDS time base*). Es gibt keine Zeitoptimierung: kein verkürztes
-  Fenster, keine Segmentierung, keine zusätzlichen Zeitpunkte, kein geänderter
-  Zeitschritt; jeder Lauf deckt den ganzen ComStatsim-Zeitraum ab.
+| rechts einen Fall wählen | die Mitte zeigt seine Außerbetriebnahmen, links werden sie markiert; Beschreibung, Zeitleiste, Vorschau und Statuszeile folgen |
+| links ankreuzen / abwählen | diese Außerbetriebnahme wird sofort dem gewählten Fall hinzugefügt oder aus ihm entfernt; eine feste wird mit Grund abgelehnt |
+| *Add to case* / Enter | alle markierten werden zugeordnet; eine schon zugeordnete oder feste wird mit Grund abgelehnt |
+| *Remove from case* / Entf in der Mitte | nur die Zuordnung endet; die Planned Outage in PowerFactory bleibt unberührt |
+| *Details* / Doppelklick auf eine Außerbetriebnahme | was PowerFactory dazu hält (Objekt, Klasse, Betriebsmittel, Schalthandlungen, Fenster, Priorität, Status, Fälle, die sie nutzen) und ihre eigenen Termine in diesem Fall |
+| *Set as fixed background* | die Außerbetriebnahme kommt in die Referenz und jeden Fall; abgelehnt, solange sie in einem Fall steht |
+| *New* | legt *Case n* mit der nächsten freien ID an und wählt ihn |
+| *Copy* | neue ID, Name *… (copy)*, dieselben Außerbetriebnahmen und eigenen Termine; völlig unabhängig |
+| *Delete* | fragt einmal und entfernt nur den gewählten Fall |
+| *One case per planned outage* | fragt, ersetzt dann alle Fälle durch je einen pro Außerbetriebnahme im simulierten Zeitraum, bis zur Fallgrenze; *Ignored* und feste erhalten keinen |
+| *Show calculation preview* | öffnet oder schließt die schreibgeschützte Vorschau |
+| *Apply settings* / *Save settings* / *Restore defaults* | prüft und übernimmt die Werte / speichert zusätzlich die Datei / entfernt jede Abweichung |
+| *Save configuration* / *Load saved configuration* | schreibt / liest die Konfigurationsdatei des Projekts; *Load* fragt, bevor es die Anzeige ersetzt |
+| *Cancel*, Escape, Fenster schließen | beendet den Lauf: nichts gerechnet, gespeichert oder veröffentlicht, nichts im Projekt geändert; der Abbruch wird an den Aufrufer weitergegeben |
+| *Start calculation* | übernimmt bearbeitete Einstellungen, führt die Prüfungen unten aus, schließt das Fenster und übergibt die Konfiguration an GridLens |
 
 ## Prüfungen bei *Start calculation*
 
-1. Die Konfiguration ist gültig (IDs, FS-Pfade, eigene Termine, FS-Regeln).
-2. Mindestens ein Fall ist rechenbar; sonst fragt GridLens, ob nur die
-   Referenz gerechnet werden soll.
-3. Nicht rechenbare Fälle (fehlende FS, verletzte
-   Regel, außerhalb des Zeitraums, eigene Termine) werden mit Grund genannt;
-   GridLens fragt, ob es weitergehen soll, und meldet sie als
-   NOT EVALUATED / NOT SIMULATED.
-4. Es wird nur n-0 verlangt.
-5. Jede Einstellung ist gültig (geänderte Werte werden zuerst übernommen);
-   sonst öffnet sich *Settings* mit der Liste der Probleme, und nichts startet.
+1. Jede Einstellung ist gültig; sonst öffnet sich die Seite *Settings* mit der
+   Liste der Probleme, und nichts startet.
+2. Die Bewertungen sind stimmig ((n-1)' nur mit n-1).
+3. Die Konfiguration ist gültig (IDs, Pfade der Außerbetriebnahmen, Regeln,
+   Termine).
+4. Kann kein Fall gerechnet werden, fragt GridLens, ob nur die Referenz
+   gerechnet werden soll.
+5. Fälle, die nicht gerechnet werden können, werden mit Grund gelistet;
+   GridLens fragt, ob es weitergehen soll, und berichtet sie als NOT EVALUATED
+   oder NOT SIMULATED.
 
-## Übergabe an GridLens
+## Vorschau der Rechnung
 
-```mermaid
-flowchart LR
-    W["Fall-Manager (CaseManagerDialog)"] -- "jeder Klick" --> E["CaseEditor: Kopie der Konfiguration"]
-    E -- "Start calculation" --> C["Konfiguration (Fälle, Hintergrund, Beziehungen, Regeln, Bewertungen)"]
-    C --> R["resolve_request: geprüfte Planungsfälle, Referenztyp"]
-    R --> G["execute_gridlens: REF + eine QDS je Fall (unverändert)"]
-    G --> P["publish_report: Tabellen für das PDF (unverändert)"]
-    W -- "Cancel" --> X(["Ende, nichts geändert"])
-```
-
-Trennung im Code: `CaseManagerDialog` ist das Fenster und hält nur den
-Auswahlzustand; `CaseEditor` enthält jede Bearbeitungsregel und die Kopie der
-Konfiguration (ohne Fenster getestet); die PowerFactory-Referenzen sind die
-Datensätze, die GridLens vor dem Öffnen gelesen hat; `resolve_request` macht
-aus der Konfiguration den Berechnungsauftrag; `execute_gridlens` rechnet,
-`publish_report` publiziert. Das Fenster schaltet nie Betriebsmittel, schreibt
-nie in PowerFactory und startet nie eine QDS.
+*Show calculation preview* öffnet unter den Problemen eine schreibgeschützte,
+scrollbare Zusammenfassung. Sie aktualisiert sich bei jeder Änderung und
+nennt: die Ergebnisauswahl, die Bewertungen, den QDS-Zeitraum, die Referenz
+(R0, Rfix oder aus), die festen Außerbetriebnahmen mit ihren Fenstern, den
+Berichtsfilter, die Fehlerfälle im Umfang, die Regeln, die
+Einstellungsabweichungen und für jeden bereiten Fall Name, Beschreibung,
+Außerbetriebnahmen mit wirksamen Fenstern und ob er einen eigenen QDS-Lauf
+erhält oder einen gleichen Fall wiederverwendet. Blockierte Fälle zeigen ihren
+Grund, ausgeschlossene Fälle stehen getrennt. Die Vorschau rechnet nie.
 
 ## Woher die Fälle kommen
 
 | `CASE_SOURCE` | Verhalten |
 |---|---|
-| `'gui'` (Standard) | das Fenster, vorbelegt mit der gespeicherten Konfiguration. Kann `tkinter` es nicht öffnen oder lässt es sich nicht aufbauen: die gespeicherte Konfiguration; ohne sie je FS ein Fall. Der Bericht nennt die Quelle. |
+| `'gui'` (Standard) | das Fenster, vorbelegt mit der gespeicherten Konfiguration. Kann es nicht öffnen oder nicht aufgebaut werden: die gespeicherte Konfiguration; ohne sie je Außerbetriebnahme ein Fall. Der Bericht nennt die Quelle. |
 | `'saved'` | die gespeicherte Konfiguration, ohne Fenster |
-| `'per_outage'` | je Freischaltung im simulierten Zeitraum ein Fall |
+| `'per_outage'` | je Planned Outage im simulierten Zeitraum ein Fall, ohne Fenster, ohne Fallgrenze |
 
-Konfigurationsdatei: `CASE_CONFIG_DIR` (Standard `~/GridLens/cases`), eine je
-Projekt, gespeichert als `<Projekt>_<Hash>.v2.json`. Die Schema-1-Datei
-`<Projekt>_<Hash>.json` des ausgelieferten gridlens-powerfactory-Skripts wird nur
-gelesen (solange es keine `.v2.json` gibt) und nie überschrieben; beide Versionen
-arbeiten so am selben Projekt. Der Hinweis zur Umstellung auf unabhängige Fälle
-erscheint nur, bis die geprüften Fälle gespeichert sind. Neue Felder seit der Überarbeitung: `assessments` (`["n-0"]`), je
-Fall `enabled` (true/false) und `settings` (nur Overrides, vorläufig). Das Feld
-`mode` früherer Versionen (Zeitoptimierung) wird beim Lesen ignoriert und nicht
-mehr gespeichert. Eine gespeicherte oder von Hand bearbeitete
-Konfiguration mit mehr als fünf Fällen (z. B. von GridLens 8.0 gespeichert)
-öffnet sich trotzdem im Fallmanager, zeigt *6 of 5 cases* in Rot und den Grund
-unter *Problems and warnings*, damit Fälle gelöscht werden können; Rechnen, Speichern
-und `CASE_SOURCE = 'saved'` lehnen sie mit diesem Grund ab; nur
-`CASE_SOURCE = 'per_outage'` (ohne Fenster) legt weiterhin je FS einen Fall ohne
-Grenze an. Ein mit *Run* ausgeschlossener Fall (`excluded`) wird weder gerechnet noch
-berichtet; andere Fälle bleiben unverändert.
+Konfigurationsdatei: `~/GridLens/cases/<Projekt>_<Hash>.v2.json` (Ordner
+`CASE_CONFIG_DIR`). Sie enthält `cases` (jeweils `id`, `name`,
+`description`, `enabled`, `outages`, `overrides`), `background`, `rules`,
+`assessments` und `settings` (nur Abweichungen), mit Schema, Revision, Benutzer
+und Zeit. Eine Datei mit mehr Fällen als die Grenze öffnet trotzdem, zeigt den
+Zähler rot und den Grund, damit sich Fälle löschen lassen; Rechnen, Speichern
+und `CASE_SOURCE = 'saved'` lehnen sie ab.
 
-## Was sich gegenüber dem bisherigen Fenster geändert hat
+## Das Fenster ausprobieren, ohne zu rechnen
 
-| Erhalten | Geändert |
-|---|---|
-| Fälle: neu, kopieren, umbenennen, löschen, Beschreibung, je FS ein Fall | Fallliste als filterbare Tabelle mit FS-Zahl und Status, **höchstens 5 Fälle**, **IDs generiert (C1 … C5), nie getippt**; neuer Fall ohne Dialog; Umbenennen im Feld; Löschen betrifft nur den gewählten Fall |
-| Zuordnung von FS, eine FS in mehreren Fällen | Zuordnung aus einer eigenen Liste verfügbarer FS mit Suche, Filter und *Add to case*; die Falltabelle zeigt nur die FS des Falls |
-| feste Hintergrund-FS (Rfix) | eigener Abschnitt und eigene Schaltfläche; eine feste FS kann nicht zugleich Fall-FS sein |
-| – | **entfernt:** Beziehungen zwischen Fällen; FS direkt unabhängigen Fällen zuordnen |
-| Regeln `not_overlap`, `order`, `together` | über drei Auswahllisten statt getippter Textzeilen |
-| eigene Termine je Fall (erfasst, nicht angewendet) | im Detailfenster der FS |
-| Konfiguration speichern, Vorschau, Abbrechen, OK | Vorschau in kurzen Zeilen; *Load saved configuration*; OK heißt jetzt *Start calculation* |
-| – | **entfernt:** Auswahl Conservative/Optimized und der Vorschlag kürzerer Fenster |
-| – | **neu:** Filterzeile und Sortieren per Spaltenkopf in jeder Tabelle, Statuszeile, Problemliste, Zeitachse, *Run* je Fall |
-| drei Reiter (Workspace, Fixed background & rules, Review & start) | **seit Teil 2:** genau zwei Reiter, *Case Manager* (Arbeitsbereich, Berechnungsauswahl, Probleme, einklappbare Vorschau) und *Settings* (Grenzwerte, Klassifizierung, Contingency Analysis schreibgeschützt, QDS-Zeitbasis, Fixed background & rules); Auswahl n-0 / n-1 / (n-1)'; Tooltips an jeder Einstellung |
-
-## In PowerFactory ausprobieren
-
-`ui/preview_case_manager.py` ist ein **eigenständiges
-Skript**: Es lädt und importiert `main.py` nicht und wird allein in
-ein ComPython eingefügt. Es trägt eine eigene Kopie des Fallmanagers (Fenster
-und was es braucht: Einlesen der Freischaltungen, Prüfen einer Konfiguration,
-Vorschau), öffnet daher genau dieses Fenster mit den echten Freischaltungen des
-aktiven Projekts, nur lesend, und gibt aus, was *Start calculation* zurückgibt,
-statt zu rechnen. Speichern und Laden arbeiten auf einer temporären Kopie der
-Konfiguration. Öffnet sich das Fenster dort nicht, die Fälle an einem
-Arbeitsplatz konfigurieren, an dem es läuft, und `CASE_SOURCE = 'saved'` setzen.
-
-Die Kopie ist in der Datei markiert und wird von `ui/sync_case_manager_copy.py`
-geschrieben (Entwicklungswerkzeug, nicht Teil der Auslieferung). Wer den
-Fallmanager in `main.py` ändert, führt
-`python3 ui/sync_case_manager_copy.py` aus;
-`test_the_copied_case_manager_matches_gridlens_report` schlägt fehl, solange die
-Kopie veraltet ist.
-
-## Vorschau der Falleinstellungen
-
-*Show calculation preview* im Reiter Case Manager öffnet eine schreibgeschützte,
-scrollbare Vorschau unter den Problemen (standardmäßig zugeklappt). Sie aktualisiert sich bei Run-Häkchen und Änderungen an Fällen.
-Jeder rechenbare Fall nennt Name, Beschreibung, FS mit wirksamen Zeitfenstern,
-n-0, den vollständigen QDS-Zeitraum und den festen Hintergrund. Gemeinsame
-Einstellungen nennen Referenz, Hintergrund-Fenster und FS-Regeln. Identische
-Fälle nennen das zur Wiederverwendung vorgesehene Ergebnis. Nicht rechenbare
-Fälle zeigen den Grund; abgewählte Fälle stehen gesondert als excluded. Die
-Vorschau startet keine Berechnung.
+`ui/preview_case_manager.py` ist ein eigenes Skript mit einer eigenen Kopie
+des Fallmanagers. Allein in ein ComPython eingefügt, öffnet es dasselbe
+Fenster mit den echten Planned Outages des aktiven Projekts, nur lesend, und
+gibt aus, was *Start calculation* übergeben würde, statt zu rechnen. Speichern
+und Laden arbeiten auf einer temporären Kopie der Konfiguration. Nach einer
+Änderung am Fallmanager in `main.py` aktualisiert
+`python3 ui/sync_case_manager_copy.py` die Kopie; ein Test schlägt fehl, solange
+sie veraltet ist.
