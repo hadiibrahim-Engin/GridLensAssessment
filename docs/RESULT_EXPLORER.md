@@ -1,6 +1,6 @@
 # Inspect a saved PowerFactory result object
 
-Use [`tools/explore_result_object.py`](../tools/explore_result_object.py) as a
+Use [`ui/explore_result_object.py`](../ui/explore_result_object.py) as a
 **separate ComPython script in PowerFactory**. It is standalone and needs only
 Python's standard library and PowerFactory's own Python module. It does not
 import or run GridLens.

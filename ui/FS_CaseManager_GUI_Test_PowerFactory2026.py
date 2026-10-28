@@ -3,8 +3,8 @@
 GridLens Case Manager - GUI test for DIgSILENT PowerFactory 2026 (no calculation).
 
 A separate, self-contained script: it does not load or import the production
-script powerfactory/gridlens_report.py. It contains its own copy of the case
-manager window (the block marked "copy of powerfactory/gridlens_report.py"
+script outage-assessment/main.py. It contains its own copy of the case
+manager window (the block marked "copy of outage-assessment/main.py"
 below), so it shows exactly the window GridLens shows before a calculation,
 with the planned outages of the active project:
 
@@ -24,7 +24,7 @@ preview are printed to the output window; nothing is calculated.
 Paste the whole file into a ComPython and run it. Dependencies: Python
 standard library and the PowerFactory module only.
 
-The copied block is written by tools/sync_case_manager_copy.py (development
+The copied block is written by ui/sync_case_manager_copy.py (development
 tool, not delivered); do not edit it by hand.
 """
 
@@ -45,7 +45,7 @@ PREFIX = "[CASE-MANAGER-TEST] "
 H, D = 3600.0, 86400.0
 
 
-# >>> copy of powerfactory/gridlens_report.py, written by tools/sync_case_manager_copy.py - do not edit >>>
+# >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>
 # GridLens 8.0.1: 168 definitions.
 import hashlib
 import math
@@ -4854,7 +4854,7 @@ def starting_configuration(app, scratch):
     return empty_case_config(project_key), copy, "empty configuration"
 
 
-PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use tools/probe_contingency.py (strict privacy)."
+PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use ui/probe_contingency.py (strict privacy)."
 
 
 def run(app):
@@ -4867,7 +4867,7 @@ def run(app):
         log(app, "FAIL: tkinter cannot be imported: {!r}. This Python has no Tcl/Tk; GridLens would fall back to the saved "
                  "configuration or one case per planned outage.".format(exc))
         return False
-    log(app, "Case manager copied from GridLens {} (standalone, gridlens_report.py is not used).".format(PUBLISHER_VERSION))
+    log(app, "Case manager copied from GridLens {} (standalone, main.py is not used).".format(PUBLISHER_VERSION))
     records, period, source, reason, qds = read_project(app)
     if source == "DEMO":
         records, period = demo_records()

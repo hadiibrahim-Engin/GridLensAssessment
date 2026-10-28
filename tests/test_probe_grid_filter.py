@@ -21,7 +21,7 @@ def _load(name, path):
     return module
 
 
-gl = _load("gridlens_report_for_probe", delivered("gridlens_report.py"))
+gl = _load("gridlens_report_for_probe", delivered("main.py"))
 probe = _load("probe_grid_filter", PROBE)
 
 

@@ -3,7 +3,7 @@
 GridLens publishes **38 tables** (data contract 7.0) that both report templates
 read: `MASTER_GRIDLENS` (main report, chapters H01–H10) and
 `MASTER_GRIDLENS_DETAIL` (technical detail report, D01–D13), kept as pages in
-`powerfactory/pages/<report>/` (`.dct` dictionary and one `.pg` per page). Each template
+`designer-pages/<report>/` (`.dct` dictionary and one `.pg` per page). Each template
 shows its chapters; for the same run ID both print the same statistics. This document describes, table by table, where
 each row comes from, how every field is calculated and which report chapter
 shows it. As of 26 October 2026, publisher 8.0.0. German version:
@@ -11,7 +11,7 @@ shows it. As of 26 October 2026, publisher 8.0.0. German version:
 together. Calculation and evaluation as such:
 [`CALCULATION_AND_EVALUATION.md`](CALCULATION_AND_EVALUATION.md).
 
-Function names in `code` refer to `powerfactory/gridlens_report.py`.
+Function names in `code` refer to `outage-assessment/main.py`.
 
 ---
 

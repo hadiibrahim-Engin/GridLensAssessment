@@ -165,7 +165,7 @@ timeline legend, the rule drop-down, n-0, n-1, (n-1)', the QDS period, the
 status line and every field and button of *Settings*. The delay is 450 ms; the
 text disappears when the mouse leaves, on a click or on a key. Bindings are added
 (`add='+'`), never replaced, and a tooltip never starts a calculation. The texts
-are in `HELP_TEXTS`, `SETTING_HELP` and `COLUMN_HELP` of `gridlens_report.py`
+are in `HELP_TEXTS`, `SETTING_HELP` and `COLUMN_HELP` of `main.py`
 (class `Tooltip`, standard library only); the texts for n-0, n-1, (n-1)',
 planned outages, QDS time step, contingency set, limits, classification and the
 settings follow the master prompt, translated into English.
@@ -207,7 +207,7 @@ has ended), *only together* (a case with one contains the other and their window
 
 ## Keyboard
 
-Every list can be used without the mouse (`KEYBOARD_SHORTCUTS` in `gridlens_report.py`). On macOS Command works like Ctrl.
+Every list can be used without the mouse (`KEYBOARD_SHORTCUTS` in `main.py`). On macOS Command works like Ctrl.
 
 | Key | Where | What |
 |---|---|---|
@@ -362,8 +362,8 @@ reported; other cases are unaffected.
 
 ## Trying it in PowerFactory
 
-`tools/FS_CaseManager_GUI_Test_PowerFactory2026.py` is a **separate script**:
-it does not load or import `gridlens_report.py`. Paste it alone into a
+`ui/FS_CaseManager_GUI_Test_PowerFactory2026.py` is a **separate script**:
+it does not load or import `main.py`. Paste it alone into a
 ComPython. It carries its own copy of the case manager (the window and what it
 needs: reading the planned outages, checking a configuration, the preview), so
 it opens exactly this window with the real planned outages of the active
@@ -372,9 +372,9 @@ calculating. Save and load work on a temporary copy of the configuration. If
 the window does not open there, configure the cases where it does and set
 `CASE_SOURCE = 'saved'`.
 
-The copy is marked in the file and written by `tools/sync_case_manager_copy.py`
+The copy is marked in the file and written by `ui/sync_case_manager_copy.py`
 (development tool, not delivered). Whoever changes the case manager in
-`gridlens_report.py` runs `python3 tools/sync_case_manager_copy.py`;
+`main.py` runs `python3 ui/sync_case_manager_copy.py`;
 `test_the_copied_case_manager_matches_gridlens_report` fails while the copy is
 out of date.
 

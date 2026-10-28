@@ -16,7 +16,7 @@ Every statement carries a status:
 | **used** | GridLens uses it and it ran in PowerFactory without error, but was not checked on purpose |
 | **open** | an assumption or observation still to be confirmed |
 
-Function names in `code` refer to `powerfactory/gridlens_report.py`.
+Function names in `code` refer to `outage-assessment/main.py`.
 
 ---
 

@@ -5,11 +5,11 @@ nothing is calculated, written or published.
 
 PRIVACY: LOCAL USE ONLY. Its purpose needs project data, so its output contains
 project, grid and equipment names, paths and values. Do not pass that output
-on to external developers or AI systems; tools/probe_contingency.py is the
+on to external developers or AI systems; ui/probe_contingency.py is the
 strict-privacy probe whose output may be shared.
 
 Create a ComPython for this file anywhere in the active study case and run it
-once. It applies the same grid filter as gridlens_report.py and prints
+once. It applies the same grid filter as main.py and prints
 
 1. every grid in the project and whether GRID_NAME_FILTER selects it,
 2. for a few elements per class, how the grid was determined,
@@ -41,10 +41,10 @@ def emit(app, message=""):
     print(message, flush=True)
 
 
-PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use tools/probe_contingency.py (strict privacy)."
+PRIVACY_NOTE = "PRIVACY: LOCAL USE ONLY. The output of this tool contains project, grid and equipment names, paths and values; do not pass it on. For output that may be shared use ui/probe_contingency.py (strict privacy)."
 
 
-# --- The grid filter, kept identical to gridlens_report.py ------------------
+# --- The grid filter, kept identical to main.py ------------------
 # tests/test_probe_grid_filter.py fails if the two ever behave differently.
 
 GRID_NAME_FILTER = ''  # type a grid name part here to preview what it would select

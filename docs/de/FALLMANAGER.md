@@ -171,7 +171,7 @@ Schaltfläche unter *Settings*. Die Verzögerung beträgt 450 ms; der Text
 verschwindet beim Verlassen, bei einem Klick oder einer Taste. Bindungen werden
 ergänzt (`add='+'`), nie ersetzt, und ein Tooltip startet nie eine Berechnung.
 Die Texte stehen englisch in `HELP_TEXTS`, `SETTING_HELP` und `COLUMN_HELP` von
-`gridlens_report.py` (Klasse `Tooltip`, nur Standardbibliothek); die Texte zu
+`main.py` (Klasse `Tooltip`, nur Standardbibliothek); die Texte zu
 n-0, n-1, (n-1)', Planned Outages, QDS-Zeitschritt, Contingency-Set,
 Grenzwerten, Klassifizierung und Settings folgen dem Master-Prompt, ins
 Englische übersetzt.
@@ -216,7 +216,7 @@ nicht gerechnet und gemeldet.
 
 ## Tastatur
 
-Jede Liste lässt sich ohne Maus bedienen (`KEYBOARD_SHORTCUTS` in `gridlens_report.py`). Unter macOS wirkt Command wie Strg.
+Jede Liste lässt sich ohne Maus bedienen (`KEYBOARD_SHORTCUTS` in `main.py`). Unter macOS wirkt Command wie Strg.
 
 | Taste | Wo | Was |
 |---|---|---|
@@ -375,8 +375,8 @@ berichtet; andere Fälle bleiben unverändert.
 
 ## In PowerFactory ausprobieren
 
-`tools/FS_CaseManager_GUI_Test_PowerFactory2026.py` ist ein **eigenständiges
-Skript**: Es lädt und importiert `gridlens_report.py` nicht und wird allein in
+`ui/FS_CaseManager_GUI_Test_PowerFactory2026.py` ist ein **eigenständiges
+Skript**: Es lädt und importiert `main.py` nicht und wird allein in
 ein ComPython eingefügt. Es trägt eine eigene Kopie des Fallmanagers (Fenster
 und was es braucht: Einlesen der Freischaltungen, Prüfen einer Konfiguration,
 Vorschau), öffnet daher genau dieses Fenster mit den echten Freischaltungen des
@@ -385,10 +385,10 @@ statt zu rechnen. Speichern und Laden arbeiten auf einer temporären Kopie der
 Konfiguration. Öffnet sich das Fenster dort nicht, die Fälle an einem
 Arbeitsplatz konfigurieren, an dem es läuft, und `CASE_SOURCE = 'saved'` setzen.
 
-Die Kopie ist in der Datei markiert und wird von `tools/sync_case_manager_copy.py`
+Die Kopie ist in der Datei markiert und wird von `ui/sync_case_manager_copy.py`
 geschrieben (Entwicklungswerkzeug, nicht Teil der Auslieferung). Wer den
-Fallmanager in `gridlens_report.py` ändert, führt
-`python3 tools/sync_case_manager_copy.py` aus;
+Fallmanager in `main.py` ändert, führt
+`python3 ui/sync_case_manager_copy.py` aus;
 `test_the_copied_case_manager_matches_gridlens_report` schlägt fehl, solange die
 Kopie veraltet ist.
 

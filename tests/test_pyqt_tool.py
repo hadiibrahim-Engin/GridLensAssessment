@@ -13,7 +13,7 @@ import pytest
 
 @pytest.fixture
 def launcher():
-    path = Path(__file__).resolve().parents[1] / 'tools' / 'testPYQt.py'
+    path = Path(__file__).resolve().parents[1] / 'ui' / 'testPYQt.py'
     if not path.is_file():
         pytest.skip('optional development tool not present')
     spec = importlib.util.spec_from_file_location('gridlens_pyqt_test', path)
@@ -128,6 +128,7 @@ def test_repository_folder_is_not_mistaken_for_the_powerfactory_api(launcher, mo
     assert app is None and 'Standalone' in description and 'keine PowerFactory-API' in description
 
 
+@pytest.mark.gui
 def test_real_pyqt_navigation_signals_timer_and_host_lifetime(tool):
     if all(importlib.util.find_spec(name) is None for name in ('PyQt6', 'PyQt5')):
         pytest.skip('optional PyQt dependency not installed')

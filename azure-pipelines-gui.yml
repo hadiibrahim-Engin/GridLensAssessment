@@ -1,0 +1,62 @@
+# Manually run only on protected main. Before enabling this pipeline, restrict
+# the pool to this pipeline and add an external branch-control check for main.
+# YAML conditions alone do not protect a self-hosted agent from modified YAML.
+trigger: none
+pr: none
+
+jobs:
+  - job: DesktopGui
+    displayName: Interactive desktop GUI tests
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.Reason'], 'Manual'))
+    timeoutInMinutes: 20
+    pool:
+      name: GridLens-GUI
+      demands:
+        - Agent.OS -equals Windows_NT
+        - GridLensInteractive -equals true
+    steps:
+      - checkout: self
+        clean: true
+        persistCredentials: false
+
+      - pwsh: |
+          New-Item -ItemType Directory -Force -Path "$(Agent.TempDirectory)/gui-results" | Out-Null
+        displayName: Prepare GUI test reports
+
+      # Python 3.11 with Tk must be installed on the isolated agent in advance.
+      - script: python -c "import sys; assert sys.version_info[:2] == (3, 11), 'Python 3.11 required'"
+        displayName: Verify agent Python version
+
+      - script: python -m venv "$(Agent.TempDirectory)/gridlens-gui-venv"
+        displayName: Create isolated test environment
+
+      - script: >-
+          "$(Agent.TempDirectory)/gridlens-gui-venv/Scripts/python.exe"
+          -m pip install --require-hashes --only-binary=:all: -r ci/requirements.lock
+        displayName: Install hash-verified dev toolchain
+
+      - script: >-
+          "$(Agent.TempDirectory)/gridlens-gui-venv/Scripts/python.exe"
+          -c "import tkinter as tk; root = tk.Tk(); root.update(); root.focus_force(); root.update(); assert root.focus_get() is root, 'Interactive desktop focus unavailable'; root.destroy()"
+        displayName: Verify interactive Tk desktop and focus
+
+      - script: >-
+          "$(Agent.TempDirectory)/gridlens-gui-venv/Scripts/python.exe"
+          -m pytest -q -ra --strict-markers --require-gui -m "gui and not optional_qt"
+          --junitxml="$(Agent.TempDirectory)/gui-results/pytest.xml"
+        displayName: Run desktop GUI tests
+        env:
+          PYTHONUTF8: '1'
+
+      - task: PublishTestResults@2
+        displayName: Publish GUI test results
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: JUnit
+          searchFolder: '$(Agent.TempDirectory)/gui-results'
+          testResultsFiles: pytest.xml
+          testRunTitle: GridLens - Interactive Windows GUI
+          failTaskOnFailedTests: true
+          failTaskOnMissingResultsFile: true
+          failTaskOnFailureToPublishResults: true
+          publishRunAttachments: true

@@ -16,8 +16,9 @@ Alles, was GridLens in PowerFactory tut (Objekte, Schalter, Planned Outages,
 QDS, Contingency Analysis, Falldefinition, geprüftes und offenes
 API-Verhalten), beschreibt [`POWERFACTORY.md`](POWERFACTORY.md).
 
-Nichts davon ist bisher in PowerFactory gelaufen. Abschnitt 11 nennt, was
-dort geprüft werden muss, bevor man sich auf die Ergebnisse verlässt.
+`main.py` wird geprüft, indem es in PowerFactory eingesetzt wird; dort
+gefundene Probleme werden gemeldet und behoben. Abschnitt 11 nennt das
+Verhalten, das dort noch nicht bestätigt ist.
 
 Weitere Dokumente (deutsch):
 
@@ -101,7 +102,7 @@ den Stand 7.0 und sind historisch.
 | P7 | Schreiben von `IntPlannedout.starttime/endtime` | eigene Termine je Fall | nicht genutzt (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
 | P8 | Schreiben von `ComStatsim.startTime/endTime` und Anfangszustand zeitgekoppelter Modelle | – | nicht genutzt; kürzere QDS-Fenster sind entfernt |
 | P9 | `tkinter` / Tcl/Tk in PowerFactorys Python | Fall-Manager | Probe-Werkzeug vorhanden, Ergebnis in PowerFactory nicht dokumentiert |
-| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` listet zeitgekoppelte Modelle | Zustandskonsistenz für Teil 3 | nicht geprüft; gezählt von `tools/probe_contingency.py` |
+| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` listet zeitgekoppelte Modelle | Zustandskonsistenz für Teil 3 | nicht geprüft; gezählt von `ui/probe_contingency.py` |
 
 ---
 
@@ -123,7 +124,7 @@ den Stand 7.0 und sind historisch.
 
 ## 4. Logischer Aufbau
 
-Eine Datei `powerfactory/gridlens_report.py`, in Abschnitte gegliedert:
+Eine Datei `outage-assessment/main.py`, in Abschnitte gegliedert:
 
 ```mermaid
 flowchart LR
@@ -133,7 +134,7 @@ flowchart LR
         RES[("ElmRes je Fall")]
         REP["IntReport-Tabellen"]
     end
-    subgraph GL["gridlens_report.py"]
+    subgraph GL["main.py"]
         AD["PowerFactory-Adapter<br/>_find_project_outages, _run_calculation,<br/>_isolate_outages, StateGuard"]
         CM["Fallverwaltung<br/>resolve_request, validate_case_config,<br/>load/save_case_config"]
         GUI["GUI-Adapter (nur Konfiguration, keine Ergebnisse)<br/>run_case_manager, CaseManagerDialog: drei Bereiche (tkinter)<br/>CaseEditor (Logik, ohne Fenster)"]
@@ -409,7 +410,7 @@ Fehlende oder fehlerhafte Ergebnisse ergeben nie NO LIMIT EXCEEDED.
 ### 7.5 Settings (Teil 2)
 
 Jeder Grenzwert und jede Toleranz der Bewertung ist eine **Einstellung**
-(`SETTINGS` in `gridlens_report.py`, Version `SETTINGS_VERSION = '1.0'`).
+(`SETTINGS` in `main.py`, Version `SETTINGS_VERSION = '1.0'`).
 Standards sind die Werte des Codes: Warnschwelle 80 %, n-0-Auslastungsgrenze
 100 % (Leitungen und Transformatoren getrennt), ein Spannungsband von
 0,95–1,05 p.u. für jede Spannungsebene (als GridLens-Vorschlag gekennzeichnet;
@@ -500,7 +501,7 @@ fehlenden und gerechneten Zeitpunkten und den Einstellungen.
 Block *FAILURE REPORT* aus (`log_failure`): Fehler, Ort (Schritt und Fall zum
 Zeitpunkt des Fehlers), Ursachenkette, Detailzeilen
 (`GridLensError.details`), Codestelle (Funktion und Zeile in
-`gridlens_report.py`), PowerFactory-Zustand nach der Wiederherstellung,
+`main.py`), PowerFactory-Zustand nach der Wiederherstellung,
 erhaltene Ergebnisobjekte, letzte Warnungen und Abhilfe
 (`GridLensError.hint`). Scheitert nur ein Fall oder sein n-1, stehen dessen
 Detailzeilen unter seiner Fehlermeldung.
@@ -702,10 +703,12 @@ Es wird keine Beschleunigung behauptet; in PowerFactory ist nichts gemessen.
 
 ---
 
-## 11. Offene Abnahme in PowerFactory
+## 11. Noch zu bestätigendes Verhalten in PowerFactory
 
-Vor dem produktiven Einsatz in PowerFactory 2026 ausführen und das Ergebnis
-festhalten:
+`ui/pf_acceptance_tests.py` stellt eigene native Abnahmeprüfungen bereit. `main.py` selbst wird in
+PowerFactory 2026 eingesetzt; dort gefundene Probleme werden gemeldet und dann
+behoben. Die folgenden Punkte sind in PowerFactory noch nicht bestätigt; eine
+Problemmeldung gehört meist zu einem davon:
 
 1. P2/P3: ein Fall mit zwei überlappenden FS – das Log nennt beide aktiv;
    Auslastungen mit zwei Einzelfällen vergleichen (V02, V03).
@@ -721,14 +724,14 @@ festhalten:
 6. Speicher und Laufzeit eines Ganzjahreslaufs mit 10 Fällen.
 
 Eigene Termine je Fall brauchen zuerst eine eigene Probe
-(`tools/probe_planned_outages.py` ist der Ort), dann eine Entscheidung, sie
+(`ui/probe_planned_outages.py` ist der Ort), dann eine Entscheidung, sie
 freizuschalten. Kürzere QDS-Fenster sind entfernt und nicht vorgesehen.
 
 ---
 
 ## 12. Teil 1 und Teil 2, und was Teil 3 braucht
 
-Teil 1 (freigegeben am 23. Oktober 2026): `tools/probe_contingency.py`, streng
+Teil 1 (freigegeben am 23. Oktober 2026): `ui/probe_contingency.py`, streng
 lesend (kein `Execute`, `CreateObject`, `SetAttribute`, kein `GetFromStudyCase`,
 das einen fehlenden Befehl anlegt; `tests/test_probe_contingency.py` prüft den
 Quelltext). Probe 1.0 meldete ComSimoutage, ComStatsim, Contingency-Definitionen,
@@ -737,7 +740,7 @@ Namen und Werten. Seit dem 23. Oktober 2026 läuft Probe 2.0 im **strikten
 Privacy-Modus**: nur feste Labels und Status-Tokens, kein Name, Pfad, Wert,
 Zeitpunkt oder Zähler, jeder PowerFactory-Aufruf über ein lesendes Gateway
 (siehe Spezifikation, Abschnitt 2.1). Ihre Ausgabe darf weitergegeben werden;
-die übrigen Werkzeuge sind nur lokal. `tools/test_contingency.py` bereitet eine
+die übrigen Werkzeuge sind nur lokal. `ui/test_contingency.py` bereitet eine
 sehr kleine Testrechnung auf einer ausdrücklich benannten Projektkopie vor; es ist abgeschaltet
 (`ENABLED = False`), fragt vor jedem Schreiben, stellt wieder her und prüft – und
 wird gesondert freigegeben.
@@ -755,7 +758,7 @@ deaktiviert.
 | weiterhin nur gelesen | Parameter der Kategorie B außer den Contingency-Grids, Post-Fault-Spannungsgrenzen, native Ablage der Settings und von `GL_<Szenario>_CLASSIFICATION`, n-1-Berichtskapitel (Teil 4) |
 
 Voraussetzungen für Teil 3 (jede beantwortet durch die Ausgabe der Probe oder
-einen freigegebenen Lauf von `tools/test_contingency.py`):
+einen freigegebenen Lauf von `ui/test_contingency.py`):
 
 1. Time Sweep des ComSimoutage: Attribute und Nachweis, dass er genau die
    ComStatsim-Zeitschritte rechnet (Beginn, Ende, Schritt, letzter Schritt).

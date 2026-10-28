@@ -3,7 +3,7 @@
 GridLens publiziert **38 Tabellen** (Datenvertrag 7.0), die beide
 Berichtsvorlagen lesen: `MASTER_GRIDLENS` (Hauptbericht, Kapitel H01–H10)
 und `MASTER_GRIDLENS_DETAIL` (technischer Detailbericht, D01–D13), gehalten als
-Pages in `powerfactory/pages/<Bericht>/` (`.dct`-Wörterbuch und je Page eine
+Pages in `designer-pages/<Bericht>/` (`.dct`-Wörterbuch und je Page eine
 `.pg`). Jede
 Vorlage zeigt ihre Kapitel; für dieselbe Run-ID drucken beide dieselbe
 Statistik. Dieses Dokument beschreibt Tabelle für Tabelle,
@@ -13,7 +13,7 @@ Fassung: [`docs/REPORT_TABLES.md`](../REPORT_TABLES.md); beide werden gemeinsam
 gepflegt. Rechnung und Auswertung selbst:
 [`BERECHNUNG_UND_AUSWERTUNG.md`](BERECHNUNG_UND_AUSWERTUNG.md).
 
-Funktionsnamen in `code` stehen in `powerfactory/gridlens_report.py`.
+Funktionsnamen in `code` stehen in `outage-assessment/main.py`.
 
 ---
 

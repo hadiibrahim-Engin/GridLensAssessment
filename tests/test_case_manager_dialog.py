@@ -13,9 +13,11 @@ from pathlib import Path
 import pytest
 from _paths import delivered
 
+pytestmark = pytest.mark.gui
+
 tk = pytest.importorskip("tkinter")
 
-SPEC = importlib.util.spec_from_file_location("gridlens_dialog", delivered("gridlens_report.py"))
+SPEC = importlib.util.spec_from_file_location("gridlens_dialog", delivered("main.py"))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 

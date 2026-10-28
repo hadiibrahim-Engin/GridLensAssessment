@@ -10,7 +10,7 @@ import pytest
 
 
 from _paths import REPORTS, delivered, report_tree
-SCRIPT = delivered("gridlens_report.py")
+SCRIPT = delivered("main.py")
 SPEC = importlib.util.spec_from_file_location("gridlens_report", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -1563,7 +1563,7 @@ def test_a_run_without_publication_says_that_the_report_cannot_be_generated(monk
     # The failure report says what, where, why, which state PowerFactory holds and what to do.
     text = "\n".join(app.messages)
     report = text[text.index("FAILURE REPORT"):text.index("RUN SUMMARY")]
-    for heading in ("Error:", "Where:", "Details:", "Code location in gridlens_report.py", "PowerFactory state:",
+    for heading in ("Error:", "Where:", "Details:", "Code location in the GridLens script", "PowerFactory state:",
                     "Result objects kept in the study case:", "What to do:"):
         assert heading in report, heading
     assert "RecordingError: REF was calculated" in report

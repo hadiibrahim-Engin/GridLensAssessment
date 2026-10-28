@@ -84,7 +84,7 @@ def outage(name, day):
 @pytest.fixture
 def opened(monkeypatch, tmp_path):
     """Replace the window by a callable that records what it was given and answers like a click on a button."""
-    gl = tool  # the tool carries its own case manager; nothing is loaded from gridlens_report.py
+    gl = tool  # the tool carries its own case manager; nothing is loaded from main.py
     monkeypatch.setattr(gl, "CASE_CONFIG_DIR", str(tmp_path / "real_config"))
     seen = {}
 
@@ -174,7 +174,7 @@ def test_the_tool_is_a_separate_script_that_never_loads_gridlens_report(monkeypa
     source = TOOL.read_text(encoding="utf-8")
     assert "importlib" not in source and "GRIDLENS_SCRIPT" not in source
     copied = tmp_path / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
-    copied.write_text(source, encoding="utf-8")  # alone in a folder without gridlens_report.py
+    copied.write_text(source, encoding="utf-8")  # alone in a folder without main.py
     spec = importlib.util.spec_from_file_location("lonely_tool", copied)
     lonely = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lonely)
@@ -186,7 +186,7 @@ def test_the_tool_is_a_separate_script_that_never_loads_gridlens_report(monkeypa
 
 def test_the_copied_case_manager_matches_gridlens_report():
     assert sync.current_block() == sync.copied_block(), \
-        "the case manager in gridlens_report.py changed: run python3 tools/sync_case_manager_copy.py"
+        "the case manager in main.py changed: run python3 ui/sync_case_manager_copy.py"
     for name in ("CaseManagerDialog", "CaseEditor", "FilterTable", "Tooltip", "HELP_TEXTS", "resolve_request"):
         assert hasattr(tool, name), name
     header = TOOL.read_text(encoding="utf-8").split(sync.BEGIN)[0]
@@ -195,6 +195,7 @@ def test_the_copied_case_manager_matches_gridlens_report():
     assert "import os\n" not in sync.current_block() and "import json\n" not in sync.current_block()
 
 
+@pytest.mark.gui
 def test_with_real_tk_the_tool_opens_the_new_window_and_cancel_ends_it(monkeypatch):
     tk = pytest.importorskip("tkinter")
     try:

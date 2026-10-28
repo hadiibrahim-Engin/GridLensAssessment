@@ -39,8 +39,7 @@ try {
     Write-Host "Using Python: $testPython"
     & $testPython -c "import pytest; print('pytest ' + pytest.__version__)"
     if ($LASTEXITCODE -ne 0) {
-        $requirements = Join-Path $PSScriptRoot 'requirements-dev.txt'
-        throw "pytest is unavailable. Install development dependencies manually: & `"$testPython`" -m pip install -r `"$requirements`""
+        throw "pytest is unavailable. Install development dependencies manually (pip 25.1 or newer): & `"$testPython`" -m pip install --group dev"
     }
     if ($PyQtOnly) {
         & $testPython -c "import importlib.util, sys; sys.exit(0 if any(importlib.util.find_spec(name) is not None for name in ('PyQt6', 'PyQt5')) else 1)"

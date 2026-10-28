@@ -7,7 +7,7 @@ PDF rendering is handled by PowerFactory.
 
 The runtime uses Python's standard library, PowerFactory's Python module
 and PyQt6 or PyQt5 for the optional case manager (QT_BINDING). No repository
-modules are required. This file is the PyQt variant of gridlens_report.py;
+modules are required. This file is the PyQt variant of main.py;
 everything outside the case-manager window is identical.
 Configuration defaults are defined below and can be overridden in the case
 manager or the saved case configuration.
@@ -5593,7 +5593,7 @@ def log_failure(logger, exc):
     while link is not None:
         frames.append("{}() line {}".format(link.tb_frame.f_code.co_name, link.tb_lineno))
         link = link.tb_next
-    block("Code location in gridlens_report.py (innermost last)", frames[-6:])
+    block("Code location in the GridLens script (innermost last)", frames[-6:])
     block("PowerFactory state", [RUN_CONTEXT.get('restore')])
     block("Result objects kept in the study case", RUN_CONTEXT.get('kept') or ["none"])
     block("Warnings before the failure", (RUN_CONTEXT.get('warnings') or [])[-6:])

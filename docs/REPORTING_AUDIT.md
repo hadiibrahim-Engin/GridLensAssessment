@@ -125,11 +125,11 @@ Existing tables are migrated, not duplicated: `ScriptedCases`,
 
 | # | Question | Needed for | Probe |
 |---|---|---|---|
-| R1 | Does a contingency sub-result also hold the **base case** (pre-fault) of each study time, and how is it marked? | FS pre-fault from (n-1)' without a QDS; post-fault phase | extend `tools/probe_contingency.py` (read only) |
+| R1 | Does a contingency sub-result also hold the **base case** (pre-fault) of each study time, and how is it marked? | FS pre-fault from (n-1)' without a QDS; post-fault phase | extend `ui/probe_contingency.py` (read only) |
 | R2 | Which variables does the sweep record per element (`c:loading`, `m:u`; other phases?) and can several post-fault phases occur? | phase key, criteria | same |
 | R3 | Can a ComPython below one IntReport publish into a **second** IntReport (`CreateTable` on another object)? | one run → two reports | read-only check of the object, then a write test on a project copy (approval) |
 | R4 | How does PowerFactory export the PDF of an IntReport; can a report be split into numbered parts? | detail report parts | documentation / project copy |
-| R5 | `SetValue` throughput (`tools/probe_report_write.py`) | size of the detail tables | run of the existing probe |
+| R5 | `SetValue` throughput (`ui/probe_report_write.py`) | size of the detail tables | run of the existing probe |
 | R6 | Do Stimulsoft 2025.3.5 Gantt and heatmap render in PowerFactory as locally? | H04, H09 | local first, then project copy |
 | R7 | Stable object IDs (`GetFullName` vs. foreign key) for elements and contingencies | result IDs | read-only probe |
 
@@ -178,7 +178,7 @@ the integration of the streaming reader with the verified paths.
 
 ## 8. Gate B status (26 October 2026)
 
-Implemented in `powerfactory/gridlens_report.py`, tested without PowerFactory
+Implemented in `outage-assessment/main.py`, tested without PowerFactory
 (`tests/test_reporting_core.py`, synthetic data in `tests/synthetic_grid.py`):
 
 | Part | Function | What it does |
@@ -281,12 +281,12 @@ second sheet (the n-0 top 10 now sits on the appendix page).
 
 ## 10. Gate D status (26 October 2026)
 
-Both reports rendered locally with **fictitious** data: `tools/render_demo.py`
+Both reports rendered locally with **fictitious** data: `ui/render_demo.py`
 builds every profile with the real report builder (`build_cases_payload`), the
 n-0 part from the QDS fixture of the test suite and the n-1 part streamed from
 `tests/synthetic_grid.py` (5,000 nodes, 3,400 lines, 210 transformers, 320
 contingencies, 84 study times at 2 h). The Stimulsoft 2025.3.5 engine in
-`tools/stimulsoft_harness` renders each template into one PDF with the
+`ui/stimulsoft_harness` renders each template into one PDF with the
 watermark **FICTITIOUS TEST DATA** on every page (decision D6; the templates
 carry no such note). Output: `demo/<profile>/MASTER_GRIDLENS.pdf` and
 `MASTER_GRIDLENS_DETAIL.pdf`. No PowerFactory is involved; this is no
@@ -302,8 +302,8 @@ PowerFactory render (probe R6 stays open).
 | `errors` | 3 cases whose QDS and n-1 both failed | 18 / 24 |
 
 ```bash
-python3 tools/render_demo.py                       # every profile, one PDF per template
-python3 tools/render_demo.py many --pages --png 8  # page by page with PNG sheets for the layout check
+python3 ui/render_demo.py                       # every profile, one PDF per template
+python3 ui/render_demo.py many --pages --png 8  # page by page with PNG sheets for the layout check
 ```
 
 **Layout check: found and fixed**
@@ -344,8 +344,8 @@ Since 26 October 2026 the repository keeps both reports as **pages**, not as
 assembled in the Stimulsoft designer):
 
 ```
-powerfactory/pages/MASTER_GRIDLENS/          MASTER_GRIDLENS.dct + 00_Cover.pg … 12_Evidence.pg
-powerfactory/pages/MASTER_GRIDLENS_DETAIL/   MASTER_GRIDLENS_DETAIL.dct + 00_Cover.pg … 19_Appc.pg
+designer-pages/MASTER_GRIDLENS/          MASTER_GRIDLENS.dct + 00_Cover.pg … 12_Evidence.pg
+designer-pages/MASTER_GRIDLENS_DETAIL/   MASTER_GRIDLENS_DETAIL.dct + 00_Cover.pg … 19_Appc.pg
 ```
 
 - `.pg` is Stimulsoft's own page file ("Save Page"/"Open Page"); it stores the
@@ -361,11 +361,11 @@ powerfactory/pages/MASTER_GRIDLENS_DETAIL/   MASTER_GRIDLENS_DETAIL.dct + 00_Cov
   `tools/build_mrt.py` and both 7.0.0 `.mrt` files are archived in
   `templates/archive/` and are no longer the source. Changes are made in the
   `.pg` files.
-- Local check: `tools/stimulsoft_harness` assembles a report from its folder
+- Local check: `ui/stimulsoft_harness` assembles a report from its folder
   the same way (dictionary, pages in file order, culture en-US) and renders it,
   compiled like PowerFactory with `--compile`; the assembled reports render
   exactly as the 7.0.0 `.mrt` (same sheet counts for every profile).
 - The tests read the folders (`tests/_paths.py`: `report_tree`, `report_text`)
   and check the dictionary against the data contract, every page, the file
-  order and that no `.mrt` is delivered. Delivery: tests, `gridlens_report.py`
+  order and that no `.mrt` is delivered. Delivery: tests, `main.py`
   and the two page folders.

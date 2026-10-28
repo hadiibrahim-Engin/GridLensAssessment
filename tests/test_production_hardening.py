@@ -13,7 +13,7 @@ import test_gridlens_report as runtime
 import test_reporting_core as reporting
 
 
-SPEC = importlib.util.spec_from_file_location('gridlens_production', delivered('gridlens_report.py'))
+SPEC = importlib.util.spec_from_file_location('gridlens_production', delivered('main.py'))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 

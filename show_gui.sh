@@ -5,7 +5,7 @@
 set -euo pipefail
 
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-gui_script="$project_dir/tools/FS_CaseManager_GUI_Test_PowerFactory2026.py"
+gui_script="$project_dir/ui/FS_CaseManager_GUI_Test_PowerFactory2026.py"
 
 if [[ ! -f "$gui_script" ]]; then
     printf 'GridLens GUI script not found: %s\n' "$gui_script" >&2

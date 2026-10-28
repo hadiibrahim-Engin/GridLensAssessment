@@ -16,7 +16,7 @@ Jede Aussage trägt einen Status:
 | **genutzt** | GridLens verwendet es und es lief in PowerFactory ohne Fehler, aber nicht gezielt geprüft |
 | **offen** | Annahme oder Beobachtung, die noch bestätigt werden muss |
 
-Die Funktionsnamen in `code` stehen in `powerfactory/gridlens_report.py`.
+Die Funktionsnamen in `code` stehen in `outage-assessment/main.py`.
 
 ---
 

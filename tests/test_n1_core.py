@@ -8,7 +8,7 @@ import pytest
 
 from _paths import delivered
 
-SPEC = importlib.util.spec_from_file_location("gridlens_n1", delivered("gridlens_report.py"))
+SPEC = importlib.util.spec_from_file_location("gridlens_n1", delivered("main.py"))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 

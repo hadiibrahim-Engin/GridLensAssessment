@@ -16,8 +16,8 @@ Everything GridLens does in PowerFactory (objects, switches, planned outages,
 QDS, contingency analysis, case definition, verified and open API behaviour)
 is described in [`POWERFACTORY.md`](POWERFACTORY.md).
 
-Nothing here has run in PowerFactory yet. Section 11 lists what must be
-verified there before the results may be relied on.
+`main.py` is checked by using it in PowerFactory; problems found there are
+reported and fixed. Section 11 lists the behaviour not confirmed there yet.
 
 Related documents:
 
@@ -97,8 +97,8 @@ design and are historical.
 | P6 | `AddCopy` of the `ElmRes` a QDS wrote into, made after the run; renaming | result objects per case | probed 24 Oct 2026: the copy keeps rows, columns, values and IntMon, also after the next QDS run |
 | P7 | writing `IntPlannedout.starttime/endtime` | own dates per case | not used (`ALLOW_OUTAGE_TIME_OVERRIDE = False`) |
 | P8 | writing `ComStatsim.startTime/endTime` and initial state of time-coupled models | – | not used; shorter QDS windows were removed |
-| P9 | `tkinter` / Tcl/Tk inside PowerFactory's Python | case manager | tested only with `tools/FS_CaseManager_GUI_Test_PowerFactory2026.py` design; result not recorded |
-| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` lists time-coupled models | state consistency for part 3 | not verified; counted by `tools/probe_contingency.py` |
+| P9 | `tkinter` / Tcl/Tk inside PowerFactory's Python | case manager | tested only with `ui/FS_CaseManager_GUI_Test_PowerFactory2026.py` design; result not recorded |
+| P10 | `GetCalcRelevantObjects('*.ElmQdsl')` lists time-coupled models | state consistency for part 3 | not verified; counted by `ui/probe_contingency.py` |
 
 ---
 
@@ -120,7 +120,7 @@ design and are historical.
 
 ## 4. Logical architecture
 
-Single file `powerfactory/gridlens_report.py`, separated into sections:
+Single file `outage-assessment/main.py`, separated into sections:
 
 ```mermaid
 flowchart LR
@@ -130,7 +130,7 @@ flowchart LR
         RES[("ElmRes per case")]
         REP["IntReport tables"]
     end
-    subgraph GL["gridlens_report.py"]
+    subgraph GL["main.py"]
         AD["PowerFactory adapter<br/>_find_project_outages, _run_calculation,<br/>_isolate_outages, StateGuard"]
         CM["Case manager<br/>resolve_request, validate_case_config,<br/>load/save_case_config"]
         GUI["GUI adapter (configuration only, no results)<br/>run_case_manager, CaseManagerDialog: three panes (tkinter)<br/>CaseEditor (logic, no window)"]
@@ -403,7 +403,7 @@ Missing or failed results never produce NO LIMIT EXCEEDED.
 ### 7.5 Settings (part 2)
 
 Every limit and tolerance of the assessment is a **setting** (`SETTINGS` in
-`gridlens_report.py`, version `SETTINGS_VERSION = '1.0'`). Defaults are the
+`main.py`, version `SETTINGS_VERSION = '1.0'`). Defaults are the
 values of the code: loading warning 80 %, n-0 loading limit 100 % (lines and
 transformers separately), one voltage band of 0.95–1.05 p.u. for every voltage
 level (marked as a GridLens proposal; the kV bands per voltage level were
@@ -487,7 +487,7 @@ case's n-1 with the wanted, missing and calculated times and the settings.
 run summary (`log_failure`): the error, where the run was (step and case, as
 captured when the error occurred), the cause chain, the detail lines of the
 error (`GridLensError.details`), the code location (function and line in
-`gridlens_report.py`), the PowerFactory state after the restore step, the
+`main.py`), the PowerFactory state after the restore step, the
 result objects kept, the last warnings and what to do (`GridLensError.hint`).
 A case or n-1 run that fails alone logs its detail lines below its error.
 
@@ -683,9 +683,12 @@ speed-up is claimed; nothing has been measured in PowerFactory.
 
 ---
 
-## 11. Open PowerFactory acceptance
+## 11. PowerFactory behaviour still to be confirmed
 
-Before production use, run in PowerFactory 2026 and record the result:
+`ui/pf_acceptance_tests.py` provides a separate native acceptance tool. `main.py` itself is
+used in PowerFactory 2026; problems found there are reported and then fixed.
+The points below are what has not been confirmed in PowerFactory yet; a
+problem report usually belongs to one of them:
 
 1. P2/P3: a case with two overlapping outages – the log lists both active; compare loadings with two single cases (V02, V03).
 2. P5: an outage window boundary with hourly steps – does the effect appear in the window rows or in the spill-over rows?
@@ -694,7 +697,7 @@ Before production use, run in PowerFactory 2026 and record the result:
 5. The report renders: one page per chapter, the n-1 chapters 15 and 16 and the TOC with 21 entries (locally rendered with Stimulsoft 2025.3.5, 26 Oct 2026; not yet in PowerFactory).
 6. Memory and run time of a full-year run with 10 cases.
 
-Own dates per case need their own probe first (`tools/probe_planned_outages.py`
+Own dates per case need their own probe first (`ui/probe_planned_outages.py`
 is the place), then a decision to enable them. Shorter QDS windows are removed
 and not planned.
 
@@ -702,7 +705,7 @@ and not planned.
 
 ## 12. Part 1 and part 2, and what part 3 needs
 
-Part 1 (released 23 October 2026): `tools/probe_contingency.py`, strictly read
+Part 1 (released 23 October 2026): `ui/probe_contingency.py`, strictly read
 only (no `Execute`, `CreateObject`, `SetAttribute`, no `GetFromStudyCase`, which
 creates a missing command; `tests/test_probe_contingency.py` checks the source).
 Probe 1.0 reported ComSimoutage, ComStatsim, contingency definitions,
@@ -711,7 +714,7 @@ and values. Since 23 October 2026 probe 2.0 runs in **strict privacy mode**:
 fixed labels and status tokens only, no name, path, value, study time or count,
 every PowerFactory call through a read-only gateway (see the spec,
 section 2.1). Its output may be shared; the other tools are local only.
-`tools/test_contingency.py` prepares a very small test calculation on an
+`ui/test_contingency.py` prepares a very small test calculation on an
 explicitly named project copy; it is disabled (`ENABLED = False`), asks before
 every write, restores and verifies – and its release is separate.
 
@@ -728,7 +731,7 @@ disabled.
 | still read only | category-B parameters other than the contingency grids, post-fault voltage limits, native storage of settings and of `GL_<scenario>_CLASSIFICATION`, n-1 report chapters (part 4) |
 
 Prerequisites of part 3 (each answered by the probe output or by an approved
-run of `tools/test_contingency.py`):
+run of `ui/test_contingency.py`):
 
 1. ComSimoutage time sweep: attributes, and proof that it computes exactly the
    ComStatsim time steps (start, end, step, last step).

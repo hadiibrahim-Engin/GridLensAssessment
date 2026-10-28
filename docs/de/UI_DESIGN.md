@@ -1,7 +1,7 @@
 # GridLens – Desktop-Oberfläche
 
 Die Oberfläche bleibt Teil der bestehenden `CaseManagerDialog`-Klasse in
-`powerfactory/gridlens_report.py`. Sie verwendet Tkinter und `ttk.Style` ohne
+`outage-assessment/main.py`. Sie verwendet Tkinter und `ttk.Style` ohne
 zusätzliche Bibliothek. `FilterTable` und `Tooltip` teilen das Designsystem.
 Fachliche Einstellungen, Dateiformate und PowerFactory-Berechnungen gehören
 weiterhin zur bestehenden Fachlogik.
@@ -58,7 +58,7 @@ den Zoom ohne Neuaufbau der Oberfläche oder Verlust von Eingaben und Auswahlen.
 Nach Änderungen die eigenständige PowerFactory-GUI-Testkopie synchronisieren:
 
 ```sh
-.venv/bin/python tools/sync_case_manager_copy.py
+.venv/bin/python ui/sync_case_manager_copy.py
 .venv/bin/python -m pytest -q
 ```
 

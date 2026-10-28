@@ -5591,7 +5591,7 @@ def log_failure(logger, exc):
     while link is not None:
         frames.append("{}() line {}".format(link.tb_frame.f_code.co_name, link.tb_lineno))
         link = link.tb_next
-    block("Code location in gridlens_report.py (innermost last)", frames[-6:])
+    block("Code location in the GridLens script (innermost last)", frames[-6:])
     block("PowerFactory state", [RUN_CONTEXT.get('restore')])
     block("Result objects kept in the study case", RUN_CONTEXT.get('kept') or ["none"])
     block("Warnings before the failure", (RUN_CONTEXT.get('warnings') or [])[-6:])

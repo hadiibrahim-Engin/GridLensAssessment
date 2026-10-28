@@ -6,22 +6,25 @@ trigger:
     include:
       - '*'
 
-# Used when the repository is hosted on GitHub or Bitbucket Cloud.
-pr:
-  autoCancel: true
-  branches:
-    include:
-      - '*'
-
 pool:
   vmImage: windows-2022
 
 jobs:
   - job: Tests
-    displayName: Python 3.11 tests with Tk GUI
+    displayName: Python 3.11 tests without desktop interaction
     timeoutInMinutes: 20
+    strategy:
+      matrix:
+        Tk:
+          runtime: tk
+          runtimeFile: main.py
+        Qt:
+          runtime: qt
+          runtimeFile: main_qt.py
     steps:
       - checkout: self
+        clean: true
+        persistCredentials: false
 
       - task: UsePythonVersion@0
         displayName: Use Python 3.11
@@ -29,20 +32,53 @@ jobs:
           versionSpec: '3.11'
           architecture: x64
 
-      - script: python -m pip install -r requirements-dev.txt
-        displayName: Install pinned test dependencies
+      - pwsh: |
+          New-Item -ItemType Directory -Force -Path "$(Agent.TempDirectory)/test-results" | Out-Null
+        displayName: Prepare test reports
 
-      # Fail explicitly if GUI tests would otherwise skip for lack of Tk/display.
-      - script: python -c "import tkinter as tk; root = tk.Tk(); root.withdraw(); root.update(); root.destroy(); print('Tk GUI available')"
-        displayName: Verify Tk can open a window
+      - script: python -m venv "$(Agent.TempDirectory)/gridlens-ci-venv"
+        displayName: Create isolated test environment
 
-      - script: python tools/sync_case_manager_copy.py --check
+      - pwsh: |
+          Write-Host "##vso[task.prependpath]$(Agent.TempDirectory)/gridlens-ci-venv/Scripts"
+        displayName: Select isolated test interpreter
+
+      - script: >-
+          python -m pip install --require-hashes --only-binary=:all: -r ci/requirements.lock
+        displayName: Install hash-verified dev toolchain
+
+      - script: python -m pip check
+        displayName: Check dependency consistency
+
+      - script: python -m ruff check . --output-format=azure
+        displayName: Check Python correctness with Ruff
+
+      - script: python ui/sync_case_manager_copy.py --check
         displayName: Check standalone case manager is up to date
 
-      - script: python -m pytest -q -ra --junitxml="$(Agent.TempDirectory)/test-results/pytest.xml"
-        displayName: Run complete pytest suite
+      - script: >-
+          python -m pytest -q -ra --strict-markers -m "not gui"
+          --junitxml="$(Agent.TempDirectory)/test-results/pytest.xml"
+          --cov --cov-branch --cov-report=term
+        displayName: Run $(runtime) runtime tests without desktop interaction
         env:
           PYTHONUTF8: '1'
+          GRIDLENS_TEST_RUNTIME: '$(runtime)'
+          COVERAGE_FILE: '$(Agent.TempDirectory)/test-results/.coverage'
+
+      - script: >-
+          python -m coverage xml --include="outage-assessment/$(runtimeFile)"
+          -o "$(Agent.TempDirectory)/test-results/coverage.xml"
+        displayName: Generate coverage for the selected runtime
+        condition: succeededOrFailed()
+        env:
+          COVERAGE_FILE: '$(Agent.TempDirectory)/test-results/.coverage'
+
+      - script: >-
+          python -m coverage report --include="outage-assessment/$(runtimeFile)" --fail-under=70
+        displayName: Require at least 70 percent line and branch coverage
+        env:
+          COVERAGE_FILE: '$(Agent.TempDirectory)/test-results/.coverage'
 
       - task: PublishTestResults@2
         displayName: Publish pytest results
@@ -51,8 +87,51 @@ jobs:
           testResultsFormat: JUnit
           searchFolder: '$(Agent.TempDirectory)/test-results'
           testResultsFiles: pytest.xml
-          testRunTitle: GridLens - Windows - Python 3.11
+          testRunTitle: GridLens - $(runtime) - Windows - Python 3.11
           failTaskOnFailedTests: true
           failTaskOnMissingResultsFile: true
           failTaskOnFailureToPublishResults: true
           publishRunAttachments: true
+
+      # Required by PublishCodeCoverageResults@2, also for Python coverage.
+      - task: UseDotNet@2
+        displayName: Prepare coverage publisher
+        condition: succeededOrFailed()
+        inputs:
+          packageType: sdk
+          version: '8.x'
+
+      - task: PublishCodeCoverageResults@2
+        displayName: Publish line and branch coverage
+        condition: succeededOrFailed()
+        inputs:
+          summaryFileLocation: '$(Agent.TempDirectory)/test-results/coverage.xml'
+          pathToSources: '$(Build.SourcesDirectory)'
+          failIfCoverageEmpty: true
+
+  - job: ReleaseCandidate
+    displayName: Package tested release candidate
+    dependsOn: Tests
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'], 'PullRequest'))
+    timeoutInMinutes: 10
+    steps:
+      - checkout: self
+        clean: true
+        persistCredentials: false
+
+      - task: UsePythonVersion@0
+        displayName: Use Python 3.11 for packaging
+        inputs:
+          versionSpec: '3.11'
+          architecture: x64
+
+      - script: python ui/build_release.py --require-clean --output-dir "$(Build.ArtifactStagingDirectory)/release"
+        displayName: Build versioned release candidate
+        env:
+          PYTHONUTF8: '1'
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish release candidate
+        inputs:
+          targetPath: '$(Build.ArtifactStagingDirectory)/release'
+          artifact: GridLens-release

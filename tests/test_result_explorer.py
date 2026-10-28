@@ -13,7 +13,7 @@ from _paths import tool
 
 SCRIPT = tool("explore_result_object.py")
 if SCRIPT is None:
-    pytest.skip("development tool tools/explore_result_object.py is not part of this checkout", allow_module_level=True)
+    pytest.skip("development tool ui/explore_result_object.py is not part of this checkout", allow_module_level=True)
 SPEC = importlib.util.spec_from_file_location("result_explorer", SCRIPT)
 probe = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(probe)

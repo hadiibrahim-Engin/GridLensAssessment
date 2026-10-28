@@ -1,36 +1,43 @@
 """Where the delivered files are, so that the tests need nothing else.
 
-At the end of the project only the tests, gridlens_report.py and the two
-reports as pages remain: powerfactory/pages/MASTER_GRIDLENS and
-powerfactory/pages/MASTER_GRIDLENS_DETAIL, each one .dct dictionary and one
-.pg file per page (Stimulsoft "Save Page"). The report itself is assembled in
-the Stimulsoft designer: dictionary first, then Open Page in file order.
-The files are looked up in powerfactory/ (pages/) and, if they are not there,
-directly next to tests/. Development tools (tools/) are optional: their tests
-skip without them.
+At the end of the project only the tests, the scripts in outage-assessment/
+(main.py, main_qt.py) and the two reports as pages remain:
+designer-pages/MASTER_GRIDLENS and designer-pages/MASTER_GRIDLENS_DETAIL, each
+one .dct dictionary and one .pg file per page (Stimulsoft "Save Page"). The
+report itself is assembled in the Stimulsoft designer: dictionary first, then
+Open Page in file order. The scripts are looked up in outage-assessment/ and
+the reports in designer-pages/; if they are not there, directly next to
+tests/. Development tools and probes (ui/) are optional: their tests skip
+without them.
 """
 
 import re
+import os
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS = ("MASTER_GRIDLENS", "MASTER_GRIDLENS_DETAIL")
+RUNTIME = os.environ.get("GRIDLENS_TEST_RUNTIME", "tk")
+if RUNTIME not in ("tk", "qt"):
+    raise ValueError("GRIDLENS_TEST_RUNTIME must be tk or qt")
 
 
 def delivered(name):
-    for folder in (ROOT / "powerfactory", ROOT):
+    if name == "main.py" and RUNTIME == "qt":
+        name = "main_qt.py"
+    for folder in (ROOT / "outage-assessment", ROOT):
         if (folder / name).is_file():
             return folder / name
-    return ROOT / "powerfactory" / name
+    return ROOT / "outage-assessment" / name
 
 
 def report_folder(name):
     """The folder of one report: its .dct dictionary and its .pg pages."""
-    for folder in (ROOT / "powerfactory" / "pages", ROOT / "pages", ROOT):
+    for folder in (ROOT / "designer-pages", ROOT):
         if (folder / name).is_dir():
             return folder / name
-    return ROOT / "powerfactory" / "pages" / name
+    return ROOT / "designer-pages" / name
 
 
 def report_files(name):
@@ -63,5 +70,5 @@ def report_text(name):
 
 def tool(name):
     """A development tool, or None when it is not part of this checkout."""
-    path = ROOT / "tools" / name
+    path = ROOT / "ui" / name
     return path if path.is_file() else None

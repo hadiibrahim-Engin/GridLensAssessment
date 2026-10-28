@@ -11,7 +11,7 @@ import pytest
 
 
 from _paths import delivered
-SCRIPT = delivered("gridlens_report.py")
+SCRIPT = delivered("main.py")
 SPEC = importlib.util.spec_from_file_location("gridlens_planner", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

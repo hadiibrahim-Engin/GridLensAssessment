@@ -1,16 +1,16 @@
-"""Copy the case manager of gridlens_report.py into the standalone GUI test tool.
+"""Copy the case manager of outage-assessment/main.py into the standalone GUI test tool.
 
 Development tool, not part of the delivery. The PowerFactory GUI test
-(tools/FS_CaseManager_GUI_Test_PowerFactory2026.py) is a separate script: it
-does not import gridlens_report.py. It carries a verbatim copy of the case
+(ui/FS_CaseManager_GUI_Test_PowerFactory2026.py) is a separate script: it
+does not import main.py. It carries a verbatim copy of the case
 manager window and of everything that window needs (reading the planned
 outages, checking a configuration, the preview), so that it shows exactly the
-window GridLens shows. Whoever changes the case manager in gridlens_report.py
+window GridLens shows. Whoever changes the case manager in main.py
 runs this script; tests/test_case_manager_gui.py fails while the copy is out of
 date.
 
-    python3 tools/sync_case_manager_copy.py           # rewrite the copy
-    python3 tools/sync_case_manager_copy.py --check   # exit code 1 when out of date
+    python3 ui/sync_case_manager_copy.py           # rewrite the copy
+    python3 ui/sync_case_manager_copy.py --check   # exit code 1 when out of date
 """
 
 from __future__ import annotations
@@ -20,15 +20,15 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "powerfactory" / "gridlens_report.py"
-TOOL = ROOT / "tools" / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
+SOURCE = ROOT / "outage-assessment" / "main.py"
+TOOL = ROOT / "ui" / "FS_CaseManager_GUI_Test_PowerFactory2026.py"
 
 # What the test tool calls; everything these use is copied with them.
 ROOTS = ("run_case_manager", "CaseEditor", "qds_period", "qds_period_text", "qds_time_info",
          "project_grids", "read_contingencies", "CONTINGENCIES_NOT_READ", "classify_planned_outages", "RunLogger",
          "assign_definitions", "object_key", "case_config_path", "legacy_case_config_path", "load_case_config", "empty_case_config",
          "_format_pf_time", "_friendly_exception", "CaseManagerUnavailable", "PUBLISHER_VERSION")
-BEGIN = "# >>> copy of powerfactory/gridlens_report.py, written by tools/sync_case_manager_copy.py - do not edit >>>"
+BEGIN = "# >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>"
 END = "# <<< end of the copy <<<"
 
 
@@ -111,7 +111,7 @@ def write():
 if __name__ == "__main__":
     if "--check" in sys.argv[1:]:
         fresh = current_block() == copied_block()
-        print("the copy is up to date" if fresh else "the copy is out of date: run python3 tools/sync_case_manager_copy.py")
+        print("the copy is up to date" if fresh else "the copy is out of date: run python3 ui/sync_case_manager_copy.py")
         sys.exit(0 if fresh else 1)
     write()
     print("copied the case manager of {} into {}".format(SOURCE.name, TOOL.name))
