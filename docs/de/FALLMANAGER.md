@@ -53,8 +53,9 @@ lassen sich ziehen.
     Zuordnung endet. Eine feste Hintergrund-Außerbetriebnahme zeigt *fixed*
     und lässt sich nicht ankreuzen.
   - *Status*: *in simulated period*, *outside simulated period* (in diesem
-    Lauf ohne Wirkung) oder *Ignored in PowerFactory* (nur in einem Fall
-    angewendet, der sie enthält).
+    Lauf ohne Wirkung; nur bei *QDS period* = *as set in ComStatsim*, sonst
+    folgt der Zeitraum den Außerbetriebnahmen) oder *Ignored in PowerFactory*
+    (nur in einem Fall angewendet, der sie enthält).
   - *Add to case* (oder Enter) ordnet alle markierten Zeilen zu, *Set as fixed
     background* macht sie fest, *Details* (oder Doppelklick) öffnet das
     Detailfenster.
@@ -84,7 +85,10 @@ lassen sich ziehen.
   - *n-1 – reference contingency analysis* und *(n-1)' – contingency analysis
     with planned-outage scenarios*. (n-1)' braucht n-1: Ankreuzen von (n-1)'
     kreuzt n-1 an, Abwählen von n-1 wählt (n-1)' ab.
-  - Der QDS-Zeitraum des aktiven ComStatsim.
+  - Der QDS-Zeitraum des Laufs: standardmäßig *first to last planned outage
+    of the cases* (je ein QDS-Schritt davor und danach, für den Lauf gesetzt
+    und zurückgesetzt), daneben der Zeitraum des aktiven ComStatsim;
+    Settings → Run → *QDS period* stellt auf *as set in ComStatsim* um.
   - *Results*: *Calculate now* oder *Re-evaluate the kept run of <Datum Zeit>*.
     Die Neuauswertung rechnet nichts; sie liest die Ergebnisobjekte dieses
     Laufs mit den aktuellen Einstellungen. Die Auswahl wird nicht gespeichert.

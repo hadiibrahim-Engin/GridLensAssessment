@@ -1137,6 +1137,12 @@ CATEGORY_EVALUATION, CATEGORY_CALCULATION = 'A', 'B'
 N1_LIMITS_POWERFACTORY, N1_LIMITS_GLOBAL = 'powerfactory', 'global'
 N1_LIMIT_CHOICES = ((N1_LIMITS_POWERFACTORY, 'use PowerFactory limits'), (N1_LIMITS_GLOBAL, 'global assessment limit'))
 ON_OFF_CHOICES = ((True, 'on'), (False, 'off'))
+# The QDS period of a run (setting 'qds_period'). Planned outages: GridLens sets it for the run from one QDS step
+# before the first planned outage of the calculated cases to one step after the last, so REF and every case cover
+# the same time; restored afterwards. As set: the period of the ComStatsim is used unchanged.
+QDS_SPAN_OUTAGES, QDS_SPAN_CONFIGURED = 'outages', 'configured'
+QDS_SPAN_CHOICES = ((QDS_SPAN_OUTAGES, 'first to last planned outage of the cases'),
+                    (QDS_SPAN_CONFIGURED, 'as set in ComStatsim'))
 # Upper bounds of the count settings: beyond them a run takes hours or the report gets unreadable.
 COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'max_cases': 20}
 # The most planning cases a run can have: the templates hold a band pair for every block up to this number.
@@ -1218,6 +1224,10 @@ SETTINGS = (
              note='longer series are drawn on an even grid that is the same for every case'),
     _setting('run_reference', 'Run', 'Reference case (REF)', '', RUN_REFERENCE_CASE, 'choice', choices=ON_OFF_CHOICES,
              note='off: no comparison with a reference, every violation counts as found in the case'),
+    _setting('qds_period', 'Run', 'QDS period', '', QDS_SPAN_OUTAGES, 'choice', applies="n-0, n-1, (n-1)'",
+             choices=QDS_SPAN_CHOICES,
+             note='planned outages: one QDS step before the first to one after the last planned outage of the '
+                  'calculated cases, written to ComStatsim for the run and restored'),
     _setting('max_cases', 'Run', 'Planning cases, at most', 'cases', MAX_CASES, 'count',
              note='every case is one more QDS run over the complete period'),
     _setting('max_n1_times', 'Run', 'n-1 study times per case, at most', 'study times', MAX_N1_TIMES, 'count',
@@ -1443,6 +1453,17 @@ def current_setting(key):
     if _ACTIVE_SETTINGS is not None and key in _ACTIVE_SETTINGS:
         return _ACTIVE_SETTINGS[key]
     return SETTINGS_BY_KEY[key]['default']
+
+
+def follows_outages(overrides=None):
+    """True when the run sets the QDS period from its planned outages (setting 'qds_period').
+
+    `overrides` are the settings of a case configuration; None means the active settings.
+    """
+    if overrides is None:
+        return current_setting('qds_period') == QDS_SPAN_OUTAGES
+    value, problem = parse_setting('qds_period', overrides['qds_period']) if 'qds_period' in overrides else (None, '')
+    return (value if problem is None else SETTINGS_BY_KEY['qds_period']['default']) == QDS_SPAN_OUTAGES
 
 
 def loading_limit(category):
@@ -1678,15 +1699,37 @@ N1_SEVERITY = ('NEW', 'WORSENED', 'FAILED', 'NOT_EVALUATED', 'NOT_COMPARABLE', '
                'RESOLVED', 'NOT_APPLICABLE', 'OK')
 
 
+def qds_step(qds):
+    """The ComStatsim time step in seconds, or None when it is not readable."""
+    size = finite_number(safe_attr(qds, 'stepSize'))
+    unit = finite_number(safe_attr(qds, 'stepUnit'))
+    if size is None or unit is None or int(unit) not in STEP_UNIT_SECONDS:
+        return None
+    step = size * STEP_UNIT_SECONDS[int(unit)]
+    return step if step > 0 else None
+
+
 def qds_grid(qds):
     """(start, end, step) of the ComStatsim time grid in epoch seconds, or None when it is not readable."""
     start, end = qds_period(qds)
-    size = finite_number(safe_attr(qds, 'stepSize'))
-    unit = finite_number(safe_attr(qds, 'stepUnit'))
-    if start is None or size is None or unit is None or int(unit) not in STEP_UNIT_SECONDS:
+    step = qds_step(qds)
+    return (start, end, step) if start is not None and step is not None else None
+
+
+def outage_span(windows, step):
+    """[one step before the first start, one step after the last end) of `windows` on a grid of `step` seconds.
+
+    The grid starts at local midnight of the first start. None when there is no window, a window is not
+    readable or the step is not known: the span is then left to the ComStatsim.
+    """
+    windows = list(windows)
+    if not windows or not step or step <= 0 or any(None in window for window in windows):
         return None
-    step = size * STEP_UNIT_SECONDS[int(unit)]
-    return (start, end, step) if step > 0 else None
+    first, last = min(window[0] for window in windows), max(window[1] for window in windows)
+    origin = datetime.fromtimestamp(first).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    start = origin + (math.floor((first - origin) / step + 1e-9) - 1) * step
+    end = origin + (math.ceil((last - origin) / step - 1e-9) + 1) * step
+    return start, end
 
 
 def n1_study_times(windows, grid, limit=None):
@@ -6134,6 +6177,7 @@ def classify_planned_outages(app, logger, period=(None, None)):
         overlap = window_overlaps_period(window, period)
         if overlap is False:
             record["status"] = OUTAGE_SKIPPED
+            record["outside_period"] = True
             record["skip_reason"] = (
                 "Outage window {} to {} lies outside the simulated period "
                 "{} to {}.".format(
@@ -6454,6 +6498,9 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
     problems = validate_case_config(config, None if source == 'per_outage' else case_limit(config))
     if problems:
         raise GridLensError('The case configuration cannot be used: {}.'.format('; '.join(problems)))
+    if follows_outages(config.get('settings') or {}):
+        # The run sets the QDS period from the planned outages of its cases: none of them lies outside it.
+        period = (None, None)
     by_key = {record['key']: record for record in records}
     by_name = {record['id']: record for record in records}
     lookup = lambda key: by_key.get(key) or by_name.get(key)
@@ -6584,6 +6631,9 @@ def per_outage_config(candidates, project_key=''):
 
 
 def per_outage_request(records, candidates, period=(None, None), project_key=''):
+    if follows_outages({}):
+        # The QDS period follows the outages, so an outage outside the period of the ComStatsim is a case too.
+        candidates = [record for record in records if record in candidates or record.get('outside_period')]
     request = resolve_request(per_outage_config(candidates, project_key), records, period, 'per_outage',
                               'one case per planned outage in the simulated period')
     request['skipped'] = [record for record in records if record not in candidates]
@@ -6846,6 +6896,10 @@ SETTING_HELP = {
                        "that is the same for REF and every case. The assessment always uses every time step.",
     'run_reference': "On: GridLens calculates the reference REF (R0 or Rfix) and compares every case with it. Off: "
                      "no reference; violations cannot be split into new and pre-existing.",
+    'qds_period': "First to last planned outage: GridLens sets the QDS period for the run from one QDS step before "
+                  "the first planned outage of the calculated cases to one step after the last (ComStatsim calcPeriod, "
+                  "startTime, endTime) and restores it afterwards, so REF and every case cover the same time. As set "
+                  "in ComStatsim: the period of the QDS is used unchanged; outages outside it are not calculated.",
     'max_cases': "Most planning cases one run may hold. Every case is one more QDS run over the complete period, "
                  "so the run time grows with each case.",
     'max_n1_times': "Most n-1 study times per case. Every study time calculates every contingency twice (n-1 and "
@@ -7045,8 +7099,9 @@ class CaseEditor:
         self.inactive_grids = {name for name, active in pairs or () if not active}
         self.contingencies = contingencies
         self.by_key = {record['key']: record for record in self.records}
-        self.period = period
-        self.qds_text = qds_text or qds_period_text(period)
+        # The period of the active ComStatsim; with the QDS period set from the outages none lies outside.
+        self.configured_period = period
+        self._qds_text = qds_text or qds_period_text(period)
         # (label, value) lines of the ComStatsim time base, shown read only.
         self.qds_info = list(qds_info or qds_time_info(None, period))
         self._checked_state = None
@@ -7362,6 +7417,26 @@ class CaseEditor:
     def settings_overrides(self):
         return dict(self.config.get('settings') or {})
 
+    @property
+    def period(self):
+        return (None, None) if follows_outages(self.settings_overrides()) else self.configured_period
+
+    @property
+    def qds_text(self):
+        return self.period_line()
+
+    def period_line(self, ready=()):
+        """The QDS period of the run as text; with `ready` cases and the period set from the outages, their span."""
+        if not follows_outages(self.settings_overrides()):
+            return self._qds_text + ' (as set in the active ComStatsim)'
+        windows = [window for plan in ready for window in plan['windows'].values()]
+        if windows and not any(None in window for window in windows):
+            span = '{} - {}'.format(_format_pf_time(min(window[0] for window in windows)),
+                                    _format_pf_time(max(window[1] for window in windows)))
+            return 'planned outages {}, plus one QDS step before and after (ComStatsim: {})'.format(span, self._qds_text)
+        return 'from the first to the last planned outage of the calculated cases, plus one QDS step before and after ' \
+               '(ComStatsim: {})'.format(self._qds_text)
+
     def settings_rows(self):
         """(key, label, unit, value text, source, category, editable) of every setting, in SETTINGS order."""
         overrides = self.settings_overrides()
@@ -7619,7 +7694,7 @@ class CaseEditor:
         """Short (label, value) lines of what "Start calculation" would calculate, and the problems found."""
         problems, request = self.checked()
         if problems:
-            return [('QDS period', self.qds_text + ' (from the active ComStatsim)')], problems
+            return [('QDS period', self.qds_text)], problems
         plans = request['cases']
         ready = [plan for plan in plans if plan['status'] == PLAN_READY]
         problems = ['{}: {}'.format(self.case_label(plan['id']), plan['reason']) for plan in plans if plan['status'] != PLAN_READY]
@@ -7634,7 +7709,7 @@ class CaseEditor:
             ('Planned outages in cases', str(len(outages))),
             ('Fixed background outages', ', '.join(record['id'] for record in background) or 'none'),
             ('Reference', 'Rfix - with the fixed background outages' if background else 'R0 - no planned outage'),
-            ('QDS period', self.qds_text + ' (from the active ComStatsim)'),
+            ('QDS period', self.period_line(ready)),
             ('Assessment', assessments_text(self.config.get('assessments'))),
             ('Assessed equipment', self.monitoring_text()),
             ('Settings', overrides_text(self.settings_overrides())),
@@ -9761,6 +9836,72 @@ def qds_period_source(qds):
             "user-defined to compare the planned outages with it".format(kind))
 
 
+def follow_outage_statuses(records, logger):
+    """With the QDS period set from the outages, an outage outside the period of the ComStatsim is calculated too."""
+    moved = [record for record in records if record.pop("outside_period", False)]
+    for record in moved:
+        record["status"] = OUTAGE_CONSIDERED
+        record["skip_reason"] = ""
+    if moved:
+        logger.write("OUTAGES", "{} planned outage(s) outside the period of the ComStatsim are considered: the QDS "
+                     "period of this run follows the planned outages (Settings: QDS period).".format(len(moved)), 3)
+
+
+def span_grid(qds, plans):
+    """The QDS time grid of a run: the outage span of `plans` with the period set from the outages, else qds_grid."""
+    step = qds_step(qds)
+    span = outage_span([window for plan in plans for window in plan["windows"].values()], step) \
+        if follows_outages() and plans else None
+    return (span[0], span[1], step) if span is not None else qds_grid(qds)
+
+
+def set_qds_span(guard, qds, plans, logger):
+    """Phase 1: the QDS period of every run from the planned outages of `plans`; None when it stays as set.
+
+    Written temporarily through `guard` and restored verified: calcPeriod (4, user-defined), startTime,
+    endTime and, where readable, stepNumber.
+    """
+    if not follows_outages() or not plans:
+        return None
+    step = qds_step(qds)
+    span = outage_span([window for plan in plans for window in plan["windows"].values()], step)
+    if span is None:
+        logger.write("CALCULATION", "The QDS period stays as set in ComStatsim: {}.".format(
+            "the QDS time step is not readable" if step is None else "a planned outage window is not readable"),
+            4, "WARNING")
+        return None
+    before = "{} [{}]".format(qds_period_text(qds_period(qds)), qds_period_source(qds))
+    start, end = int(round(span[0])), int(round(span[1]))
+    for attribute, value in (("calcPeriod", QDS_PERIOD_USER_DEFINED), ("startTime", start), ("endTime", end)):
+        if not guard.set(qds, attribute, value, "QDS period [{}]".format(attribute)):
+            found, current = _read_setting(qds, attribute)
+            raise GridLensError(
+                "The QDS period could not be set from the planned outages: [{}] of the ComStatsim did not take "
+                "the value, so no run was started.".format(attribute),
+                details=["Wanted: {} = {}".format(attribute, _format_pf_time(value) if attribute.endswith("Time") else value),
+                         "Read back: {}".format(_format_setting_value(current) if found else "unreadable"),
+                         "Period as set before: " + before],
+                hint="Set 'QDS period' in Settings to 'as set in ComStatsim' and set the period in the QDS yourself.")
+    if _read_setting(qds, "stepNumber")[0]:
+        # Derived by PowerFactory in some versions; written where it is not, so both agree on the period.
+        guard.set(qds, "stepNumber", int(round((end - start) / step)), "QDS period [stepNumber]")
+    if qds_period(qds) != (float(start), float(end)):
+        raise GridLensError("The QDS period was written but reads back as {}, so no run was started.".format(
+            qds_period_text(qds_period(qds))), details=["Wanted: " + qds_period_text((start, end))])
+    logger.write("CALCULATION", "QDS period for every run: {} (calcPeriod 4), from one QDS step before the first "
+                 "planned outage of the calculated cases to one step after the last; restored afterwards. As set "
+                 "before: {}.".format(qds_period_text((start, end)), before), 4)
+    return {"span": (start, end), "before": before}
+
+
+def _restore_qds_span(guard, qds, span, logger):
+    errors = guard.restore()
+    if span is not None and not errors:
+        logger.write("RESTORE", "Restored the QDS period [calcPeriod, startTime, endTime] to {}.".format(
+            span["before"]), 5)
+    return errors
+
+
 def _restore_planned_outage_option(qds, original, logger):
     if not _set_scalar_attribute(qds, PLANNED_OUTAGE_OPTION, original):
         return ["the 'Planned Outages' option ({}) could not be restored to {}"
@@ -11871,9 +12012,13 @@ def execute_gridlens(app):
                                                           current_setting("monitoring_grids"))
     logger.write("SETTINGS", "Report filter: {}. Contingencies: {} {}.".format(
         grid_scope_text(), request["contingency_scope"], n1_filter_text()), 3)
+    if follows_outages():
+        follow_outage_statuses(records, logger)
     _log_plan(logger, request)
     ready = [plan for plan in request["cases"] if plan["status"] == PLAN_READY]
     logger.step(4, "Calculation (phase 1): every run into its kept result object")
+    qds_guard = StateGuard()
+    span = None
     runs = []
     n1_runs = {}
     evaluate_stamp = request.get("evaluate_stamp")
@@ -11881,8 +12026,9 @@ def execute_gridlens(app):
     request["run_id"] = evaluate_stamp or result_objects.stamp
     try:
         if evaluate_stamp:
-            runs, n1_runs = kept_runs(study_case, evaluate_stamp, request, ready, logger, qds_grid(qds))
+            runs, n1_runs = kept_runs(study_case, evaluate_stamp, request, ready, logger, span_grid(qds, ready))
         else:
+            span = set_qds_span(qds_guard, qds, ready, logger)
             if setting_value('run_reference'):
                 runs.append(_calculate_reference(app, study_case, qds, request, records, original_result, logger,
                                                  result_objects, study_time_state))
@@ -11933,10 +12079,11 @@ def execute_gridlens(app):
         state_errors.extend(_restore_study_time(study_time_state, logger))
         state_errors.extend(
             _restore_planned_outage_option(qds, original_option, logger))
+        state_errors.extend(_restore_qds_span(qds_guard, qds, span, logger))
         _log_results_binding(qds, original_result, logger)
         _log_kept_results(result_objects, logger)
         RUN_CONTEXT['restore'] = ("NOT fully restored: " + "; ".join(state_errors)) if state_errors else (
-            "restored and verified (Study Case time, 'Planned Outages' option, every value GridLens wrote)")
+            "restored and verified (Study Case time, 'Planned Outages' option, QDS period, every value GridLens wrote)")
         RUN_STATS.add("restore PowerFactory state", time.monotonic() - restoring)
     if state_errors:
         raise GridLensError(

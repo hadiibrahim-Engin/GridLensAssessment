@@ -71,7 +71,7 @@ flowchart LR
 | Requirement | Why | If it is missing |
 |---|---|---|
 | an active study case | everything is read from and written to it | the run stops before any change |
-| exactly the ComStatsim of the study case, configured (period, time step, load profiles, calculation options) | GridLens runs it unchanged for every case | the run stops |
+| exactly the ComStatsim of the study case, configured (time step, load profiles, calculation options; period when *QDS period* is *as set in ComStatsim*) | GridLens runs it for every case; only the period is set from the planned outages (step 4) | the run stops |
 | `ComStatsim.results` bound to a result object that is **not** a `GridLens_…` copy | the QDS writes into it; a kept copy would be overwritten | the run stops with the bound name |
 | the option *Planned Outages* (`iopt_maint`) on the ComStatsim | the only switch that makes PowerFactory apply planned outages | the run stops |
 | recorded variables: `c:loading` or `m:loading` of lines (`ElmLne`) and transformers (`ElmTr2`, `ElmTr3`), `m:u` or `m:u1` of terminals (`ElmTerm`) | the assessed quantities | the run stops right after the first QDS run and names what is recorded instead |
@@ -129,11 +129,15 @@ changes none of them, except the *Planned Outages* option during the runs.
    (`starttime`, `endtime` in epoch seconds), components, priority and
    *Ignored* flag (`outserv`). Outages that switch the same components are
    grouped into one technical outage (`definition_id`).
-2. **Each outage is classified** against the simulated period:
-   `CONSIDERED` or `SKIPPED` with the reason (outside the period, *Ignored*,
-   unreadable window). When the question cannot be decided the outage stays
-   `CONSIDERED`, is assessed over the whole time axis, and its object
-   attributes are logged as `DIAGNOSTIC`.
+2. **Each outage is classified** against the period of the ComStatsim
+   (`qds_period`: with `calcPeriod` 4 `startTime`…`endTime`, with 0 the day in
+   `date` plus `stepNumber` steps, any other kind unknown): `CONSIDERED` or
+   `SKIPPED` with the reason (outside the period, *Ignored*, unreadable
+   window). When the question cannot be decided the outage stays `CONSIDERED`,
+   is assessed over the whole time axis, and its object attributes are logged
+   as `DIAGNOSTIC`. With *QDS period* = *first to last planned outage* (the
+   default) an outage outside that period is considered too, after the case
+   manager has closed: the period of the run follows the outages.
 3. **Grids, contingencies and kept runs are read** (read only) for the case
    manager: the grids of the model, the contingencies of the study case's
    contingency analysis, and the stamps of earlier GridLens runs.
@@ -156,6 +160,18 @@ changes none of them, except the *Planned Outages* option during the runs.
 
 Phase 1 only calculates and keeps; nothing is read yet.
 
+0. **QDS period.** With *QDS period* = *first to last planned outage* (the
+   default) GridLens sets the period of the ComStatsim for every run: from one
+   QDS step before the earliest start to one step after the latest end of the
+   outages of all READY cases, on the QDS step grid that starts at local
+   midnight of the earliest start (`outage_span`). It writes `calcPeriod` = 4
+   (user-defined), `startTime`, `endTime` and, where readable, `stepNumber`,
+   reads them back and logs the period and the one set before. REF and every
+   case so cover exactly the same time; the step after the last end catches an
+   effect that lasts beyond a window. Fixed background outages do not extend
+   the period. When a window or the time step is not readable, the period
+   stays as set, with a warning. With *as set in ComStatsim* nothing is
+   written.
 1. **Reference (REF).** Without fixed background outages REF is **R0**:
    *Planned Outages* off (`iopt_maint=0`). With fixed background outages it is
    **Rfix**: *Planned Outages* on, only the fixed outages active. The REF run
@@ -165,7 +181,8 @@ Phase 1 only calculates and keeps; nothing is read yet.
    status READY, GridLens sets the *Ignored* flag of **every** planned outage:
    `0` for the case's outages and the fixed outages, `1` for all others.
    PowerFactory then applies each active outage in its own window during the
-   QDS. The ComStatsim runs exactly as configured.
+   QDS. Apart from the period (point 0) the ComStatsim runs exactly as
+   configured.
 3. **Identical cases are calculated once.** A case with the same outages,
    windows and fixed outages as an already calculated case (same fingerprint)
    reuses that result and is marked *reused*.
@@ -188,7 +205,8 @@ apply: the option value and every outage whose *Ignored* flag is 0.
 ### Step 5 – Restore
 
 In a `finally` block, so also after an error or an interruption: the study
-time and the *Planned Outages* option are restored and read back, the binding
+time, the *Planned Outages* option and the QDS period are restored and read
+back, the binding
 of `ComStatsim.results` is logged, and the kept result objects are listed.
 If a value cannot be restored, the run stops with the expected and the found
 value; the study case must then be checked by hand.
@@ -231,6 +249,7 @@ GridLens changes only these values, temporarily, and puts each one back
 | Object | Attribute | When | Restored |
 |---|---|---|---|
 | ComStatsim | `iopt_maint` (*Planned Outages*) | REF and case runs | step 5 |
+| ComStatsim | `calcPeriod`, `startTime`, `endTime`, `stepNumber` (QDS period) | all runs, with *QDS period* = *first to last planned outage* | step 5 |
 | every `IntPlannedout` | `outserv` (*Ignored*) | each case run, Rfix, each n-1 sweep | right after that run |
 | study time `SetTime` | `cDate`, `cTime` | changed by PowerFactory during a run | after every run and in step 5 |
 | ComSimoutage (n-1 only) | `calcPeriod`, step, `startTime`, `endTime`, `stepNumber`, `isPlannedOutages` | each n-1 sweep | right after that sweep |
@@ -246,7 +265,7 @@ Objects GridLens **creates and keeps**:
 The temporary `IntVec` of step 6 is created and deleted in the same run.
 GridLens never applies an outage itself (`IntPlannedout` has no `Apply` or
 `Reset` in PowerFactory 2026), never changes the network model, ratings,
-switches, the ComStatsim period or time step, and creates no operation
+switches or the ComStatsim time step, and creates no operation
 scenarios, variations or study cases.
 
 ---
@@ -551,6 +570,7 @@ PowerFactory calculates and are shown read only.
 | Report | Rows of the Top-N lists | 10 (at most 50) |
 | Report | Points per time plot, at most | 200 (at most 2000) |
 | Run | Reference case (REF) | on |
+| Run | QDS period | first to last planned outage of the cases (alternative: as set in ComStatsim) |
 | Run | Planning cases, at most | 5 (at most 20) |
 | Run | n-1 study times per case, at most | 2000 (at most 20 000) |
 | Contingency analysis | contingency set, categories, monitored scope, AC/DC, islanding, unsupplied load, load shedding, post-fault phases, remedial actions | read only (category B) |

@@ -14,7 +14,7 @@ beschreibt [`POWERFACTORY.md`](POWERFACTORY.md).
 ```mermaid
 flowchart LR
     subgraph P1["Phase 1 · Rechnung (PowerFactory)"]
-        R["REF: QDS<br/>ganzer Zeitraum"] --> C["jeder Fall: QDS<br/>ganzer Zeitraum"]
+        R["REF: QDS<br/>erste bis letzte FS"] --> C["jeder Fall: QDS<br/>derselbe Zeitraum"]
         C --> N["n-1 und (n-1)':<br/>nur die Stunden in<br/>den FS-Fenstern"]
     end
     subgraph K["erhalten im Study Case"]
@@ -46,8 +46,9 @@ ausgewertet wird; GridLens wechselt nie von selbst.
 
 ## 2. Welche Stunden gerechnet und ausgewertet werden
 
-Beispiel: QDS-Zeitraum ein Jahr, stündlich. Fall C1 enthält zwei
-Außerbetriebnahmen, FS1 in KW 10 und FS2 in KW 40.
+Beispiel: stündliche QDS, *QDS period* = *first to last planned outage*
+(Standard). Fall C1 enthält zwei Außerbetriebnahmen, FS1 in KW 10 und FS2 in
+KW 40; der ComStatsim selbst steht auf einem Jahr.
 
 ```mermaid
 gantt
@@ -58,8 +59,8 @@ gantt
     Fenster FS1                          :crit, fs1, 2026-03-02, 5d
     Fenster FS2                          :crit, fs2, 2026-09-28, 5d
     section QDS (Phase 1)
-    REF, jede Stunde                     :ref, 2026-01-01, 365d
-    C1, jede Stunde                      :c1, 2026-01-01, 365d
+    REF, jede Stunde der FS-Spanne       :ref, 2026-03-02, 2026-10-03
+    C1, jede Stunde der FS-Spanne        :c1, 2026-03-02, 2026-10-03
     section n-1 und (n-1)' (Phase 1)
     Sweep n-1 und (n-1)', ein Zeitraum   :n1, 2026-03-02, 2026-10-03
     section Auswertung (Phase 2)
@@ -71,7 +72,7 @@ gantt
 
 | Schritt | Stunden | Warum |
 |---|---|---|
-| QDS, REF und jeder Fall | **jede Stunde des Zeitraums** | PowerFactory wendet jede FS in ihrem eigenen Fenster während einer QDS an; die QDS kann keine Stunden überspringen |
+| QDS, REF und jeder Fall | **jede Stunde von einem Schritt vor der ersten bis einen Schritt nach der letzten FS der gerechneten Fälle** | GridLens setzt diesen Zeitraum für den Lauf (`calcPeriod` 4); PowerFactory wendet jede FS in ihrem eigenen Fenster während einer QDS an und kann keine Stunden überspringen. Bei *as set in ComStatsim*: jede Stunde des eingestellten Zeitraums |
 | n-1 und (n-1)' | **nur die QDS-Schritte von der ersten bis zur letzten Fensterstunde des Falls** | `calcPeriod = 4` mit `startTime`/`endTime`; jeder Schritt außerhalb der Fenster würde nur REF wiederholen |
 | Auswertung n-0 | die Fensterstunden, dazu jede Stunde außerhalb, in der sich Fall und REF unterscheiden (Spill-over) | außerhalb der Fenster sollten Fall und REF gleich sein |
 | Auswertung n-1 | nur die Fensterstunden | die Schritte zwischen auseinanderliegenden Fenstern werden gerechnet, aber nicht bewertet |
@@ -88,6 +89,7 @@ abgelehnt. Den Fall aufzuteilen oder ein Sweep je Fenster vermeidet das.
 | Maßnahme | Was sie spart | Wo | Status |
 |---|---|---|---|
 | **Erhaltenen Lauf neu auswerten** | die ganze Phase 1: keine QDS, kein n-1 | *Results* im Fall-Manager, `kept_runs` | genutzt |
+| **QDS-Zeitraum aus den FS** | jeden QDS-Schritt vor der ersten und nach der letzten FS der Fälle (im Beispiel oben: Januar, Februar, Oktober bis Dezember) | `outage_span`, `set_qds_span` | genutzt, noch nicht in PowerFactory gelaufen |
 | **Gleiche Fälle einmal rechnen** | eine QDS und ein n-1 je verschiedener Menge aus FS und Fenstern; die übrigen sind `REUSED` | `plan_fingerprint` | genutzt |
 | **Gemeinsame n-1-Referenz** | der n-1-Sweep wird je Menge von Zeitpunkten einmal gerechnet und von jedem Fall mit denselben Stunden geteilt | `references` in `calculate_n1_case` | genutzt |
 | **n-1 nur in den Fenstern** | statt jeder Stunde des Zeitraums nur die Fensterstunden (erster Lauf: 2 von 8784) | `n1_study_times`, `sweep_period` | geprüft 24.10.2026 |
@@ -108,7 +110,9 @@ Rechnungen; so lässt sich die Wirkung jeder Maßnahme an einem Lauf ablesen.
 1. **REF**: R0 (`iopt_maint = 0`, keine FS) oder Rfix (`iopt_maint = 1`, nur
    die festen FS).
 2. **Jeder Fall**: `iopt_maint = 1`; die FS des Falls und die festen haben
-   `outserv = 0`, jede andere `outserv = 1`. Eine QDS über den ganzen Zeitraum.
+   `outserv = 0`, jede andere `outserv = 1`. Eine QDS über den Zeitraum des
+   Laufs: standardmäßig von einem QDS-Schritt vor der ersten bis einen Schritt
+   nach der letzten FS der gerechneten Fälle (REF genauso).
    Direkt danach kopiert GridLens das Ergebnisobjekt, in das PowerFactory
    schrieb, als `GridLens_<stamp>_<Fall>`.
 3. **n-1**: je Fall ein Sweep mit `isPlannedOutages = 0` (oder nur den festen

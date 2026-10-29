@@ -15,7 +15,9 @@ Q2  for each: calcPeriod and every time-like attribute, so the attribute that
     holds the period of the dialog can be found,
 Q3  the year of the study case time and of the planned outage windows,
 Q4  the period GridLens reads (by calcPeriod, as gridlens_period below, a copy
-    of qds_period in main.py) and how many planned outages fall into it.
+    of qds_period in main.py) and how many planned outages fall into it,
+Q5  the period GridLens sets for a run with the default 'QDS period' setting
+    (outage_span, a copy of main.py) if every planned outage were in a case.
 
 Privacy: no object name, path, user or result value is printed. Times appear
 only as their year (the period as year and month) and as hours relative to the
@@ -26,7 +28,7 @@ import math
 import re
 from datetime import datetime
 
-PROBE_VERSION = "1.1"
+PROBE_VERSION = "1.2"
 TIME_PATTERN = re.compile(r"time|start|end|begin|per|date|year|step|day|month|hour", re.I)
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
 CLASS_RE = re.compile(r"^[A-Z][a-z]{2}[A-Za-z0-9]{1,30}$")
@@ -157,6 +159,18 @@ def gridlens_period(qds):
     return (start, end, source) if start is not None and end is not None and end >= start else (None, None, source)
 
 
+def outage_span(windows, step):
+    """A copy of outage_span in main.py: one step before the first start to one step after the last end."""
+    windows = list(windows)
+    if not windows or not step or step <= 0 or any(None in window for window in windows):
+        return None
+    first, last = min(window[0] for window in windows), max(window[1] for window in windows)
+    origin = datetime.fromtimestamp(first).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    start = origin + (math.floor((first - origin) / step + 1e-9) - 1) * step
+    end = origin + (math.ceil((last - origin) / step - 1e-9) + 1) * step
+    return start, end
+
+
 def month_of(seconds):
     try:
         return datetime.fromtimestamp(seconds).strftime("%Y-%m")
@@ -223,15 +237,21 @@ def main(app=None):
         emit(app, "The active study case holds no ComStatsim: GridLens would create a new one with default settings.")
     elif gridlens_name not in in_case_names:
         emit(app, "GridLens would read a ComStatsim that is not among the ones listed below.")
-    period = (None, None)
+    period, step = (None, None), None
     for index, qds in enumerate(in_case + elsewhere, 1):
         found_period = report_command(app, index, qds, study_case, project, full_name(qds) == gridlens_name)
         if full_name(qds) == gridlens_name:
             period = found_period
+            size, unit = number(read(qds, "stepSize")[1]), number(read(qds, "stepUnit")[1])
+            if size and unit is not None and int(unit) in STEP_UNIT_SECONDS:
+                step = size * STEP_UNIT_SECONDS[int(unit)]
     years = {}
     placed = {"inside": 0, "outside": 0, "not comparable": 0}
+    windows = []
     for outage in contents(project, "*.IntPlannedout"):
         start, end = number(read(outage, "starttime")[1]), number(read(outage, "endtime")[1])
+        if start is not None and end is not None and number(read(outage, "outserv")[1]) != 1:
+            windows.append((start, end))
         key = "YEAR {}".format(year_of(start)) if start is not None and EPOCH_MIN < start < EPOCH_MAX else "NOT READABLE"
         years[key] = years.get(key, 0) + 1
         # The rule of window_overlaps_period in main.py.
@@ -246,6 +266,10 @@ def main(app=None):
         ", ".join("{} x{}".format(key, count) for key, count in sorted(years.items())) or "none"))
     emit(app, "planned outages against the period GridLens reads: {} inside, {} outside, {} not comparable".format(
         placed["inside"], placed["outside"], placed["not comparable"]))
+    span = outage_span(windows, step)
+    emit(app, "QDS period GridLens sets (default setting) if every planned outage not Ignored were in a case: {}".format(
+        "{} .. {}, {:g} h, calcPeriod 4".format(month_of(span[0]), month_of(span[1]), round((span[1] - span[0]) / 3600.0, 2))
+        if span else "NOT KNOWN (no readable window or time step)"))
 
 
 if __name__ == "__main__":

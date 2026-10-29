@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>
-# GridLens 8.0.1: 172 definitions.
+# GridLens 8.0.1: 176 definitions.
 import hashlib
 import math
 import re
@@ -239,6 +239,13 @@ N1_LIMIT_CHOICES = ((N1_LIMITS_POWERFACTORY, 'use PowerFactory limits'), (N1_LIM
 ON_OFF_CHOICES = ((True, 'on'), (False, 'off'))
 
 
+QDS_SPAN_OUTAGES, QDS_SPAN_CONFIGURED = 'outages', 'configured'
+
+
+QDS_SPAN_CHOICES = ((QDS_SPAN_OUTAGES, 'first to last planned outage of the cases'),
+                    (QDS_SPAN_CONFIGURED, 'as set in ComStatsim'))
+
+
 COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'max_cases': 20}
 
 
@@ -321,6 +328,10 @@ SETTINGS = (
              note='longer series are drawn on an even grid that is the same for every case'),
     _setting('run_reference', 'Run', 'Reference case (REF)', '', RUN_REFERENCE_CASE, 'choice', choices=ON_OFF_CHOICES,
              note='off: no comparison with a reference, every violation counts as found in the case'),
+    _setting('qds_period', 'Run', 'QDS period', '', QDS_SPAN_OUTAGES, 'choice', applies="n-0, n-1, (n-1)'",
+             choices=QDS_SPAN_CHOICES,
+             note='planned outages: one QDS step before the first to one after the last planned outage of the '
+                  'calculated cases, written to ComStatsim for the run and restored'),
     _setting('max_cases', 'Run', 'Planning cases, at most', 'cases', MAX_CASES, 'count',
              note='every case is one more QDS run over the complete period'),
     _setting('max_n1_times', 'Run', 'n-1 study times per case, at most', 'study times', MAX_N1_TIMES, 'count',
@@ -509,6 +520,23 @@ def setting_value(key, overrides=None):
         if problem is None:
             return value
     return globals()[_SETTING_CONSTANTS[key]]
+
+
+def current_setting(key):
+    if _ACTIVE_SETTINGS is not None and key in _ACTIVE_SETTINGS:
+        return _ACTIVE_SETTINGS[key]
+    return SETTINGS_BY_KEY[key]['default']
+
+
+def follows_outages(overrides=None):
+    """True when the run sets the QDS period from its planned outages (setting 'qds_period').
+
+    `overrides` are the settings of a case configuration; None means the active settings.
+    """
+    if overrides is None:
+        return current_setting('qds_period') == QDS_SPAN_OUTAGES
+    value, problem = parse_setting('qds_period', overrides['qds_period']) if 'qds_period' in overrides else (None, '')
+    return (value if problem is None else SETTINGS_BY_KEY['qds_period']['default']) == QDS_SPAN_OUTAGES
 
 
 CLASSIFICATION_VERSION = '1.0'
@@ -1061,6 +1089,7 @@ def classify_planned_outages(app, logger, period=(None, None)):
         overlap = window_overlaps_period(window, period)
         if overlap is False:
             record["status"] = OUTAGE_SKIPPED
+            record["outside_period"] = True
             record["skip_reason"] = (
                 "Outage window {} to {} lies outside the simulated period "
                 "{} to {}.".format(
@@ -1358,6 +1387,9 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
     problems = validate_case_config(config, None if source == 'per_outage' else case_limit(config))
     if problems:
         raise GridLensError('The case configuration cannot be used: {}.'.format('; '.join(problems)))
+    if follows_outages(config.get('settings') or {}):
+        # The run sets the QDS period from the planned outages of its cases: none of them lies outside it.
+        period = (None, None)
     by_key = {record['key']: record for record in records}
     by_name = {record['id']: record for record in records}
     lookup = lambda key: by_key.get(key) or by_name.get(key)
@@ -1683,6 +1715,10 @@ SETTING_HELP = {
                        "that is the same for REF and every case. The assessment always uses every time step.",
     'run_reference': "On: GridLens calculates the reference REF (R0 or Rfix) and compares every case with it. Off: "
                      "no reference; violations cannot be split into new and pre-existing.",
+    'qds_period': "First to last planned outage: GridLens sets the QDS period for the run from one QDS step before "
+                  "the first planned outage of the calculated cases to one step after the last (ComStatsim calcPeriod, "
+                  "startTime, endTime) and restores it afterwards, so REF and every case cover the same time. As set "
+                  "in ComStatsim: the period of the QDS is used unchanged; outages outside it are not calculated.",
     'max_cases': "Most planning cases one run may hold. Every case is one more QDS run over the complete period, "
                  "so the run time grows with each case.",
     'max_n1_times': "Most n-1 study times per case. Every study time calculates every contingency twice (n-1 and "
@@ -1882,8 +1918,9 @@ class CaseEditor:
         self.inactive_grids = {name for name, active in pairs or () if not active}
         self.contingencies = contingencies
         self.by_key = {record['key']: record for record in self.records}
-        self.period = period
-        self.qds_text = qds_text or qds_period_text(period)
+        # The period of the active ComStatsim; with the QDS period set from the outages none lies outside.
+        self.configured_period = period
+        self._qds_text = qds_text or qds_period_text(period)
         # (label, value) lines of the ComStatsim time base, shown read only.
         self.qds_info = list(qds_info or qds_time_info(None, period))
         self._checked_state = None
@@ -2199,6 +2236,26 @@ class CaseEditor:
     def settings_overrides(self):
         return dict(self.config.get('settings') or {})
 
+    @property
+    def period(self):
+        return (None, None) if follows_outages(self.settings_overrides()) else self.configured_period
+
+    @property
+    def qds_text(self):
+        return self.period_line()
+
+    def period_line(self, ready=()):
+        """The QDS period of the run as text; with `ready` cases and the period set from the outages, their span."""
+        if not follows_outages(self.settings_overrides()):
+            return self._qds_text + ' (as set in the active ComStatsim)'
+        windows = [window for plan in ready for window in plan['windows'].values()]
+        if windows and not any(None in window for window in windows):
+            span = '{} - {}'.format(_format_pf_time(min(window[0] for window in windows)),
+                                    _format_pf_time(max(window[1] for window in windows)))
+            return 'planned outages {}, plus one QDS step before and after (ComStatsim: {})'.format(span, self._qds_text)
+        return 'from the first to the last planned outage of the calculated cases, plus one QDS step before and after ' \
+               '(ComStatsim: {})'.format(self._qds_text)
+
     def settings_rows(self):
         """(key, label, unit, value text, source, category, editable) of every setting, in SETTINGS order."""
         overrides = self.settings_overrides()
@@ -2456,7 +2513,7 @@ class CaseEditor:
         """Short (label, value) lines of what "Start calculation" would calculate, and the problems found."""
         problems, request = self.checked()
         if problems:
-            return [('QDS period', self.qds_text + ' (from the active ComStatsim)')], problems
+            return [('QDS period', self.qds_text)], problems
         plans = request['cases']
         ready = [plan for plan in plans if plan['status'] == PLAN_READY]
         problems = ['{}: {}'.format(self.case_label(plan['id']), plan['reason']) for plan in plans if plan['status'] != PLAN_READY]
@@ -2471,7 +2528,7 @@ class CaseEditor:
             ('Planned outages in cases', str(len(outages))),
             ('Fixed background outages', ', '.join(record['id'] for record in background) or 'none'),
             ('Reference', 'Rfix - with the fixed background outages' if background else 'R0 - no planned outage'),
-            ('QDS period', self.qds_text + ' (from the active ComStatsim)'),
+            ('QDS period', self.period_line(ready)),
             ('Assessment', assessments_text(self.config.get('assessments'))),
             ('Assessed equipment', self.monitoring_text()),
             ('Settings', overrides_text(self.settings_overrides())),

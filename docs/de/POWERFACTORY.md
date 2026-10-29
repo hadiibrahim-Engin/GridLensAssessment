@@ -98,6 +98,7 @@ und nennt erwarteten und gefundenen Wert.
 | Objekt | Attribut | Wann | Zurückgesetzt |
 |---|---|---|---|
 | `ComStatsim` | `iopt_maint` | 0 für REF, 1 für alle Fälle | nach dem Rechenschritt (Schritt 5) |
+| `ComStatsim` | `calcPeriod`, `startTime`, `endTime`, `stepNumber` | *QDS period* = *first to last planned outage*: ein QDS-Schritt vor der ersten bis einer nach der letzten Außerbetriebnahme der gerechneten Fälle, `calcPeriod` 4 | nach dem Rechenschritt (Schritt 5) |
 | `IntPlannedout` (alle) | `outserv` | je Lauf: 0 für die Außerbetriebnahmen des Falls und die festen, 1 für alle anderen | nach jedem Lauf |
 | `SetTime` | `cDate`, `cTime` | PowerFactory setzt die Studienzeit beim Rechnen weiter | nach jedem Lauf |
 | `ComSimoutage` | `isPlannedOutages` | 0 für n-1, 1 für (n-1)' | nach jedem Sweep |
@@ -112,8 +113,8 @@ Was GridLens **anlegt** und im Study Case lässt:
 
 Was GridLens **nie** tut: Ergebnisobjekte löschen, `ComStatsim.results`
 umbinden, Operation Scenarios, Varianten oder Study Cases anlegen,
-`starttime`/`endtime` einer Außerbetriebnahme oder den Zeitraum der QDS
-ändern. Eigene Termine je Fall und kürzere QDS-Fenster werden nur angezeigt.
+`starttime`/`endtime` einer Außerbetriebnahme oder den Zeitschritt der QDS
+ändern. Eigene Termine je Fall werden nur angezeigt.
 
 ---
 

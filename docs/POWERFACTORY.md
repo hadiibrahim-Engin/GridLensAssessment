@@ -96,6 +96,7 @@ run with `StateRestoreError`, naming the expected and the found value.
 | Object | Attribute | When | Restored |
 |---|---|---|---|
 | `ComStatsim` | `iopt_maint` | 0 for REF, 1 for every case | after the calculation step (step 5) |
+| `ComStatsim` | `calcPeriod`, `startTime`, `endTime`, `stepNumber` | *QDS period* = *first to last planned outage*: one QDS step before the first to one after the last outage of the calculated cases, `calcPeriod` 4 | after the calculation step (step 5) |
 | `IntPlannedout` (all) | `outserv` | per run: 0 for the case's outages and the fixed ones, 1 for every other | after every run |
 | `SetTime` | `cDate`, `cTime` | PowerFactory moves the study time while calculating | after every run |
 | `ComSimoutage` | `isPlannedOutages` | 0 for n-1, 1 for (n-1)' | after every sweep |
@@ -110,8 +111,8 @@ What GridLens **creates** and leaves in the study case:
 
 What GridLens **never** does: delete result objects, rebind
 `ComStatsim.results`, create operation scenarios, variations or study cases,
-change `starttime`/`endtime` of a planned outage or the QDS period. Own dates
-per case and shorter QDS windows are only shown.
+change `starttime`/`endtime` of a planned outage or the QDS time step. Own
+dates per case are only shown.
 
 ---
 

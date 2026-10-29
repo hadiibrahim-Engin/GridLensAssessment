@@ -52,8 +52,9 @@ can be dragged.
     to the selected case; untick it and the assignment ends. A fixed
     background outage shows *fixed* and cannot be ticked.
   - *Status*: *in simulated period*, *outside simulated period* (no effect in
-    this run) or *Ignored in PowerFactory* (applied only in a case that
-    contains it).
+    this run; only with *QDS period* = *as set in ComStatsim*, otherwise the
+    period follows the outages) or *Ignored in PowerFactory* (applied only in
+    a case that contains it).
   - *Add to case* (or Enter) assigns all selected rows, *Set as fixed
     background* makes them fixed, *Details* (or double-click) opens the
     details window.
@@ -80,7 +81,10 @@ can be dragged.
   - *n-1 – reference contingency analysis* and *(n-1)' – contingency analysis
     with planned-outage scenarios*. (n-1)' needs n-1: ticking (n-1)' ticks
     n-1, unticking n-1 unticks (n-1)'.
-  - The QDS period of the active ComStatsim.
+  - The QDS period of the run: by default *first to last planned outage of
+    the cases* (one QDS step before and after, set for the run and restored),
+    with the period of the active ComStatsim next to it; Settings → Run →
+    *QDS period* switches to *as set in ComStatsim*.
   - *Results*: *Calculate now*, or *Re-evaluate the kept run of <date time>*.
     The re-evaluation calculates nothing; it reads that run's result objects
     with the current settings. The choice is not saved.

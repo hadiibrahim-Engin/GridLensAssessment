@@ -71,7 +71,7 @@ flowchart LR
 | Voraussetzung | Wozu | Fehlt sie |
 |---|---|---|
 | ein aktiver Study Case | alles wird darin gelesen und geschrieben | der Lauf stoppt vor jeder Änderung |
-| genau der ComStatsim des Study Case, konfiguriert (Zeitraum, Zeitschritt, Lastprofile, Berechnungsoptionen) | GridLens rechnet ihn für jeden Fall unverändert | der Lauf stoppt |
+| genau der ComStatsim des Study Case, konfiguriert (Zeitschritt, Lastprofile, Berechnungsoptionen; Zeitraum bei *QDS period* = *as set in ComStatsim*) | GridLens rechnet ihn für jeden Fall; nur der Zeitraum wird aus den Außerbetriebnahmen gesetzt (Schritt 4) | der Lauf stoppt |
 | `ComStatsim.results` auf ein Ergebnisobjekt gebunden, das **keine** `GridLens_…`-Kopie ist | die QDS schreibt hinein; eine erhaltene Kopie würde überschrieben | der Lauf stoppt mit dem gebundenen Namen |
 | die Option *Planned Outages* (`iopt_maint`) am ComStatsim | der einzige Schalter, mit dem PowerFactory Planned Outages anwendet | der Lauf stoppt |
 | aufgezeichnete Variablen: `c:loading` oder `m:loading` von Leitungen (`ElmLne`) und Transformatoren (`ElmTr2`, `ElmTr3`), `m:u` oder `m:u1` von Knoten (`ElmTerm`) | die bewerteten Größen | der Lauf stoppt direkt nach dem ersten QDS-Lauf und nennt, was stattdessen aufgezeichnet ist |
@@ -132,11 +132,16 @@ Outages* während der Läufe.
    Betriebsmittel, Priorität und das Flag *Ignored* (`outserv`).
    Außerbetriebnahmen, die dieselben Betriebsmittel schalten, werden zu einer
    technischen Außerbetriebnahme zusammengefasst (`definition_id`).
-2. **Jede Außerbetriebnahme wird eingeordnet** gegenüber dem simulierten
-   Zeitraum: `CONSIDERED` oder `SKIPPED` mit Grund (außerhalb des Zeitraums,
-   *Ignored*, unlesbares Fenster). Ist die Frage nicht entscheidbar, bleibt sie
+2. **Jede Außerbetriebnahme wird eingeordnet** gegenüber dem Zeitraum des
+   ComStatsim (`qds_period`: bei `calcPeriod` 4 `startTime`…`endTime`, bei 0
+   der Tag in `date` plus `stepNumber` Schritte, jede andere Art offen):
+   `CONSIDERED` oder `SKIPPED` mit Grund (außerhalb des Zeitraums, *Ignored*,
+   unlesbares Fenster). Ist die Frage nicht entscheidbar, bleibt sie
    `CONSIDERED`, wird über die ganze Zeitachse bewertet, und ihre
-   Objektattribute werden als `DIAGNOSTIC` protokolliert.
+   Objektattribute werden als `DIAGNOSTIC` protokolliert. Mit *QDS period* =
+   *first to last planned outage* (Standard) zählt eine Außerbetriebnahme
+   außerhalb dieses Zeitraums nach dem Schließen des Fallmanagers ebenfalls:
+   der Zeitraum des Laufs folgt den Außerbetriebnahmen.
 3. **Netze, Fehlerfälle und erhaltene Läufe werden gelesen** (nur lesend) für
    den Fallmanager: die Netze des Modells, die Fehlerfälle der Contingency
    Analysis des Study Case und die Zeitstempel früherer GridLens-Läufe.
@@ -160,6 +165,20 @@ Outages* während der Läufe.
 
 Phase 1 rechnet und erhält nur; gelesen wird noch nichts.
 
+0. **QDS-Zeitraum.** Mit *QDS period* = *first to last planned outage*
+   (Standard) setzt GridLens den Zeitraum des ComStatsim für jeden Lauf: von
+   einem QDS-Schritt vor dem frühesten Beginn bis einen Schritt nach dem
+   spätesten Ende der Außerbetriebnahmen aller READY-Fälle, auf dem
+   QDS-Schrittraster ab lokaler Mitternacht des frühesten Beginns
+   (`outage_span`). Geschrieben werden `calcPeriod` = 4 (benutzerdefiniert),
+   `startTime`, `endTime` und, wo lesbar, `stepNumber`; GridLens liest sie
+   zurück und protokolliert den Zeitraum und den vorher eingestellten. REF und
+   jeder Fall decken so genau dieselbe Zeit ab; der Schritt nach dem letzten
+   Ende erfasst eine Wirkung über das Fenster hinaus. Feste
+   Hintergrund-Außerbetriebnahmen verlängern den Zeitraum nicht. Ist ein
+   Fenster oder der Zeitschritt nicht lesbar, bleibt der Zeitraum wie
+   eingestellt, mit Warnung. Mit *as set in ComStatsim* wird nichts
+   geschrieben.
 1. **Referenz (REF).** Ohne feste Hintergrund-Außerbetriebnahmen ist REF
    **R0**: *Planned Outages* aus (`iopt_maint=0`). Mit festen
    Außerbetriebnahmen ist sie **Rfix**: *Planned Outages* an, nur die festen
@@ -169,8 +188,8 @@ Phase 1 rechnet und erhält nur; gelesen wird noch nichts.
    mit Status READY setzt GridLens das Flag *Ignored* **jeder** Planned Outage:
    `0` für die Außerbetriebnahmen des Falls und die festen, `1` für alle
    anderen. PowerFactory wendet dann jede aktive Außerbetriebnahme während der
-   QDS in ihrem eigenen Fenster an. Der ComStatsim läuft genau wie
-   konfiguriert.
+   QDS in ihrem eigenen Fenster an. Bis auf den Zeitraum (Punkt 0) läuft der
+   ComStatsim genau wie konfiguriert.
 3. **Gleiche Fälle werden einmal gerechnet.** Ein Fall mit denselben
    Außerbetriebnahmen, Fenstern und festen Außerbetriebnahmen wie ein bereits
    gerechneter (gleicher Fingerabdruck) übernimmt dessen Ergebnis und wird als
@@ -196,8 +215,8 @@ wird: den Wert der Option und jede Außerbetriebnahme mit *Ignored* = 0.
 ### Schritt 5 – Zurücksetzen
 
 In einem `finally`-Block, also auch nach einem Fehler oder Abbruch:
-Studienzeit und Option *Planned Outages* werden zurückgesetzt und
-zurückgelesen, die Bindung von `ComStatsim.results` wird protokolliert, und
+Studienzeit, Option *Planned Outages* und QDS-Zeitraum werden zurückgesetzt
+und zurückgelesen, die Bindung von `ComStatsim.results` wird protokolliert, und
 die erhaltenen Ergebnisobjekte werden aufgelistet. Lässt sich ein Wert nicht
 zurücksetzen, stoppt der Lauf mit erwartetem und gefundenem Wert; der Study
 Case ist dann von Hand zu prüfen.
@@ -242,6 +261,7 @@ und verglichen):
 | Objekt | Attribut | Wann | Zurückgesetzt |
 |---|---|---|---|
 | ComStatsim | `iopt_maint` (*Planned Outages*) | REF- und Fallläufe | Schritt 5 |
+| ComStatsim | `calcPeriod`, `startTime`, `endTime`, `stepNumber` (QDS-Zeitraum) | alle Läufe, bei *QDS period* = *first to last planned outage* | Schritt 5 |
 | jede `IntPlannedout` | `outserv` (*Ignored*) | jeder Falllauf, Rfix, jeder n-1-Sweep | direkt nach diesem Lauf |
 | Studienzeit `SetTime` | `cDate`, `cTime` | ändert PowerFactory während eines Laufs | nach jedem Lauf und in Schritt 5 |
 | ComSimoutage (nur n-1) | `calcPeriod`, Schrittweite, `startTime`, `endTime`, `stepNumber`, `isPlannedOutages` | jeder n-1-Sweep | direkt nach diesem Sweep |
@@ -257,7 +277,7 @@ Objekte, die GridLens **anlegt und behält**:
 Der temporäre `IntVec` aus Schritt 6 wird im selben Lauf angelegt und
 gelöscht. GridLens wendet nie selbst eine Außerbetriebnahme an
 (`IntPlannedout` hat in PowerFactory 2026 kein `Apply` oder `Reset`), ändert
-nie Netzmodell, Bemessungswerte, Schalter, Zeitraum oder Zeitschritt des
+nie Netzmodell, Bemessungswerte, Schalter oder den Zeitschritt des
 ComStatsim und legt keine Operation Scenarios, Variationen oder Study Cases an.
 
 ---
@@ -578,6 +598,7 @@ Einstellungen interpretieren Ergebnisse; Einstellungen der Kategorie B würden
 | Report | Rows of the Top-N lists | 10 (höchstens 50) |
 | Report | Points per time plot, at most | 200 (höchstens 2000) |
 | Run | Reference case (REF) | an |
+| Run | QDS period | erste bis letzte Außerbetriebnahme der Fälle (Alternative: wie im ComStatsim eingestellt) |
 | Run | Planning cases, at most | 5 (höchstens 20) |
 | Run | n-1 study times per case, at most | 2000 (höchstens 20 000) |
 | Contingency analysis | Contingency Set, Kategorien, überwachter Umfang, AC/DC, Inselbildung, nicht versorgte Last, Lastabwurf, Post-Fault-Phasen, Abhilfemaßnahmen | nur lesend (Kategorie B) |

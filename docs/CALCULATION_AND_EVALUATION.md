@@ -14,7 +14,7 @@ are maintained together. How GridLens talks to PowerFactory is described in
 ```mermaid
 flowchart LR
     subgraph P1["Phase 1 · calculation (PowerFactory)"]
-        R["REF: QDS<br/>whole period"] --> C["every case: QDS<br/>whole period"]
+        R["REF: QDS<br/>first to last outage"] --> C["every case: QDS<br/>same period"]
         C --> N["n-1 and (n-1)':<br/>only the hours inside<br/>the outage windows"]
     end
     subgraph K["kept in the study case"]
@@ -46,8 +46,9 @@ run; GridLens never switches on its own.
 
 ## 2. Which hours are calculated and evaluated
 
-Example: QDS period one year, hourly. Case C1 holds two planned outages, FS1 in
-calendar week 10 and FS2 in calendar week 40.
+Example: hourly QDS, *QDS period* = *first to last planned outage* (the
+default). Case C1 holds two planned outages, FS1 in calendar week 10 and FS2 in
+calendar week 40; the ComStatsim itself is set to one year.
 
 ```mermaid
 gantt
@@ -58,8 +59,8 @@ gantt
     FS1 window                         :crit, fs1, 2026-03-02, 5d
     FS2 window                         :crit, fs2, 2026-09-28, 5d
     section QDS (phase 1)
-    REF, every hour                    :ref, 2026-01-01, 365d
-    C1, every hour                     :c1, 2026-01-01, 365d
+    REF, every hour of the outage span :ref, 2026-03-02, 2026-10-03
+    C1, every hour of the outage span  :c1, 2026-03-02, 2026-10-03
     section n-1 and (n-1)' (phase 1)
     n-1 and (n-1)' sweep, one period   :n1, 2026-03-02, 2026-10-03
     section Evaluation (phase 2)
@@ -71,7 +72,7 @@ gantt
 
 | Step | Hours | Why |
 |---|---|---|
-| QDS, REF and every case | **every hour of the period** | PowerFactory applies each outage in its own window during one QDS; the QDS cannot skip hours |
+| QDS, REF and every case | **every hour from one step before the first to one step after the last outage of the calculated cases** | GridLens sets this period for the run (`calcPeriod` 4); PowerFactory applies each outage in its own window during one QDS and cannot skip hours. With *as set in ComStatsim*: every hour of the configured period |
 | n-1 and (n-1)' | **only the QDS steps from the first to the last window hour of the case** | `calcPeriod = 4` with `startTime`/`endTime`; every step outside the windows would only repeat REF |
 | evaluation n-0 | the window hours, plus every hour outside in which the case differs from REF (spill-over) | outside the windows case and REF should be equal |
 | evaluation n-1 | only the window hours | the steps between windows that lie apart are calculated but not assessed |
@@ -88,6 +89,7 @@ one sweep per window, avoids this.
 | Measure | What it saves | Where | Status |
 |---|---|---|---|
 | **Re-evaluate a kept run** | the whole phase 1: no QDS, no n-1 | *Results* in the case manager, `kept_runs` | used |
+| **QDS period from the planned outages** | every QDS step before the first and after the last outage of the cases (in the example above: January, February, October to December) | `outage_span`, `set_qds_span` | used, not yet run in PowerFactory |
 | **Identical cases calculated once** | one QDS and one n-1 per distinct set of outages and windows; the others are `REUSED` | `plan_fingerprint` | used |
 | **Shared n-1 reference** | the n-1 sweep is calculated once per set of study times and shared by every case with the same hours | `references` in `calculate_n1_case` | used |
 | **n-1 only inside the windows** | instead of every hour of the period, only the window hours (first run: 2 of 8784) | `n1_study_times`, `sweep_period` | verified 24 Oct 2026 |
@@ -108,8 +110,9 @@ number of calculations, so the effect of each measure can be read off a run.
 1. **REF**: R0 (`iopt_maint = 0`, no planned outage) or Rfix (`iopt_maint = 1`,
    only the fixed outages).
 2. **Every case**: `iopt_maint = 1`; the case's outages and the fixed ones have
-   `outserv = 0`, every other planned outage `outserv = 1`. One QDS over the whole
-   period. Right after it GridLens copies the result object PowerFactory wrote
+   `outserv = 0`, every other planned outage `outserv = 1`. One QDS over the
+   period of the run: by default from one QDS step before the first to one step
+   after the last planned outage of the calculated cases (REF the same). Right after it GridLens copies the result object PowerFactory wrote
    into as `GridLens_<stamp>_<case>`.
 3. **n-1**: per case one sweep with `isPlannedOutages = 0` (or only the fixed
    outages), over the period from the first to the last window hour.
