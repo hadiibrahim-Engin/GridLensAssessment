@@ -10297,7 +10297,13 @@ def set_qds_span(guard, qds, plans, logger):
         return None
     before = "{} [{}]".format(qds_period_text(qds_period(qds)), qds_period_source(qds))
     start, end = int(round(span[0])), int(round(span[1]))
-    for attribute, value in (("calcPeriod", QDS_PERIOD_USER_DEFINED), ("startTime", start), ("endTime", end)):
+    # PowerFactory checks every single write ("End date must not be before beginning"): a new period after the old
+    # end gets its end first. Restoring in reverse order then passes only valid periods too.
+    old_end = finite_number(safe_attr(qds, "endTime"))
+    times = (("startTime", start), ("endTime", end))
+    if old_end is not None and start > old_end:
+        times = times[::-1]
+    for attribute, value in (("calcPeriod", QDS_PERIOD_USER_DEFINED),) + times:
         if not guard.set(qds, attribute, value, "QDS period [{}]".format(attribute)):
             found, current = _read_setting(qds, attribute)
             raise GridLensError(
