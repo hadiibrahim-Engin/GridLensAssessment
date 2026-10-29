@@ -1,4 +1,4 @@
-# GridLens quality check: Ruff and the test suite, for main.py (tk) and main_qt.py (qt).
+# Outage Assessment quality check: Ruff and the test suite, for main.py (tk) and main_qt.py (qt).
 # Nothing is kept in the repository; only the test results are shown in the run.
 trigger:
   branches:
@@ -48,7 +48,7 @@ jobs:
       - script: python -m pytest -v -ra -m "not gui" --gui-timeout=60 --junitxml="$(Agent.TempDirectory)/pytest.xml"
         displayName: Unattended tests ($(runtime), no native GUI)
         env:
-          GRIDLENS_TEST_RUNTIME: $(runtime)
+          OUTAGE_ASSESSMENT_TEST_RUNTIME: $(runtime)
           PYTHONUTF8: '1'
 
       - task: PublishTestResults@2
@@ -56,5 +56,5 @@ jobs:
         condition: succeededOrFailed()
         inputs:
           testResultsFiles: '$(Agent.TempDirectory)/pytest.xml'
-          testRunTitle: GridLens $(runtime)
+          testRunTitle: Outage Assessment $(runtime)
           failTaskOnMissingResultsFile: true

@@ -1,7 +1,7 @@
-"""GridLens contingency test run: runs the complete contingency analysis on a PROJECT COPY and checks it.
+"""Outage Assessment contingency test run: runs the complete contingency analysis on a PROJECT COPY and checks it.
 
 Prepared for part 3, NOT to be run before Hadi releases it. Diagnostic tool,
-not part of the GridLens delivery. It calculates and writes into the project,
+not part of the Outage Assessment delivery. It calculates and writes into the project,
 so it refuses to do anything unless all of these hold:
 
 1. ENABLED is True (it is False as delivered).
@@ -35,7 +35,7 @@ T4  Native storage: create an IntDplmap in the study case of the copy, insert
 T5  Writing own values into an ElmRes: not run. The Python reference
     documents Write() for the current calculation results of monitored
     variables, not for values chosen by a script.
-T6  Study times set by GridLens: the sweep shall follow the QDS period and the
+T6  Study times set by Outage Assessment: the sweep shall follow the QDS period and the
     windows of the planned outages of a case. T6 picks a few QDS steps around
     the window of one planned outage (before, inside, last inside, at the end)
     and writes them (a) into the studyTime vector, else (b) as startTime /
@@ -55,7 +55,7 @@ import math
 import time
 
 ENABLED = False
-# The exact name of the project copy, e.g. '<project> - GridLens TEST copy'.
+# The exact name of the project copy, e.g. '<project> - Outage Assessment TEST copy'.
 PROJECT_COPY_NAME = ""
 COPY_MARKER = "copy"
 RUN = ("T1", "T2", "T3", "T4", "T6")
@@ -68,7 +68,7 @@ STEP_SECONDS = {0: 1, 1: 60, 2: 3600, 3: 86400}
 EQUIPMENT_CLASSES = frozenset(("ElmLne", "ElmTr2", "ElmTr3", "ElmTr4", "ElmTerm", "ElmSym", "ElmGenstat", "ElmPvsys",
                                "ElmLod", "ElmCoup", "ElmScap", "ElmSind", "ElmShnt", "ElmVsc", "ElmRec", "ElmBranch"))
 CODE_OK, CODE_SPARSE = 0, 3
-TEST_KEY, TEST_VALUE = "gridlens.test", "value-1"
+TEST_KEY, TEST_VALUE = "outage_assessment.test", "value-1"
 WRITTEN_ATTRIBUTES = ("isPlannedOutages", "outserv", "cDate", "cTime", "studyTime", "bIgnoreTime", "startTime",
                       "endTime", "stepSize", "stepUnit")
 
@@ -152,7 +152,7 @@ def confirm(question):
         root = tkinter.Tk()
         root.withdraw()
         try:
-            return bool(messagebox.askyesno("GridLens contingency test run", question, parent=root))
+            return bool(messagebox.askyesno("Outage Assessment contingency test run", question, parent=root))
         finally:
             root.destroy()
     except Exception:
@@ -606,7 +606,7 @@ def test_storage(ctx, out):
         out.add("T4 Confirmed", "NOT_CONFIRMED")
         return None
     study_case = ctx["study_case"]
-    name = "GridLens_TEST_{}".format(time.strftime("%y%m%d-%H%M%S"))
+    name = "OA_TEST_{}".format(time.strftime("%y%m%d-%H%M%S"))
     created = None
     try:
         created = study_case.CreateObject("IntDplmap", name)

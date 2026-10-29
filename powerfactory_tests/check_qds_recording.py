@@ -1,8 +1,8 @@
-"""GridLens probe: where does the quasi-dynamic simulation keep its result variables, and can a run be kept?
+"""Outage Assessment probe: where does the quasi-dynamic simulation keep its result variables, and can a run be kept?
 
-Diagnostic tool, not part of the GridLens delivery. Run it as its own
-ComPython in the study case GridLens uses. It answers the questions the
-first real GridLens 8.0 run left open:
+Diagnostic tool, not part of the Outage Assessment delivery. Run it as its own
+ComPython in the study case Outage Assessment uses. It answers the questions the
+first real Outage Assessment 8.0 run left open:
 
 Q1  Where is the variable selection of the QDS? The configured result object
     (ComStatsim.results) lay in the user's temporary folder and held no IntMon;
@@ -10,10 +10,10 @@ Q1  Where is the variable selection of the QDS? The configured result object
 Q2  Does a QDS run as configured record loading and voltage, and into which
     object (the same one, a new temporary one)?
 Q3  Does a copy of that object made AFTER the run keep its data, also after the
-    next QDS run overwrites the original? (GridLens would keep each run that way;
+    next QDS run overwrites the original? (Outage Assessment would keep each run that way;
     the n-1 results are kept the same way.)
 Q4  Does the n-1 time sweep calculate exactly the study times written into
-    ComSimoutage.studyTime? (GridLens wrote 2, PowerFactory calculated 4.)
+    ComSimoutage.studyTime? (Outage Assessment wrote 2, PowerFactory calculated 4.)
 
 Part A (Q1) only reads. Parts B to D calculate and run only with
 ENABLED = True: B runs the QDS twice with its own settings (as pressing
@@ -34,7 +34,7 @@ import re
 ENABLED = False
 KEEP_PROBE_COPY = False
 PROBE_VERSION = "1.0"
-COPY_NAME = "GridLens_probe_copy"
+COPY_NAME = "OA_probe_copy"
 ASSESSED = ("c:loading", "m:loading", "m:u", "m:u1")
 STEP_SECONDS = {0: 1, 1: 60, 2: 3600, 3: 86400}
 STATSIM_PATTERN = re.compile(r"res|rec|var|mon|sav|out|file|buf|calc|store", re.I)
@@ -389,7 +389,7 @@ def main(app=None, printer=print):
         import powerfactory
         app = powerfactory.GetApplication()
     out = Out(lambda line: app.PrintPlain(line) if hasattr(app, "PrintPlain") else printer(line))
-    out.head("GridLens probe QDS recording {} (ENABLED = {})".format(PROBE_VERSION, "TRUE" if ENABLED else "FALSE"))
+    out.head("Outage Assessment probe QDS recording {} (ENABLED = {})".format(PROBE_VERSION, "TRUE" if ENABLED else "FALSE"))
     study_case = app.GetActiveStudyCase()
     project = app.GetActiveProject()
     qds = app.GetFromStudyCase("ComStatsim")

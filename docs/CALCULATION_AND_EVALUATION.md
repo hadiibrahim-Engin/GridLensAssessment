@@ -1,10 +1,10 @@
-# GridLens – calculation and evaluation, and how GridLens saves time
+# Outage Assessment – calculation and evaluation, and how Outage Assessment saves time
 
-How GridLens calculates and evaluates, which hours each step covers, where
+How Outage Assessment calculates and evaluates, which hours each step covers, where
 the filters act, and every measure that saves calculation or evaluation time.
 German version:
 [`docs/de/BERECHNUNG_UND_AUSWERTUNG.md`](de/BERECHNUNG_UND_AUSWERTUNG.md); both
-are maintained together. How GridLens talks to PowerFactory is described in
+are maintained together. How Outage Assessment talks to PowerFactory is described in
 [`POWERFACTORY.md`](POWERFACTORY.md).
 
 ---
@@ -18,9 +18,9 @@ flowchart LR
         C --> N["n-1 and (n-1)':<br/>only the hours inside<br/>the outage windows"]
     end
     subgraph K["kept in the study case"]
-        E1["GridLens_&lt;stamp&gt;_REF"]
-        E2["GridLens_&lt;stamp&gt;_&lt;case&gt;"]
-        E3["GridLens_&lt;stamp&gt;_&lt;case&gt;_N1 / _N1P"]
+        E1["OA_&lt;stamp&gt;_REF"]
+        E2["OA_&lt;stamp&gt;_&lt;case&gt;"]
+        E3["OA_&lt;stamp&gt;_&lt;case&gt;_N1 / _N1P"]
     end
     subgraph P2["Phase 2 · evaluation (Python)"]
         V["read, compare with REF,<br/>classify, build report"]
@@ -34,13 +34,13 @@ flowchart LR
 
 1. **Phase 1** runs every calculation and keeps each result as its own object
    in the study case. Nothing is read in between.
-2. **Restore**: every value GridLens wrote is put back and verified.
+2. **Restore**: every value Outage Assessment wrote is put back and verified.
 3. **Phase 2** reads the kept objects and evaluates them.
 
 Because the results are kept, phase 2 can run again at any time **without
 phase 1**: the case manager's *Results* choice lists the kept runs. **The
 engineer alone decides** whether to calculate again or to re-evaluate a kept
-run; GridLens never switches on its own.
+run; Outage Assessment never switches on its own.
 
 ---
 
@@ -72,7 +72,7 @@ gantt
 
 | Step | Hours | Why |
 |---|---|---|
-| QDS, REF and every case | **every hour from one step before the first to one step after the last outage of the calculated cases** | GridLens sets this period for the run (`calcPeriod` 4); PowerFactory applies each outage in its own window during one QDS and cannot skip hours. With *as set in ComStatsim*: every hour of the configured period |
+| QDS, REF and every case | **every hour from the first to one step after the last outage of the calculated cases** | Outage Assessment sets this period for the run (`calcPeriod` 4); PowerFactory applies each outage in its own window during one QDS and cannot skip hours. With *as set in ComStatsim*: every hour of the configured period |
 | n-1 and (n-1)' | **only the QDS steps from the first to the last window hour of the case** | `calcPeriod = 4` with `startTime`/`endTime`; every step outside the windows would only repeat REF |
 | evaluation n-0 | the window hours, plus every hour outside in which the case differs from REF (spill-over) | outside the windows case and REF should be equal |
 | evaluation n-1 | only the window hours | the steps between windows that lie apart are calculated but not assessed |
@@ -89,7 +89,7 @@ one sweep per window, avoids this.
 | Measure | What it saves | Where | Status |
 |---|---|---|---|
 | **Re-evaluate a kept run** | the whole phase 1: no QDS, no n-1 | *Results* in the case manager, `kept_runs` | used |
-| **QDS period from the planned outages** | every QDS step before the first and after the last outage of the cases (in the example above: January, February, October to December) | `outage_span`, `set_qds_span` | used, not yet run in PowerFactory |
+| **QDS period from the planned outages** | every QDS step before the first and after the last outage of the cases (one step after is kept) (in the example above: January, February, October to December) | `outage_span`, `set_qds_span` | used, not yet run in PowerFactory |
 | **Identical cases calculated once** | one QDS and one n-1 per distinct set of outages and windows; the others are `REUSED` | `plan_fingerprint` | used |
 | **Shared n-1 reference** | the n-1 sweep is calculated once per set of study times and shared by every case with the same hours | `references` in `calculate_n1_case` | used |
 | **n-1 only inside the windows** | instead of every hour of the period, only the window hours (first run: 2 of 8784) | `n1_study_times`, `sweep_period` | verified 24 Oct 2026 |
@@ -111,9 +111,9 @@ number of calculations, so the effect of each measure can be read off a run.
    only the fixed outages).
 2. **Every case**: `iopt_maint = 1`; the case's outages and the fixed ones have
    `outserv = 0`, every other planned outage `outserv = 1`. One QDS over the
-   period of the run: by default from one QDS step before the first to one step
-   after the last planned outage of the calculated cases (REF the same). Right after it GridLens copies the result object PowerFactory wrote
-   into as `GridLens_<stamp>_<case>`.
+   period of the run: by default from the first to one QDS step after the last
+   planned outage of the calculated cases (REF the same). Right after it Outage Assessment copies the result object PowerFactory wrote
+   into as `OA_<stamp>_<case>`.
 3. **n-1**: per case one sweep with `isPlannedOutages = 0` (or only the fixed
    outages), over the period from the first to the last window hour.
 4. **(n-1)'**: the same period with the case's outages applied.
@@ -153,7 +153,7 @@ what applies for the chosen *Results*.
 ## 7. Re-evaluating in practice
 
 1. Open the case manager.
-2. *Results*: choose the kept run (`GridLens_<stamp>_…`), or *Calculate now*.
+2. *Results*: choose the kept run (`OA_<stamp>_…`), or *Calculate now*.
 3. Change the report filter, limits or thresholds as needed; change the n-1
    filters to narrow the evaluation.
 4. *Start calculation*: with a kept run, PowerFactory calculates nothing.
@@ -170,7 +170,7 @@ with SQL in the template. For that, the QDS time series would have to be in the
 report database: Python still reads them from PowerFactory (Stimulsoft cannot
 read `ElmRes`) and would then write every value with `IntReport.SetValue`, one
 call per cell. One year hourly with 450 series, REF and five cases are about
-24 million calls; today GridLens writes a few thousand result cells.
+24 million calls; today Outage Assessment writes a few thousand result cells.
 
 Whether that is acceptable depends on how fast `SetValue` is in PowerFactory,
 which has not been measured. `powerfactory_tests/benchmark_report_writes.py` measures it: it runs

@@ -3,7 +3,7 @@
 Use [`powerfactory_tests/inspect_result_data.py`](../powerfactory_tests/inspect_result_data.py) as a
 **separate ComPython script in PowerFactory**. It is standalone and needs only
 Python's standard library and PowerFactory's own Python module. It does not
-import or run GridLens.
+import or run Outage Assessment.
 
 ## Run it
 
@@ -12,7 +12,7 @@ import or run GridLens.
 2. Set the name at the top, for example:
 
    ```python
-   RESULT_NAME = "GridLens_261024-103000_C1"
+   RESULT_NAME = "OA_261024-103000_C1"
    ```
 
 3. Run the ComPython with the appropriate project active.
@@ -25,10 +25,10 @@ the active project. If multiple matches exist in that scope, use the complete
 `GetFullName()` path printed by the script. A `.ElmRes` suffix is accepted.
 
 Output goes into a new, uniquely named local folder under
-`~/GridLens/result_inspections/`. To change it, set, for example:
+`~/OutageAssessment/result_inspections/`. To change it, set, for example:
 
 ```python
-OUTPUT_DIRECTORY = r"C:\Users\your_name\Documents\GridLens inspections"
+OUTPUT_DIRECTORY = r"C:\Users\your_name\Documents\Outage Assessment inspections"
 ```
 
 ## What it explores

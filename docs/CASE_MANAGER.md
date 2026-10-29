@@ -1,8 +1,8 @@
-# GridLens Case Manager – Operating Guide
+# Outage Assessment Case Manager – Operating Guide
 
 German version: [de/FALLMANAGER.md](de/FALLMANAGER.md)
 
-The case manager is the window GridLens opens when the ComPython runs with
+The case manager is the window Outage Assessment opens when the ComPython runs with
 `CASE_SOURCE = 'gui'`. It only **configures** the calculation: which planning
 cases, which fixed background outages and rules, which assessments and which
 settings. It shows no results; those are in the report. PowerFactory waits
@@ -11,7 +11,7 @@ before **Start calculation**.
 
 `main.py` draws the window with tkinter/ttk, `main_qt.py` with PyQt6 or PyQt5
 (selectable with `QT_BINDING`). Both offer the same functions and hand the same
-configuration to GridLens.
+configuration to Outage Assessment.
 
 ## Layout
 
@@ -75,14 +75,14 @@ can be dragged.
     warnings*) or *excluded*.
   - *New*, *Copy*, *Delete*, *One case per planned outage*.
   - IDs (`C1`, `C2`, …) are generated, never typed. They name the result
-    objects (`GridLens_<stamp>_C1`) and stay when a case is renamed.
+    objects (`OA_<stamp>_C1`) and stay when a case is renamed.
 - **Calculation** (bottom left):
   - n-0 (the QDS of REF and every case) is always calculated.
   - *n-1 – reference contingency analysis* and *(n-1)' – contingency analysis
     with planned-outage scenarios*. (n-1)' needs n-1: ticking (n-1)' ticks
     n-1, unticking n-1 unticks (n-1)'.
   - The QDS period of the run: by default *first to last planned outage of
-    the cases* (one QDS step before and after, set for the run and restored),
+    the cases* (plus one QDS step after, set for the run and restored),
     with the period of the active ComStatsim next to it; Settings → Run →
     *QDS period* switches to *as set in ComStatsim*.
   - *Results*: *Calculate now*, or *Re-evaluate the kept run of <date time>*.
@@ -111,7 +111,7 @@ state of the settings) and seven sections:
 Every settings row shows *Setting, Value, Unit, Source, Category* and a
 message:
 
-- *Source*: `GridLens` (default), `PowerFactory` (read from the model), `user`
+- *Source*: `Outage Assessment` (default), `PowerFactory` (read from the model), `user`
   (an applied override) or `edited, not applied`.
 - *Category*: `A · evaluation` interprets results and never changes a load
   flow, a rating or the model. `B · calculation` would change what
@@ -225,7 +225,7 @@ On macOS Command works like Ctrl.
 | *Apply settings* / *Save settings* / *Restore defaults* | checks and takes the values / also saves the file / removes every override |
 | *Save configuration* / *Load saved configuration* | writes / reads the project's configuration file; *Load* asks before replacing what is on screen |
 | *Cancel*, Escape, closing the window | ends the run: nothing calculated, saved or published, nothing in the project changed; the cancellation is passed on to the caller |
-| *Start calculation* | applies edited settings, runs the checks below, closes the window and hands the configuration to GridLens |
+| *Start calculation* | applies edited settings, runs the checks below, closes the window and hands the configuration to Outage Assessment |
 
 ## Checks on *Start calculation*
 
@@ -233,9 +233,9 @@ On macOS Command works like Ctrl.
    of problems and nothing starts.
 2. The assessments are consistent ((n-1)' only with n-1).
 3. The configuration is valid (IDs, outage paths, rules, dates).
-4. If no case can be calculated, GridLens asks whether to calculate the
+4. If no case can be calculated, Outage Assessment asks whether to calculate the
    reference only.
-5. Cases that cannot be calculated are listed with their reason; GridLens asks
+5. Cases that cannot be calculated are listed with their reason; Outage Assessment asks
    whether to continue and reports them as NOT EVALUATED or NOT SIMULATED.
 
 ## Calculation preview
@@ -257,7 +257,7 @@ cases are listed separately. The preview never calculates.
 | `'saved'` | the saved configuration, no window |
 | `'per_outage'` | one case per planned outage in the simulated period, no window, no case limit |
 
-Configuration file: `~/GridLens/cases/<project>_<hash>.v2.json` (folder
+Configuration file: `~/OutageAssessment/cases/<project>_<hash>.v2.json` (folder
 `CASE_CONFIG_DIR`). It holds `cases` (each with `id`, `name`, `description`,
 `enabled`, `outages`, `overrides`), `background`, `rules`, `assessments` and
 `settings` (overrides only), with schema, revision, user and time. A file with

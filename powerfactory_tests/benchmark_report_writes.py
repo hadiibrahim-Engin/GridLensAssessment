@@ -1,18 +1,18 @@
-"""GridLens probe: how fast does an IntReport write cells (CreateTable, CreateField, SetValue)?
+"""Outage Assessment probe: how fast does an IntReport write cells (CreateTable, CreateField, SetValue)?
 
-Diagnostic tool, not part of the GridLens delivery. It answers whether QDS time
+Diagnostic tool, not part of the Outage Assessment delivery. It answers whether QDS time
 series could be written into the report database and evaluated with SQL in the
 Stimulsoft template: that would need one SetValue call per value (one year
 hourly, 450 series, REF and 5 cases: about 24 million calls).
 
 How to run it:
 1. In PowerFactory create a NEW IntReport whose name contains "probe", e.g.
-   "GridLens write probe". Never use the GridLens report: Reset() clears the
+   "Outage Assessment write probe". Never use the Outage Assessment report: Reset() clears the
    tables of the IntReport the probe runs below.
 2. Place this file as a ComPython directly below that IntReport.
 3. Set ENABLED = True below and execute the ComPython.
 
-What it measures, with the same calls GridLens uses (SetValue(table, field,
+What it measures, with the same calls Outage Assessment uses (SetValue(table, field,
 row, value), field types 0 string, 1 integer, 2 number):
 - Reset(), CreateTable() and CreateField() per call,
 - SetValue() for numbers, integers and texts in a wide table (10 fields) in
@@ -23,7 +23,7 @@ row, value), field types 0 string, 1 integer, 2 number):
 - the bare Python loop without SetValue, so the share of PowerFactory is clear.
 Each stage stops after STAGE_SECONDS_MAX and extrapolates. At the end the
 probe resets its own report again (CLEAN_UP) and prints estimates for the
-GridLens publication and for writing whole QDS series.
+Outage Assessment publication and for writing whole QDS series.
 
 Privacy: only numbers, table and field names of the probe are printed.
 """
@@ -42,7 +42,7 @@ FIELD_TYPES = {"string": 0, "integer": 1, "number": 2}
 WIDE_FIELDS = tuple("field_" + letter for letter in "abcdefghij")
 LONG_FIELDS = (("run_key", "integer"), ("element_key", "integer"), ("step_key", "integer"), ("value", "number"))
 # Estimates printed at the end: (label, cells).
-ESTIMATES = (("GridLens publication today (about 500 rows, 19 tables)", 6000),
+ESTIMATES = (("Outage Assessment publication today (about 500 rows, 19 tables)", 6000),
              ("one QDS run, one year hourly, 450 series", 8784 * 450),
              ("REF + 5 cases, one year hourly, 450 series", 6 * 8784 * 450))
 
@@ -160,7 +160,7 @@ def main(app=None, printer=print):
         import powerfactory
         app = powerfactory.GetApplication()
     out = Out(lambda text: app.PrintPlain(text) if hasattr(app, "PrintPlain") else printer(text))
-    out.line("GridLens IntReport write probe {} (ENABLED = {})".format(PROBE_VERSION, ENABLED))
+    out.line("Outage Assessment IntReport write probe {} (ENABLED = {})".format(PROBE_VERSION, ENABLED))
     script = app.GetCurrentScript()
     report = script.GetParent() if script is not None else None
     kind = report.GetClassName() if report is not None else ""
@@ -170,7 +170,7 @@ def main(app=None, printer=print):
         return out.lines
     if REPORT_NAME_MARKER not in name.lower():
         out.line("Not run: the IntReport's name must contain '{}'. Reset() clears every table of the report, so the "
-                 "probe never runs below the GridLens report.".format(REPORT_NAME_MARKER))
+                 "probe never runs below the Outage Assessment report.".format(REPORT_NAME_MARKER))
         return out.lines
     if not ENABLED:
         out.line("Not run: set ENABLED = True. The probe resets this IntReport and writes test tables into it.")

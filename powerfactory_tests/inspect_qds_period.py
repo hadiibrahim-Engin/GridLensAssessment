@@ -1,22 +1,22 @@
-"""GridLens probe: which simulated period does GridLens read from the quasi-dynamic simulation?
+"""Outage Assessment probe: which simulated period does Outage Assessment read from the quasi-dynamic simulation?
 
-Diagnostic tool, not part of the GridLens delivery. Run it as its own
-ComPython in the study case GridLens uses. It only reads: nothing is
+Diagnostic tool, not part of the Outage Assessment delivery. Run it as its own
+ComPython in the study case Outage Assessment uses. It only reads: nothing is
 calculated, written or created.
 
 The question: the QDS dialog shows a user-defined period in one year, the
 case manager shows another one, and every planned outage counts as outside
-the simulated period. GridLens reads ComStatsim.startTime / endTime of the
+the simulated period. Outage Assessment reads ComStatsim.startTime / endTime of the
 object app.GetFromStudyCase("ComStatsim") returns. This probe shows
 
 Q1  how many ComStatsim objects the project holds and where (active study
-    case or elsewhere), and which one GridLens reads,
+    case or elsewhere), and which one Outage Assessment reads,
 Q2  for each: calcPeriod and every time-like attribute, so the attribute that
     holds the period of the dialog can be found,
 Q3  the year of the study case time and of the planned outage windows,
-Q4  the period GridLens reads (by calcPeriod, as gridlens_period below, a copy
+Q4  the period Outage Assessment reads (by calcPeriod, as outage_assessment_period below, a copy
     of qds_period in main.py) and how many planned outages fall into it,
-Q5  the period GridLens sets for a run with the default 'QDS period' setting
+Q5  the period Outage Assessment sets for a run with the default 'QDS period' setting
     (outage_span, a copy of main.py) if every planned outage were in a case.
 
 Privacy: no object name, path, user or result value is printed. Times appear
@@ -28,7 +28,7 @@ import math
 import re
 from datetime import datetime
 
-PROBE_VERSION = "1.2"
+PROBE_VERSION = "1.3"
 TIME_PATTERN = re.compile(r"time|start|end|begin|per|date|year|step|day|month|hour", re.I)
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
 CLASS_RE = re.compile(r"^[A-Z][a-z]{2}[A-Za-z0-9]{1,30}$")
@@ -136,8 +136,8 @@ def read(obj, attribute):
         return False, None
 
 
-def gridlens_period(qds):
-    """(start, end, source) as GridLens reads the period; a copy of qds_period and qds_period_source in main.py."""
+def outage_assessment_period(qds):
+    """(start, end, source) as Outage Assessment reads the period; a copy of qds_period and qds_period_source in main.py."""
     kind = number(read(qds, "calcPeriod")[1])
     if kind == 0:
         day, count = number(read(qds, "date")[1]), number(read(qds, "stepNumber")[1])
@@ -153,20 +153,20 @@ def gridlens_period(qds):
             return None, None, source
         return start, start + count * size * STEP_UNIT_SECONDS[int(unit)], source
     if kind is not None and kind != 4:
-        return None, None, "calcPeriod {:g}, not read by GridLens".format(kind)
+        return None, None, "calcPeriod {:g}, not read by Outage Assessment".format(kind)
     start, end = number(read(qds, "startTime")[1]), number(read(qds, "endTime")[1])
     source = "startTime .. endTime" + (" (calcPeriod 4)" if kind is not None else "")
     return (start, end, source) if start is not None and end is not None and end >= start else (None, None, source)
 
 
 def outage_span(windows, step):
-    """A copy of outage_span in main.py: one step before the first start to one step after the last end."""
+    """A copy of outage_span in main.py: from the first start to one step after the last end."""
     windows = list(windows)
     if not windows or not step or step <= 0 or any(None in window for window in windows):
         return None
     first, last = min(window[0] for window in windows), max(window[1] for window in windows)
     origin = datetime.fromtimestamp(first).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    start = origin + (math.floor((first - origin) / step + 1e-9) - 1) * step
+    start = origin + math.floor((first - origin) / step + 1e-9) * step
     end = origin + (math.ceil((last - origin) / step - 1e-9) + 1) * step
     return start, end
 
@@ -178,10 +178,10 @@ def month_of(seconds):
         return "UNREADABLE"
 
 
-def report_command(app, index, qds, study_case, project, read_by_gridlens):
+def report_command(app, index, qds, study_case, project, read_by_outage_assessment):
     emit(app, "")
     emit(app, "ComStatsim #{}: {}{}".format(index, location(qds, study_case, project),
-                                           ", READ BY GRIDLENS" if read_by_gridlens else ""))
+                                           ", READ BY OUTAGE ASSESSMENT" if read_by_outage_assessment else ""))
     values = []
     for name in attribute_names(qds):
         if not TIME_PATTERN.search(name):
@@ -202,8 +202,8 @@ def report_command(app, index, qds, study_case, project, read_by_gridlens):
     readable = start is not None and end is not None and end >= start
     emit(app, "  startTime..endTime alone (read so before 29 Oct 2026): {}".format(
         "YEAR {} .. YEAR {}".format(year_of(start), year_of(end)) if readable else "NOT READABLE"))
-    begin, finish, source = gridlens_period(qds)
-    emit(app, "  period as GridLens reads it [{}]: {}".format(source, "{} .. {}, {:g} h".format(
+    begin, finish, source = outage_assessment_period(qds)
+    emit(app, "  period as Outage Assessment reads it [{}]: {}".format(source, "{} .. {}, {:g} h".format(
         month_of(begin), month_of(finish), round((finish - begin) / 3600.0, 2)) if begin is not None else "NOT KNOWN"))
     return begin, finish
 
@@ -212,11 +212,11 @@ def main(app=None):
     if app is None:
         import powerfactory
         app = powerfactory.GetApplication()
-    emit(app, "GridLens probe QDS period {} (read only)".format(PROBE_VERSION))
+    emit(app, "Outage Assessment probe QDS period {} (read only)".format(PROBE_VERSION))
     study_case = app.GetActiveStudyCase()
     project = app.GetActiveProject()
     if study_case is None or project is None:
-        emit(app, "No active project or study case; activate the study case GridLens uses and run again.")
+        emit(app, "No active project or study case; activate the study case Outage Assessment uses and run again.")
         return
     found, value = read(study_case, "iStudyTime")
     emit(app, "study case time [iStudyTime]: {}".format(shown(value) if found else "NOT_FOUND"))
@@ -231,16 +231,16 @@ def main(app=None):
                  if class_of(item) == "ComStatsim" and full_name(item) not in in_case_names]
     emit(app, "ComStatsim in the active study case: {}; elsewhere in the project: {}".format(len(in_case), len(elsewhere)))
     # GetFromStudyCase creates a ComStatsim when the study case has none; this probe creates nothing.
-    gridlens = app.GetFromStudyCase("ComStatsim") if in_case else None
-    gridlens_name = full_name(gridlens) if gridlens is not None else ""
+    outage_assessment = app.GetFromStudyCase("ComStatsim") if in_case else None
+    outage_assessment_name = full_name(outage_assessment) if outage_assessment is not None else ""
     if not in_case:
-        emit(app, "The active study case holds no ComStatsim: GridLens would create a new one with default settings.")
-    elif gridlens_name not in in_case_names:
-        emit(app, "GridLens would read a ComStatsim that is not among the ones listed below.")
+        emit(app, "The active study case holds no ComStatsim: Outage Assessment would create a new one with default settings.")
+    elif outage_assessment_name not in in_case_names:
+        emit(app, "Outage Assessment would read a ComStatsim that is not among the ones listed below.")
     period, step = (None, None), None
     for index, qds in enumerate(in_case + elsewhere, 1):
-        found_period = report_command(app, index, qds, study_case, project, full_name(qds) == gridlens_name)
-        if full_name(qds) == gridlens_name:
+        found_period = report_command(app, index, qds, study_case, project, full_name(qds) == outage_assessment_name)
+        if full_name(qds) == outage_assessment_name:
             period = found_period
             size, unit = number(read(qds, "stepSize")[1]), number(read(qds, "stepUnit")[1])
             if size and unit is not None and int(unit) in STEP_UNIT_SECONDS:
@@ -264,10 +264,10 @@ def main(app=None):
     emit(app, "")
     emit(app, "planned outages by start year: {}".format(
         ", ".join("{} x{}".format(key, count) for key, count in sorted(years.items())) or "none"))
-    emit(app, "planned outages against the period GridLens reads: {} inside, {} outside, {} not comparable".format(
+    emit(app, "planned outages against the period Outage Assessment reads: {} inside, {} outside, {} not comparable".format(
         placed["inside"], placed["outside"], placed["not comparable"]))
     span = outage_span(windows, step)
-    emit(app, "QDS period GridLens sets (default setting) if every planned outage not Ignored were in a case: {}".format(
+    emit(app, "QDS period Outage Assessment sets (default setting) if every planned outage not Ignored were in a case: {}".format(
         "{} .. {}, {:g} h, calcPeriod 4".format(month_of(span[0]), month_of(span[1]), round((span[1] - span[0]) / 3600.0, 2))
         if span else "NOT KNOWN (no readable window or time step)"))
 

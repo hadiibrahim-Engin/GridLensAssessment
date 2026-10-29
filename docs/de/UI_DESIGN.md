@@ -1,4 +1,4 @@
-# GridLens – Desktop-Oberfläche
+# Outage Assessment – Desktop-Oberfläche
 
 Die Oberfläche bleibt Teil der bestehenden `CaseManagerDialog`-Klasse in
 `outage-assessment/main.py`. Sie verwendet Tkinter und `ttk.Style` ohne

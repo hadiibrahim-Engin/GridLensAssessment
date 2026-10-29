@@ -1,4 +1,4 @@
-"""GridLens assessment and report publication for DIgSILENT PowerFactory 2026.
+"""Outage Assessment assessment and report publication for DIgSILENT PowerFactory 2026.
 
 Run this file as a ComPython in an active study case with a configured
 ComStatsim and result variables. As a child of an IntReport it publishes
@@ -63,7 +63,7 @@ ENERGIZED_MIN_PU = 0.1
 MAX_N1_TIMES = 2000
 TIME_UNIT_FALLBACK = 'h'
 PUBLISHER_VERSION = '8.0.1'
-TEMPLATE_NAME = 'MASTER_GRIDLENS'
+TEMPLATE_NAME = 'MASTER_OUTAGE_ASSESSMENT'
 TEMPLATE_VERSION = '7.0.0'
 DATA_CONTRACT_VERSION = '7.0'
 RUN_REFERENCE_CASE = True
@@ -73,19 +73,21 @@ RUN_REFERENCE_CASE = True
 #   'saved'      the configuration saved for this project, no dialog
 #   'per_outage' one case per planned outage in the simulated period
 CASE_SOURCE = 'gui'
-# Folder of the saved case configurations; '' is ~/GridLens/cases.
+# Folder of the saved case configurations; '' is ~/OutageAssessment/cases.
 CASE_CONFIG_DIR = ''
+# The folder of the saved cases below the home folder; the one of the former name is read until a save here.
+CONFIG_FOLDER, PREVIOUS_CONFIG_FOLDER = 'OutageAssessment', 'GridLens'
 # Default planning-case limit, adjustable in Settings -> Report and run.
 # Cases receive IDs C1, C2, ...; the engineer supplies their names.
 MAX_CASES = 5
-CASE_CONFIG_SCHEMA = 'gridlens.cases'
+CASE_CONFIG_SCHEMA = 'outage_assessment.cases'
 CASE_CONFIG_SCHEMA_VERSION = 2
 # Available assessments; (n-1)' requires the n-1 reference.
 N1_REFERENCE, N1_PRIME = 'n-1', "(n-1)'"
 ASSESSMENTS = ('n-0', N1_REFERENCE, N1_PRIME)
 AVAILABLE_ASSESSMENTS = ASSESSMENTS
 # The time base is the active ComStatsim: every run covers its complete period
-# with its own time step. GridLens shortens no window, adds no time step and
+# with its own time step. Outage Assessment shortens no window, adds no time step and
 # never changes the time step (there is no time optimisation).
 # A case may give a planned outage a date of its own. Applying it means
 # writing IntPlannedout.starttime / endtime for the run; this is off until it
@@ -113,7 +115,7 @@ MAX_RESULT_CELLS = 20000000
 MAX_RUN_CELLS = 120000000
 MAX_TABLE_ROWS = 5000
 PUBLICATION_LOG_INTERVAL_SECONDS = 5.0
-SNAPSHOT_PREFIX = 'GridLens_'
+SNAPSHOT_PREFIX = 'OA_'
 
 FIELD_TYPES = {'string': 0, 'integer': 1, 'number': 2}
 MAX_LABEL_LENGTH = 80
@@ -689,7 +691,7 @@ def is_dc_terminal(obj):
 # An IntVec that ElmRes.GetColumnValues(vector, column) fills with a whole column in one call; without it
 # every value is one GetValue call. Created in the running ComPython for the run and deleted afterwards.
 COLUMN_BUFFER = None
-COLUMN_BUFFER_NAME = 'GridLens_column_buffer'
+COLUMN_BUFFER_NAME = 'OutageAssessment_column_buffer'
 
 
 def open_column_buffer(app):
@@ -781,7 +783,7 @@ def collect_series(elmres, counters=None):
     out_of_scope = 0
     grids = {}
     dc_nodes = set()
-    recorded = {}  # what the result object records that GridLens does not assess, for the error message
+    recorded = {}  # what the result object records that Outage Assessment does not assess, for the error message
     # Without a grid selection every element is assessed, so its grid is not read at all.
     filtered = bool(current_setting('monitoring_grids') or GRID_NAME_FILTER)
     by_class, by_variable = {}, {}
@@ -827,6 +829,9 @@ def collect_series(elmres, counters=None):
         counters['deenergized_nodes'] = 0
         counters['deenergized_steps'] = 0
         counters['dark_keys'] = set()
+        counters['loading_gap_steps'] = 0
+        counters['unvalued_branches'] = 0
+        counters['partial_series'] = 0
     if not chosen and out_of_scope:
         raise RuntimeError(
             'No result series belongs to the assessed equipment ({}; {} series were out of scope). Grids in the '
@@ -839,21 +844,37 @@ def collect_series(elmres, counters=None):
     dark_series = 0
     plot_rows = sample_rows(rows)
     energized = setting_value('energized_min_pu')
+    # Rows where at least one line or transformer has a loading value; a row without any means a failed load flow.
+    valued = bytearray(rows)
+    branches = 0
     for (_, _), (_, column, obj, variable) in sorted(chosen.items()):
         values = []
         category = result_category(obj, variable)
-        dark = 0
+        is_voltage = category == 'voltage'
+        dark = missing = 0
         for row, value in enumerate(read_column(elmres, column, rows)):
-            if value is None and category != 'voltage':
-                raise RuntimeError('Invalid result value in ElmRes cell ({}, {}) for {} {}.'.format(row, column, object_name(obj), variable))
-            if category == 'voltage' and (value is None or value < energized):
-                # A node an outage cuts off is reported as 0 or as NaN: both mean
-                # de-energised, no value. A loading that is not a number still stops the run.
-                value = None
-                dark += 1
+            if is_voltage:
+                if value is None or value < energized:
+                    # A node an outage cuts off is reported as 0 or as NaN: both mean de-energised, no value.
+                    value = None
+                    dark += 1
+            elif value is None:
+                # No loading at this step: the branch is not in operation then (a time-dependent expansion or
+                # switching stage) or the case cuts it off. No value, never 0; compared only where it has one.
+                missing += 1
+            else:
+                valued[row] = 1
             values.append(value)
         if counters is not None:
             counters['deenergized_steps'] += dark
+        if not is_voltage:
+            if missing == len(values):
+                if counters is not None:
+                    counters['unvalued_branches'] += 1
+                continue
+            branches += 1
+            if counters is not None:
+                counters['loading_gap_steps'] += missing
         if dark == len(values):
             dark_series += 1
             if counters is not None:
@@ -871,6 +892,9 @@ def collect_series(elmres, counters=None):
         # reference at the same instant; only the plot is sampled, and only
         # the plotted points are built as (label, time, value) tuples.
         array_values = value_array(values)
+        gaps = row_runs(row for row, value in enumerate(values) if value is None)
+        if gaps and counters is not None:
+            counters['partial_series'] += 1
         series.append({
             'category': category,
             'object': obj,
@@ -886,7 +910,14 @@ def collect_series(elmres, counters=None):
             'points': [(labels[row], plot_times[row], values[row]) for row in plot_rows],
             'statistics': array_statistics(array_values, labels),
             'values': array_values,
+            'gaps': gaps,
         })
+    failed = [row for row in range(rows) if not valued[row]] if branches else []
+    if failed:
+        raise RuntimeError(
+            'At {} time step(s) no line or transformer has a loading value (first: {}), so the load flow most likely '
+            'failed there; a branch out of operation leaves only its own series without a value. Read the PowerFactory '
+            'messages of the quasi-dynamic simulation.'.format(len(failed), labels[failed[0]]))
     if not series:
         raise RuntimeError(missing_series_message(recorded, dark_series))
     return (series, labels, plot_times, time_unit, absolute, origin)
@@ -898,15 +929,15 @@ def missing_series_message(recorded, dark_series=0):
               '(m:u or m:u1)')
     if dark_series:
         return ('The result object has no usable result: all {} recorded terminal voltages are 0 or not a number '
-                '(de-energised) and no line or transformer loading is recorded. GridLens needs {}. Check the study '
+                '(de-energised) and no line or transformer loading is recorded. Outage Assessment needs {}. Check the study '
                 'case and the network state of the quasi-dynamic simulation.'.format(dark_series, needed))
     ordered = sorted(recorded.items(), key=lambda entry: (-entry[1], entry[0]))
     found = ', '.join('{} ({} column{})'.format(name, count, '' if count == 1 else 's') for name, count in ordered[:8])
     if len(ordered) > 8:
         found += ' and {} more'.format(len(ordered) - 8)
-    return ('The result object records none of the results GridLens assesses. GridLens needs {}. Recorded are: {}. '
+    return ('The result object records none of the results Outage Assessment assesses. Outage Assessment needs {}. Recorded are: {}. '
             'Add these variables to the result variables of the quasi-dynamic simulation (ComStatsim, '
-            '"Result Variables") or choose a study case that records them, then run GridLens again.'.format(
+            '"Result Variables") or choose a study case that records them, then run Outage Assessment again.'.format(
                 needed, found or 'no result variables at all'))
 
 
@@ -927,7 +958,7 @@ def check_run_budget(results):
         for category in result['by_category']:
             cells += rows * len(result['by_category'][category])
     if cells > MAX_RUN_CELLS:
-        raise GridLensError('The run contains {} result cells across {} cases and exceeds the limit of {} (MAX_RUN_CELLS). Reduce cases, time range or model scope.'.format(cells, len(results), MAX_RUN_CELLS))
+        raise OutageAssessmentError('The run contains {} result cells across {} cases and exceeds the limit of {} (MAX_RUN_CELLS). Reduce cases, time range or model scope.'.format(cells, len(results), MAX_RUN_CELLS))
     return cells
 
 
@@ -981,6 +1012,73 @@ def value_array(values):
 def array_value(values, row):
     value = values[row]
     return None if value == MISSING else value
+
+
+def _magnitude(value):
+    """The absolute value of a result, 0 for a missing one: a branch without a value carries no load."""
+    return 0.0 if value is None or value == MISSING else abs(value)
+
+
+def row_runs(rows):
+    """[(first, last)] of the runs of consecutive row numbers in `rows` (ascending)."""
+    runs = []
+    for row in rows:
+        if runs and row == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], row)
+        else:
+            runs.append((row, row))
+    return runs
+
+
+def operation_changes(series, labels):
+    """[(time label, put into operation, taken out of operation)] where a series gets or loses its values.
+
+    A series without a value at some steps belongs to equipment that is not in operation then (a time-dependent
+    expansion or switching stage; in a case also equipment the case switches off or cuts off).
+    """
+    found = {}
+    last = len(labels) - 1
+    for item in series:
+        for first, end in item.get('gaps') or ():
+            if first > 0:
+                found.setdefault(first, ([], []))[1].append(item['element_name'])
+            if end < last:
+                found.setdefault(end + 1, ([], []))[0].append(item['element_name'])
+    return [(labels[row], sorted(on, key=str.casefold), sorted(off, key=str.casefold))
+            for row, (on, off) in sorted(found.items())]
+
+
+def _names_text(names, width=140):
+    if not names:
+        return '-'
+    text = ', '.join(names)
+    return '{} elements: {}'.format(len(names), clip_text(text, width)) if len(names) > 1 and len(text) > width else text
+
+
+def operation_change_rows(series, labels):
+    """(time, into operation, out of operation) rows of operation_changes() for the log."""
+    return [(label, _names_text(on), _names_text(off)) for label, on, off in operation_changes(series, labels)]
+
+
+# Element key -> [(first, last)] epoch seconds of the REF steps without a value: the equipment is not in operation
+# then (time-dependent expansion or switching stages). The n-1 comparison leaves those cells out; set per run.
+OFFLINE = {}
+
+
+def set_offline(reference):
+    """OFFLINE from the reference result; empty without a reference on an absolute time axis."""
+    OFFLINE.clear()
+    if not reference or not reference.get('absolute'):
+        return
+    hours = reference.get('hours') or []
+    for (_, key), item in (reference.get('item_by_key') or {}).items():
+        if item.get('gaps'):
+            OFFLINE.setdefault(key, []).extend((hours[first] * 3600.0, hours[last] * 3600.0) for first, last in item['gaps'])
+
+
+def offline_at(element, moment):
+    """True when REF has no value of `element` at `moment` (epoch seconds): it is not in operation then."""
+    return any(first - 1.0 <= moment <= last + 1.0 for first, last in OFFLINE.get(element, ()))
 
 
 
@@ -1134,13 +1232,13 @@ def is_critical(item, stats):
 # under 'settings'; native storage in the PowerFactory project is not verified.
 # ---------------------------------------------------------------------------
 SETTINGS_VERSION = '1.0'
-SOURCE_GRIDLENS, SOURCE_POWERFACTORY, SOURCE_USER = 'GridLens', 'PowerFactory', 'user'
+SOURCE_OUTAGE_ASSESSMENT, SOURCE_POWERFACTORY, SOURCE_USER = 'Outage Assessment', 'PowerFactory', 'user'
 CATEGORY_EVALUATION, CATEGORY_CALCULATION = 'A', 'B'
 N1_LIMITS_POWERFACTORY, N1_LIMITS_GLOBAL = 'powerfactory', 'global'
 N1_LIMIT_CHOICES = ((N1_LIMITS_POWERFACTORY, 'use PowerFactory limits'), (N1_LIMITS_GLOBAL, 'global assessment limit'))
 ON_OFF_CHOICES = ((True, 'on'), (False, 'off'))
-# The QDS period of a run (setting 'qds_period'). Planned outages: GridLens sets it for the run from one QDS step
-# before the first planned outage of the calculated cases to one step after the last, so REF and every case cover
+# The QDS period of a run (setting 'qds_period'). Planned outages: Outage Assessment sets it for the run from the first
+# planned outage of the calculated cases to one QDS step after the last, so REF and every case cover
 # the same time; restored afterwards. As set: the period of the ComStatsim is used unchanged.
 QDS_SPAN_OUTAGES, QDS_SPAN_CONFIGURED = 'outages', 'configured'
 QDS_SPAN_CHOICES = ((QDS_SPAN_OUTAGES, 'first to last planned outage of the cases'),
@@ -1151,7 +1249,7 @@ COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'ma
 MAX_PLANNING_CASES = COUNT_LIMITS['max_cases']
 NOT_VERIFIED = 'not verified yet'
 CONTINGENCY_SETTINGS_NOTE = (
-    'Read only: set in the contingency analysis (ComSimoutage) of the study case; GridLens reads it '
+    'Read only: set in the contingency analysis (ComSimoutage) of the study case; Outage Assessment reads it '
     'and does not change it.')
 # A floating-point result that lies this close to a limit is treated as on the limit: PowerFactory writes
 # results in single or double precision, and 1e-9 is far below any meaningful %-point or p.u. difference.
@@ -1159,7 +1257,7 @@ NUMERIC_TOLERANCE = 1e-9
 
 
 def _setting(key, section, label, unit, default, kind, category=CATEGORY_EVALUATION, editable=True, applies='n-0',
-             source=SOURCE_GRIDLENS, note='', choices=None):
+             source=SOURCE_OUTAGE_ASSESSMENT, note='', choices=None):
     return {'key': key, 'section': section, 'label': label, 'unit': unit, 'default': default, 'kind': kind,
             'category': category, 'editable': editable, 'applies': applies, 'source': source, 'note': note,
             'choices': choices or (N1_LIMIT_CHOICES if kind == 'choice' else None)}
@@ -1175,10 +1273,10 @@ SETTINGS = (
              applies="n-0, n-1, (n-1)'",
              note='evaluation only, also in a re-evaluation; no grid selected: every grid (or GRID_NAME_FILTER)'),
     _setting('contingency_grids', 'Network scope', 'n-1 filter: grids of the outaged equipment', '', None, 'grids',
-             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_GRIDLENS,
+             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
              note='calculation: the other contingencies are "Not analysed" (outserv) for the run; none: every grid'),
     _setting('contingency_elements', 'Network scope', 'n-1 filter: outaged elements', '', (), 'elements',
-             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_GRIDLENS,
+             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
              note='calculation: only contingencies outaging a selected element are analysed, the others are "Not '
                   'analysed" for the run; none selected: every element'),
     _setting('line_warning', 'Thermal limits', 'Warning threshold, lines', '%', LOADING_WARNING, 'limit'),
@@ -1190,9 +1288,9 @@ SETTINGS = (
     _setting('n1_limit_global', 'Thermal limits', "Global assessment limit for n-1 and (n-1)'", '%', LOADING_MAX, 'limit',
              applies="n-1, (n-1)'", note='only used with a global assessment limit'),
     _setting('voltage_min_pu', 'Voltage limits', 'Minimum voltage, every voltage level', 'p.u.', VOLTAGE_MIN, 'pu',
-             note='GridLens proposal, to be confirmed by the engineer'),
+             note='Outage Assessment proposal, to be confirmed by the engineer'),
     _setting('voltage_max_pu', 'Voltage limits', 'Maximum voltage, every voltage level', 'p.u.', VOLTAGE_MAX, 'pu',
-             note='GridLens proposal, to be confirmed by the engineer'),
+             note='Outage Assessment proposal, to be confirmed by the engineer'),
     _setting('energized_min_pu', 'Voltage limits', 'De-energised below', 'p.u.', ENERGIZED_MIN_PU, 'pu',
              note='a node below this voltage counts as de-energised at that time step, not as a value'),
     _setting('post_fault_voltage', 'Voltage limits', 'Post-fault voltage limits', '', None, 'text', editable=False,
@@ -1228,7 +1326,7 @@ SETTINGS = (
              note='off: no comparison with a reference, every violation counts as found in the case'),
     _setting('qds_period', 'Run', 'QDS period', '', QDS_SPAN_OUTAGES, 'choice', applies="n-0, n-1, (n-1)'",
              choices=QDS_SPAN_CHOICES,
-             note='planned outages: one QDS step before the first to one after the last planned outage of the '
+             note='planned outages: from the first to one QDS step after the last planned outage of the '
                   'calculated cases, written to ComStatsim for the run and restored'),
     _setting('max_cases', 'Run', 'Planning cases, at most', 'cases', MAX_CASES, 'count',
              note='every case is one more QDS run over the complete period'),
@@ -1254,7 +1352,7 @@ _WARNING_PAIRS = (('line_warning', 'line_limit'), ('transformer_warning', 'trans
 
 
 def default_settings():
-    """The editable values as GridLens ships them."""
+    """The editable values as Outage Assessment ships them."""
     return {setting['key']: setting['default'] for setting in SETTINGS if setting['editable']}
 
 
@@ -1339,11 +1437,11 @@ def validate_settings(overrides):
 
 
 def effective_settings(overrides=None):
-    """Every editable value with the overrides applied; raises GridLensError for invalid overrides."""
+    """Every editable value with the overrides applied; raises OutageAssessmentError for invalid overrides."""
     overrides = overrides or {}
     problems = validate_settings(overrides)
     if problems:
-        raise GridLensError('The settings cannot be used: {}.'.format('; '.join(message for _, message in problems)))
+        raise OutageAssessmentError('The settings cannot be used: {}.'.format('; '.join(message for _, message in problems)))
     values = default_settings()
     for key, value in overrides.items():
         values[key] = parse_setting(key, value)[0]
@@ -1351,7 +1449,7 @@ def effective_settings(overrides=None):
 
 
 def clean_overrides(values):
-    """Only the values that differ from the GridLens default; equal values are no override."""
+    """Only the values that differ from the Outage Assessment default; equal values are no override."""
     defaults = default_settings()
     return {key: value for key, value in values.items() if key in defaults and value != defaults[key]}
 
@@ -1377,10 +1475,10 @@ def setting_text(key, value):
 
 
 def overrides_text(overrides):
-    """'line limit 110 % (GridLens 100 %); ...' or 'GridLens defaults'."""
+    """'line limit 110 % (Outage Assessment 100 %); ...' or 'Outage Assessment defaults'."""
     if not overrides:
-        return 'GridLens defaults, no user override'
-    return '; '.join('{} = {} (GridLens default {})'.format(
+        return 'Outage Assessment defaults, no user override'
+    return '; '.join('{} = {} (Outage Assessment default {})'.format(
         SETTINGS_BY_KEY[key]['label'], setting_text(key, value), setting_text(key, SETTINGS_BY_KEY[key]['default']))
         for key, value in sorted(overrides.items()))
 
@@ -1406,7 +1504,7 @@ def settings_snapshot(overrides=None):
     }
 
 
-# The settings of the running assessment; None means the GridLens defaults.
+# The settings of the running assessment; None means the Outage Assessment defaults.
 _ACTIVE_SETTINGS = None
 
 
@@ -1424,7 +1522,7 @@ def reset_settings():
 
 
 def active_overrides():
-    """The overrides of the active settings; {} with the GridLens defaults."""
+    """The overrides of the active settings; {} with the Outage Assessment defaults."""
     return clean_overrides(_ACTIVE_SETTINGS or {})
 
 
@@ -1499,7 +1597,7 @@ def loading_limits_text():
 # the planned-outage scenario (n-1)' for the same time step, contingency,
 # monitored element, quantity, post-fault phase and limit definition. The
 # n-0 QDS keeps its own statuses (step_status: PRE-EXISTING, DE-ENERGISED);
-# nothing here changes them. Codes are GridLens codes, not PowerFactory values.
+# nothing here changes them. Codes are Outage Assessment codes, not PowerFactory values.
 # ---------------------------------------------------------------------------
 CLASSIFICATION_VERSION = '1.0'
 CLASSIFICATION_STATUSES = (
@@ -1542,7 +1640,7 @@ def comparison_limit(quantity, category='line', minimum=None, maximum=None, valu
     read = (lambda key: values[key]) if values is not None else current_setting
     if quantity == 'loading':
         if read('n1_limit_mode') == N1_LIMITS_GLOBAL:
-            return {'quantity': 'loading', 'max': float(read('n1_limit_global')), 'source': 'GridLens global assessment limit'}
+            return {'quantity': 'loading', 'max': float(read('n1_limit_global')), 'source': 'Outage Assessment global assessment limit'}
         return {'quantity': 'loading', 'max': 100.0, 'source': 'PowerFactory rating (100 % loading)'}
     return {'quantity': 'voltage', 'min': minimum, 'max': maximum, 'source': 'voltage band of the element'}
 
@@ -1612,6 +1710,9 @@ def classify_comparison(reference, scenario, parameters=None):
         elif state == STATE_NOT_APPLICABLE:
             found.add('NOT_APPLICABLE')
             reasons.append('{}: contingency not applicable{}'.format(label, ': ' + side['reason'] if side.get('reason') else ''))
+        elif state == STATE_MISSING:
+            found.add('NOT_EVALUATED')
+            reasons.append('{}: no value{}'.format(label, ': ' + side['reason'] if side.get('reason') else ''))
         elif state != STATE_OK:
             found.add('NOT_EVALUATED')
             reasons.append('{}: unknown calculation state {!r}'.format(label, state))
@@ -1686,7 +1787,7 @@ MAX_CONTINGENCY_ELEMENTS = 200
 N1_PLANNED_OPTION = 'isPlannedOutages'
 N1_TIMES_ATTRIBUTE, N1_IGNORE_ATTRIBUTE = 'studyTime', 'bIgnoreTime'
 # The time sweep as a period: with calcPeriod 4 PowerFactory 2026 calculates from startTime to endTime (exclusive)
-# in steps of stepSize/stepUnit and ignores studyTime. GridLens writes that period.
+# in steps of stepSize/stepUnit and ignores studyTime. Outage Assessment writes that period.
 N1_PERIOD_ATTRIBUTE, N1_PERIOD_MODE = 'calcPeriod', 4
 N1_RESULT_ATTRIBUTE = 'p_rescnt'
 N1_VARIABLES = {'loading': ('c:loading',), 'voltage': ('m:u',)}
@@ -1719,17 +1820,19 @@ def qds_grid(qds):
 
 
 def outage_span(windows, step):
-    """[one step before the first start, one step after the last end) of `windows` on a grid of `step` seconds.
+    """[the first start, one step after the last end) of `windows` on a grid of `step` seconds.
 
-    The grid starts at local midnight of the first start. None when there is no window, a window is not
-    readable or the step is not known: the span is then left to the ComStatsim.
+    The grid starts at local midnight of the first start. No step before the first start: no outage acts there,
+    and it may fall into another network state (an expansion stage that starts with the first outage left a
+    loading without a value). The step after the last end catches an effect that lasts beyond a window. None
+    when there is no window, a window is not readable or the step is not known: the period then stays as set.
     """
     windows = list(windows)
     if not windows or not step or step <= 0 or any(None in window for window in windows):
         return None
     first, last = min(window[0] for window in windows), max(window[1] for window in windows)
     origin = datetime.fromtimestamp(first).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    start = origin + (math.floor((first - origin) / step + 1e-9) - 1) * step
+    start = origin + math.floor((first - origin) / step + 1e-9) * step
     end = origin + (math.ceil((last - origin) / step - 1e-9) + 1) * step
     return start, end
 
@@ -1738,7 +1841,7 @@ def n1_study_times(windows, grid, limit=None):
     """The QDS steps that lie in at least one window [begin, end), inside the QDS period; sorted.
 
     A window that is not known (None) covers the whole QDS period, as for the
-    n-0 assessment. More than `limit` study times raise GridLensError: the
+    n-0 assessment. More than `limit` study times raise OutageAssessmentError: the
     sweep would calculate every contingency at every one of them.
     """
     start, end, step = grid
@@ -1752,7 +1855,7 @@ def n1_study_times(windows, grid, limit=None):
         while moment < finish and moment <= end + 1e-6:
             times.add(moment)
             if len(times) > limit:
-                raise GridLensError(
+                raise OutageAssessmentError(
                     "The n-1 time sweep would need more than {} study times; every one calculates every "
                     "contingency. Shorten the outage windows or the QDS period.".format(limit))
             index += 1
@@ -1794,7 +1897,7 @@ def read_n1_results(source, in_scope=element_in_scope, recording_limits=None):
     for sub in subs:
         moment = finite_number(safe_attr(sub, 'cnttime'))
         if moment is None or moment in found['times']:
-            raise GridLensError('The n-1 result contains an invalid or duplicate study time.')
+            raise OutageAssessmentError('The n-1 result contains an invalid or duplicate study time.')
         present, values, absent = _read_n1_sub(sub, wanted, in_scope, found, keep_unrecorded=True)
         found['times'][moment] = values
         found['present'][moment] = present
@@ -1841,7 +1944,7 @@ def _read_n1_sub(sub, wanted, in_scope, meta, keep_unrecorded=False):
             code, outage = _status_pair(sub.GetObjectValue(row))
             contingency = object_key(outage) if code == 0 and outage is not None else None
             if contingency is None or contingency in present:
-                raise GridLensError('The n-1 result contains an unreadable or duplicate contingency row.')
+                raise OutageAssessmentError('The n-1 result contains an unreadable or duplicate contingency row.')
             meta['contingencies'].setdefault(contingency, object_name(outage))
             present.add(contingency)
             contingencies.append(contingency)
@@ -1879,7 +1982,7 @@ class SweepReader:
             if class_name(item) != 'ElmRes':
                 continue
             if moment is None or moment in self._subs:
-                raise GridLensError('The n-1 result contains an invalid or duplicate study time.')
+                raise OutageAssessmentError('The n-1 result contains an invalid or duplicate study time.')
             self._subs[moment] = item
         self.times = sorted(self._subs)
         self.meta = {'elements': {}, 'contingencies': {}, 'categories': {}, 'nominal_kv': {}, 'grids': {}}
@@ -2051,6 +2154,10 @@ def _n1_side(values, moment, contingency, element, quantity, limit, applicable=T
     return dict(identity, state=STATE_OK, value=values[key], limit=limit)
 
 
+# Why an (n-1)' cell has no value while its n-1 cell has one.
+CUT_OFF_REASON = "a value in n-1 but none in (n-1)': switched off or cut off by the case's planned outages"
+
+
 def compare_n1(reference, scenario, switched_off=(), contingency_elements=None, parameters=None):
     """Classify (n-1)' against n-1 for every study time, contingency, element and quantity of the reference.
 
@@ -2066,6 +2173,7 @@ def compare_n1(reference, scenario, switched_off=(), contingency_elements=None, 
     elements = {}
     counts = {}
     not_applicable = set()
+    not_in_operation = 0
     for moment, ref_values in sorted(reference['times'].items()):
         case_values = scenario['times'].get(moment)
         ref_absent = reference.get('absent', {}).get(moment) or set()
@@ -2076,6 +2184,10 @@ def compare_n1(reference, scenario, switched_off=(), contingency_elements=None, 
         for (contingency, element, quantity) in sorted(set(ref_values) | set(ref_absent)):
             if element in switched_off:
                 continue
+            if (contingency, element, quantity) in ref_absent and offline_at(element, moment):
+                # Not in operation at this time in the base network (expansion or switching stage): no finding.
+                not_in_operation += 1
+                continue
             category = reference['categories'].get(element, 'line')
             limit = n1_limit(quantity, category, reference['nominal_kv'].get(element))
             ref_side = _n1_side(ref_values, moment, contingency, element, quantity, limit, unreadable=ref_absent)
@@ -2084,6 +2196,8 @@ def compare_n1(reference, scenario, switched_off=(), contingency_elements=None, 
             else:
                 applicable = contingency in present or not (contingency_elements.get(contingency, set()) & switched_off)
                 case_side = _n1_side(case_values, moment, contingency, element, quantity, limit, applicable, case_absent)
+                if case_side['state'] == STATE_MISSING and ref_side['state'] != STATE_MISSING:
+                    case_side['reason'] = CUT_OFF_REASON
             outcome = classify_n1(ref_side, case_side, parameters, {
                 'reference': reference.get('recording_limits'), 'scenario': scenario.get('recording_limits')})
             counts[outcome['status']] = counts.get(outcome['status'], 0) + 1
@@ -2097,7 +2211,8 @@ def compare_n1(reference, scenario, switched_off=(), contingency_elements=None, 
                     outcome['status'] == worst['status'] and (outcome['delta'] or 0.0) > (worst['delta'] or 0.0)):
                 entry['worst'] = dict(outcome, contingency_name=reference['contingencies'].get(contingency, contingency),
                                       reference_value=ref_side.get('value'), scenario_value=case_side.get('value'))
-    return {'elements': elements, 'counts': counts, 'not_applicable': sorted(not_applicable, key=str.casefold)}
+    return {'elements': elements, 'counts': counts, 'not_applicable': sorted(not_applicable, key=str.casefold),
+            'not_in_operation': not_in_operation}
 
 
 def n1_summary(comparison):
@@ -2269,6 +2384,8 @@ class ScenarioAggregate:
         self._top, self.events_listed = [], 0
         self.examined_pairs = self.pairs_not_applicable = self.pairs_failed = self.pairs_missing_time = 0
         self.unreadable = 0
+        # Cells of elements not in operation at their time (no REF value): left out, only counted.
+        self.not_in_operation = 0
         self.times_calculated, self.contingencies_applicable = [], set()
         self._group_counts, self._group_size = None, -1
 
@@ -2374,10 +2491,14 @@ class ScenarioAggregate:
                 explicit_groups[(criterion, threshold)] = explicit_groups.get((criterion, threshold), 0) + 1
                 key = (contingency, element, quantity)
                 if key in unreadable:
+                    if key in ref_absent and offline_at(element, moment):
+                        self.not_in_operation += 1
+                        continue
                     outcome = {'status': 'NOT_EVALUATED', 'change': None, 'delta': None,
                                'reference_violation': None, 'scenario_violation': None, 'indicators': []}
                     self.unreadable += 1
-                    self._quality(moment, contingency, 'NOT_EVALUATED', 'result cell not readable', 1)
+                    self._quality(moment, contingency, 'NOT_EVALUATED', CUT_OFF_REASON if key not in ref_absent
+                                  else 'result cell not readable', 1)
                     ref_value = scen_value = None
                 else:
                     ref_value, scen_value = ref_values.get(key), scen_values.get(key)
@@ -2558,6 +2679,7 @@ class ScenarioAggregate:
                 'contingencies_defined': len(self.contingencies),
                 'contingencies_applicable': len(self.contingencies_applicable),
                 'pairs_examined': self.examined_pairs,
+                'not_in_operation_cells': self.not_in_operation,
                 'pairs_not_applicable': self.pairs_not_applicable,
                 'pairs_failed': self.pairs_failed,
                 'pairs_missing_time': self.pairs_missing_time,
@@ -2963,7 +3085,8 @@ def step_status(item, ref_value, case_value):
 def _classify(is_voltage, in_ref, in_case, tolerance):
     """Status of one time step from the two excesses; None stands for a missing value."""
     if in_case is None:
-        return STATUS_DEENERGIZED if in_ref is not None and is_voltage else None
+        # A value only in REF: the case cuts the element off (or switches it off, which compare_element marks).
+        return STATUS_DEENERGIZED if in_ref is not None else None
     if in_ref is None:
         return STATUS_EXCEEDED if in_case > 0 else STATUS_OK
     if in_case > 0 and in_ref == 0:
@@ -3100,7 +3223,7 @@ def compare_case(result, reference, windows, out_of_service_keys=()):
     ref_items = {key: item for key, item in reference['item_by_key'].items()} if reference else {}
     missing = [item['element_name'] for item in list(case_items.values()) + list(ref_items.values()) if 'values' not in item]
     if missing:
-        raise GridLensError('the time series of {} were already released; a case can only be compared right after '
+        raise OutageAssessmentError('the time series of {} were already released; a case can only be compared right after '
                             'its extraction'.format(', '.join(missing[:3])))
     spill = _spill_rows(case_items, ref_items, inside, len(hours)) if reference is not None and mappable and windows else []
     rows = sorted(set(inside) | set(spill))
@@ -3158,8 +3281,8 @@ def outage_effects(result, reference, plan):
                     if key[0] != 'voltage' and key[1] in components and key in ref_items
                     and 'values' in case_items[key] and 'values' in ref_items[key]]
         off = [name for case_item, ref_item in recorded
-               if max((abs(case_item['values'][row] or 0.0) for row in rows), default=0.0) <= OFF_LOADING
-               and max((abs(ref_item['values'][row] or 0.0) for row in rows), default=0.0) > OFF_LOADING
+               if max((_magnitude(case_item['values'][row]) for row in rows), default=0.0) <= OFF_LOADING
+               and max((_magnitude(ref_item['values'][row]) for row in rows), default=0.0) > OFF_LOADING
                for name in [case_item['element_name']]]
         if off:
             checks.append((record['name'], OUTAGE_APPLIED, 'without load in its window: ' + clip_text(', '.join(off), 120)))
@@ -3203,7 +3326,7 @@ def outage_persistence(result, reference, plan):
         if end is None or not pairs:
             continue
         first = bisect.bisect_left(hours, end / 3600.0)
-        off = [any(abs(case[row] or 0.0) <= OFF_LOADING < abs(ref[row] or 0.0) for case, ref in pairs)
+        off = [any(_magnitude(case[row]) <= OFF_LOADING < _magnitude(ref[row]) for case, ref in pairs)
                for row in range(first, len(hours))]
         stretch = next((index for index, value in enumerate(off) if not value), len(off))
         found.append((record['name'], sum(steps[first + index] for index in range(stretch)),
@@ -3679,6 +3802,24 @@ def _model_quality(payload, results, request=None):
                      _counted(counters.get('dc_nodes', 0), 'DC node', 'DC nodes'),
                      _counted(counters.get('deenergized_nodes', 0), 'node without voltage', 'nodes without voltage'),
                      _counted(counters.get('deenergized_steps', 0), 'time step', 'time steps'), format_limit(setting_value('energized_min_pu'))))
+    if counters.get('partial_series') or counters.get('unvalued_branches'):
+        _quality(payload, 'operation_data', 'Time-dependent operation', 'INFO',
+                 'Reference: {} with values only during part of the period ({} without a loading value) and {}: '
+                 'equipment not in operation then (expansion or switching stages). Assessed only where it has a value, '
+                 'never counted as 0; the n-1 comparison leaves those times out as well.'.format(
+                     _counted(counters.get('partial_series', 0), 'series', 'series'),
+                     _counted(counters.get('loading_gap_steps', 0), 'time step', 'time steps'),
+                     _counted(counters.get('unvalued_branches', 0), 'line or transformer without any loading value',
+                              'lines or transformers without any loading value')))
+    cut_cases = [(case['name'], sum(1 for category in LOADING_CATEGORIES for record in case['comparison'].get(category, ())
+                                    if record['status'] == STATUS_DEENERGIZED)) for case in cases if case.get('comparison')]
+    cut_cases = [(name, count) for name, count in cut_cases if count]
+    if cut_cases:
+        _quality(payload, 'cut_off', 'Branches without a value only in a case', 'WARNING',
+                 '; '.join('{}: {}'.format(name, _counted(count, 'line or transformer', 'lines or transformers'))
+                           for name, count in cut_cases[:8]) + '. They have a value in Reference at the same time: the '
+                 'case cuts them off (DE-ENERGISED); check the network state of the case.',
+                 ', '.join(name for name, _ in cut_cases[:5]))
     dark_cases = [(case['name'], sum(1 for record in case['comparison']['voltage'] if record['status'] == STATUS_DEENERGIZED)) for case in cases if case.get('comparison')]
     dark_cases = [(name, count) for name, count in dark_cases if count]
     if dark_cases:
@@ -3719,7 +3860,7 @@ def _model_quality(payload, results, request=None):
 
 
 QDS_TIME_BASE_TEXT = ('Complete ComStatsim period: every run covers the whole simulated period with the ComStatsim time step; '
-                      'GridLens shortens no window, adds no time step and changes no time step.')
+                      'Outage Assessment shortens no window, adds no time step and changes no time step.')
 
 
 def qds_mode_text(request=None):
@@ -5494,7 +5635,7 @@ def publish_report(report, payload, log=None):
                               'cells', rows=(index, row_count))
             write_seconds = time.monotonic() - write_started
             rate = '{:.1f} cells/s'.format(written / write_seconds) if written and write_seconds > 0 else 'n/a'
-            emit('GridLens: {} -> {}: {} rows, {} cells; writes {:.1f}s '
+            emit('Outage Assessment: {} -> {}: {} rows, {} cells; writes {:.1f}s '
                  '({}); table total {:.1f}s.'.format(
                      native_name, name, row_count, written, write_seconds,
                      rate, time.monotonic() - table_started))
@@ -5503,7 +5644,7 @@ def publish_report(report, payload, log=None):
             report.Reset()
         except Exception:
             pass
-        raise RuntimeError('GridLens publication failed at ' + context) from exc
+        raise RuntimeError('Outage Assessment publication failed at ' + context) from exc
     emit('Publication finished: {} tables, {} rows, {} cells in {:.1f}s.'.format(
         len(TABLES), total_rows, total_cells, time.monotonic() - started))
     return {name: len(rows) for name, rows in payload.items()}
@@ -5570,7 +5711,7 @@ QDS_OPTION_ATTRIBUTES = (
 )
 
 
-class GridLensError(RuntimeError):
+class OutageAssessmentError(RuntimeError):
     """Expected runtime error with an actionable user-facing message.
 
     `details` are the facts behind it (objects, values read back, what was
@@ -5584,7 +5725,7 @@ class GridLensError(RuntimeError):
         self.hint = hint
 
 
-class RecordingError(GridLensError):
+class RecordingError(OutageAssessmentError):
     """The kept result object records none of the assessed variables; every further run would do the same."""
 
 
@@ -5602,7 +5743,7 @@ reset_run_context()
 
 
 def log_error_details(logger, exc, level="ERROR"):
-    """The detail lines and the hint of a GridLensError below its message."""
+    """The detail lines and the hint of a OutageAssessmentError below its message."""
     for line in getattr(exc, 'details', None) or ():
         logger.detail("  " + line, level)
     if getattr(exc, 'hint', ''):
@@ -5641,12 +5782,12 @@ def log_failure(logger, exc):
     while link is not None:
         frames.append("{}() line {}".format(link.tb_frame.f_code.co_name, link.tb_lineno))
         link = link.tb_next
-    block("Code location in the GridLens script (innermost last)", frames[-6:])
+    block("Code location in the Outage Assessment script (innermost last)", frames[-6:])
     block("PowerFactory state", [RUN_CONTEXT.get('restore')])
     block("Result objects kept in the study case", RUN_CONTEXT.get('kept') or ["none"])
     block("Warnings before the failure", (RUN_CONTEXT.get('warnings') or [])[-6:])
     block("What to do", [next((cause.hint for cause in chain if getattr(cause, 'hint', '')),
-                              "Correct the reported condition, verify the active study case, and run GridLens again.")])
+                              "Correct the reported condition, verify the active study case, and run Outage Assessment again.")])
 
 
 class RunLogger:
@@ -5684,11 +5825,11 @@ class RunLogger:
         elapsed = time.monotonic() - self.started
         if level in ("WARNING", "ERROR") and stage != "FAILED":
             _remember_warning(message)
-        self._emit("[GridLens][{}][{}][{}][{:7.1f}s] {}".format(
+        self._emit("[Outage Assessment][{}][{}][{}][{:7.1f}s] {}".format(
             position, level, stage, elapsed, message))
 
     def _plain(self, text, level="INFO"):
-        self._emit("[GridLens]{} {}".format(
+        self._emit("[Outage Assessment]{} {}".format(
             "" if level == "INFO" else "[" + level + "]", text))
 
     def section(self, title):
@@ -5978,7 +6119,7 @@ def _find_project_outages(app):
         more, more_queries = _outages_below(project)
         found, queries = found + more, queries + more_queries
     if queries == 0:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "Planned-outage discovery could not query the operational library "
             "or active project. No calculation was started.")
     unique = {}
@@ -6150,7 +6291,7 @@ def window_overlaps_period(window, period):
 def classify_planned_outages(app, logger, period=(None, None)):
     """Report which planned outages PowerFactory will apply for this period.
 
-    GridLens never applies an outage itself. PowerFactory does that during the
+    Outage Assessment never applies an outage itself. PowerFactory does that during the
     calculation once PLANNED_OUTAGE_OPTION is set, driven by each outage's own
     time window. This pass only decides what to tell the reader, and whether an
     outage run is worth starting at all.
@@ -6250,7 +6391,7 @@ INTERVAL_RELATIONS = {
     'T13': 'identical windows'}
 
 
-class GridLensCancelled(GridLensError):
+class OutageAssessmentCancelled(OutageAssessmentError):
     """The engineer cancelled the case manager; nothing was calculated or changed."""
 
 
@@ -6349,21 +6490,21 @@ def upgrade_case_config(config):
     for case in cases:
         for field in ('includes', 'requires'):
             if not _is_text_list(case.get(field, [])):
-                raise GridLensError('Cannot upgrade case {!r}: {} must be a list of case ids.'.format(case.get('id'), field))
+                raise OutageAssessmentError('Cannot upgrade case {!r}: {} must be a list of case ids.'.format(case.get('id'), field))
     # Check the ordinary fields before walking the legacy references.
     plain = dict(upgraded, cases=[{key: value for key, value in case.items() if key not in ('includes', 'requires')}
                                  for case in cases])
     plain.pop('exclusive_groups', None)
     problems = validate_case_config(plain, max_cases=None)
     if problems:
-        raise GridLensError('Cannot upgrade case configuration: {}.'.format('; '.join(problems)))
+        raise OutageAssessmentError('Cannot upgrade case configuration: {}.'.format('; '.join(problems)))
     by_id = {case['id']: case for case in cases}
 
     def collect(case_id, trail=()):
         if case_id in trail:
-            raise GridLensError('Cannot upgrade cases that include each other: {}.'.format(' -> '.join(trail + (case_id,))))
+            raise OutageAssessmentError('Cannot upgrade cases that include each other: {}.'.format(' -> '.join(trail + (case_id,))))
         if case_id not in by_id:
-            raise GridLensError('Cannot upgrade: included case {!r} does not exist.'.format(case_id))
+            raise OutageAssessmentError('Cannot upgrade: included case {!r} does not exist.'.format(case_id))
         part = by_id[case_id]
         yield part
         for child in part.get('includes') or ():
@@ -6499,7 +6640,7 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
     """
     problems = validate_case_config(config, None if source == 'per_outage' else case_limit(config))
     if problems:
-        raise GridLensError('The case configuration cannot be used: {}.'.format('; '.join(problems)))
+        raise OutageAssessmentError('The case configuration cannot be used: {}.'.format('; '.join(problems)))
     if follows_outages(config.get('settings') or {}):
         # The run sets the QDS period from the planned outages of its cases: none of them lies outside it.
         period = (None, None)
@@ -6515,7 +6656,7 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
         elif record not in background:
             background.append(record)
             if record.get('originally_ignored'):
-                request_warnings.append('fixed outage {} is set to Ignored in PowerFactory; GridLens applies it in the reference and every case'.format(record['name']))
+                request_warnings.append('fixed outage {} is set to Ignored in PowerFactory; Outage Assessment applies it in the reference and every case'.format(record['name']))
     background_keys = {record['key'] for record in background}
     plans = []
     # An excluded case is neither calculated nor reported.
@@ -6587,7 +6728,7 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
             if record['key'] in background_keys:
                 plan['warnings'].append('{} is a fixed outage of the reference too; it adds nothing to this case'.format(record['name']))
             if record.get('originally_ignored'):
-                plan['warnings'].append('{} is set to Ignored in PowerFactory; GridLens applies it for this case only'.format(record['name']))
+                plan['warnings'].append('{} is set to Ignored in PowerFactory; Outage Assessment applies it for this case only'.format(record['name']))
             if None in window:
                 plan['warnings'].append('the window of {} is not readable; the complete period is assessed'.format(record['name']))
         known = [window for window in windows.values() if None not in window]
@@ -6645,8 +6786,8 @@ def per_outage_request(records, candidates, period=(None, None), project_key='')
 
 
 def legacy_case_config_path(project_key):
-    """Where GridLens 8.0 (schema 1) keeps the cases of a project; this version only reads that file."""
-    folder = CASE_CONFIG_DIR or os.path.join(os.path.expanduser('~'), 'GridLens', 'cases')
+    """Where Outage Assessment 8.0 (schema 1) keeps the cases of a project; this version only reads that file."""
+    folder = CASE_CONFIG_DIR or os.path.join(os.path.expanduser('~'), CONFIG_FOLDER, 'cases')
     stem = re.sub(r'[^A-Za-z0-9_.-]+', '_', project_key.rsplit('\\', 1)[-1])[:40] or 'project'
     digest = hashlib.sha256(project_key.encode('utf-8')).hexdigest()[:8]
     return os.path.join(folder, '{}_{}.json'.format(stem, digest))
@@ -6665,32 +6806,42 @@ def _legacy_sibling(path):
     return path[:-len(marker)] + '.json' if path.endswith(marker) else None
 
 
+def _previous_folder_paths(path):
+    """The same file (and its schema-1 sibling) in the folder of the former name; none with CASE_CONFIG_DIR."""
+    if CASE_CONFIG_DIR:
+        return []
+    earlier = os.path.join(os.path.expanduser('~'), PREVIOUS_CONFIG_FOLDER, 'cases', os.path.basename(path))
+    return [earlier, _legacy_sibling(earlier)]
+
+
 def load_case_config(path):
     """The saved configuration, or None when there is none; a damaged file raises.
 
     Only the structure is checked here, not the number of cases: a file with
-    more cases than MAX_CASES (e.g. saved by GridLens 8.0) must still open in
+    more cases than MAX_CASES (e.g. saved by Outage Assessment 8.0) must still open in
     the case manager, where cases can be deleted. Calculating and saving it is
     refused with the reason (resolve_request, save_case_config).
     """
     if not os.path.isfile(path):
-        # Not saved by this version yet: start from the GridLens 8.0 file, read only.
-        legacy = _legacy_sibling(path)
-        if legacy is None or not os.path.isfile(legacy):
+        # Not saved by this version yet: start from an earlier file, read only (schema 1, or the folder of the
+        # former name); the next save writes here.
+        earlier = [candidate for candidate in [_legacy_sibling(path)] + _previous_folder_paths(path)
+                   if candidate and os.path.isfile(candidate)]
+        if not earlier:
             return None
-        path = legacy
+        path = earlier[0]
     try:
         with open(path, 'r', encoding='utf-8') as handle:
             config = json.load(handle)
     except (OSError, ValueError) as exc:
-        raise GridLensError('The saved case configuration {} cannot be read: {}'.format(path, exc)) from None
+        raise OutageAssessmentError('The saved case configuration {} cannot be read: {}'.format(path, exc)) from None
     try:
         config = upgrade_case_config(config)
-    except GridLensError as exc:
-        raise GridLensError('The saved case configuration {} cannot be upgraded: {}'.format(path, exc)) from None
+    except OutageAssessmentError as exc:
+        raise OutageAssessmentError('The saved case configuration {} cannot be upgraded: {}'.format(path, exc)) from None
     problems = validate_case_config(config, max_cases=None)
     if problems:
-        raise GridLensError('The saved case configuration {} is invalid: {}'.format(path, '; '.join(problems)))
+        raise OutageAssessmentError('The saved case configuration {} is invalid: {}'.format(path, '; '.join(problems)))
     return config
 
 
@@ -6699,7 +6850,7 @@ def save_case_config(path, config, user=''):
     path = os.fspath(path)
     problems = validate_case_config(config)
     if problems:
-        raise GridLensError('The case configuration was not saved: {}'.format('; '.join(problems)))
+        raise OutageAssessmentError('The case configuration was not saved: {}'.format('; '.join(problems)))
     stored = dict(config, revision=int(config.get('revision') or 0) + 1,
                   saved_at=datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %z'), saved_by=user)
     # The upgrade note is a one-time hint; once saved, the cases are the reviewed ones.
@@ -6718,7 +6869,7 @@ def save_case_config(path, config, user=''):
             os.fsync(handle.fileno())
         os.replace(temporary, path)
     except (OSError, TypeError, ValueError) as exc:
-        raise GridLensError('The case configuration {} was not saved: {}'.format(path, exc)) from exc
+        raise OutageAssessmentError('The case configuration {} was not saved: {}'.format(path, exc)) from exc
     finally:
         if temporary is not None and os.path.exists(temporary):
             os.remove(temporary)
@@ -6761,11 +6912,11 @@ def preview_text(request, period=(None, None)):
 # ---------------------------------------------------------------------------
 # Case manager dialog (PyQt6 or PyQt5, Qt Widgets)
 #
-# Configuration only: the dialog reads the planned outages GridLens already
+# Configuration only: the dialog reads the planned outages Outage Assessment already
 # collected and edits a configuration dictionary. It writes nothing into
 # PowerFactory. Every QDS starts after the dialog is closed.
 # ---------------------------------------------------------------------------
-class CaseManagerUnavailable(GridLensError):
+class CaseManagerUnavailable(OutageAssessmentError):
     """PyQt or Qt cannot open a window in this PowerFactory installation."""
 
 
@@ -6808,17 +6959,17 @@ HELP_TEXTS = {
                    "applies, Escape cancels.",
     'enabled': "Run flag: include this case in the calculation\n"
                "Ticked: the case is calculated and reported, in its own QDS run with the result object "
-               "GridLens_<stamp>_<case>. A case with exactly the same outages and windows as another is calculated "
+               "OA_<stamp>_<case>. A case with exactly the same outages and windows as another is calculated "
                "once and reported as REUSED.\n"
                "Unticked: status 'excluded'. The case stays in the configuration but is neither calculated nor "
                "reported. Other cases stay unchanged.",
-    'case_limit': "At most the number of planning cases set in Settings -> Report and run (GridLens default {}). Each "
+    'case_limit': "At most the number of planning cases set in Settings -> Report and run (Outage Assessment default {}). Each "
                   "case is one more QDS run over the complete period.".format(MAX_CASES),
     'New': "Creates the next case (C1, C2, ...) with the name 'Case n'. Double-click it to rename it. Key: Ctrl+N.",
     'Copy': "New independent case with the same planned outages and own dates. Changes affect only the copy.",
     'Delete': "Removes only the selected case after confirmation. Other cases and the planned outages in PowerFactory "
               "stay unchanged. Key: Delete in the case list.",
-    'one_per_outage': "Replaces all cases by one case per planned outage in the simulated period (GridLens 7 "
+    'one_per_outage': "Replaces all cases by one case per planned outage in the simulated period (Outage Assessment 7 "
                       "behaviour), up to the case limit of the Settings. Ignored and fixed outages get none. Asks "
                       "before replacing.",
     'add': "Assigns all selected planned outages to the selected case at once. Same as Enter. For one outage, "
@@ -6849,9 +7000,9 @@ HELP_TEXTS = {
     'planned_outages': "Planned outages from the PowerFactory Outage Management library. Their validity in time and "
                        "their switching effect are taken into account in the assigned scenarios.",
     'qds': "The time step is taken from PowerFactory. With a QDS time step of two hours, n-1 and (n-1)' are assessed "
-           "at the same points in time. Every run covers the complete ComStatsim period; GridLens changes neither "
+           "at the same points in time. Every run covers the complete ComStatsim period; Outage Assessment changes neither "
            "the period nor the time step.",
-    'results': "Calculate now: every case is calculated into a new kept result object GridLens_<stamp>_<case>, then "
+    'results': "Calculate now: every case is calculated into a new kept result object OA_<stamp>_<case>, then "
                "evaluated.\nRe-evaluate a kept run: nothing is calculated and PowerFactory is not changed; the result "
                "objects of that run are read again and assessed with the current settings (limits, tolerances, grids). "
                "A case whose outages or windows changed since that run is reported as NOT EVALUATED.",
@@ -6863,20 +7014,20 @@ HELP_TEXTS = {
     'load': "Reads the saved configuration file again; unsaved changes in the window are replaced. Key: Ctrl+O.",
     'start': "Checks the configuration and the settings, closes the window and runs the selected PowerFactory "
              "calculations: the reference and one QDS run per case. The results stay in PowerFactory as result objects "
-             "and are published to the GridLens report tables; the PDF report is created in PowerFactory as a separate "
+             "and are published to the Outage Assessment report tables; the PDF report is created in PowerFactory as a separate "
              "step. Key: Ctrl+Enter.",
     'cancel': "Closes the window: nothing is calculated, saved or changed in the project. Key: Escape.",
 }
 # Hover texts of the Settings tab, per setting; a read-only setting adds why it is read only.
 SETTING_HELP = {
-    'line_warning': "From this loading GridLens marks a line as conspicuous (pie chart class, appendix). The warning "
+    'line_warning': "From this loading Outage Assessment marks a line as conspicuous (pie chart class, appendix). The warning "
                     "threshold does not change the physical capability of the equipment.",
-    'transformer_warning': "From this loading GridLens marks a transformer as conspicuous (pie chart class, appendix). "
+    'transformer_warning': "From this loading Outage Assessment marks a transformer as conspicuous (pie chart class, appendix). "
                            "The warning threshold does not change the physical capability of the equipment.",
     'line_limit': "Maximum n-0 loading of lines: limit for assessing the undisturbed base network. The default comes "
-                  "from the existing GridLens configuration (100 %). Loading above it is a violation; exactly on it is none.",
+                  "from the existing Outage Assessment configuration (100 %). Loading above it is a violation; exactly on it is none.",
     'transformer_limit': "Maximum n-0 loading of transformers: limit for assessing the undisturbed base network. The "
-                         "default comes from the existing GridLens configuration (100 %).",
+                         "default comes from the existing Outage Assessment configuration (100 %).",
     'n1_limit_mode': "Maximum n-1 loading: limit for assessing equipment after an additional unplanned outage. n-1 and "
                      "(n-1)' must use a comparable limit definition. 'use PowerFactory limits' keeps the equipment "
                      "ratings modelled in PowerFactory; a global assessment limit only changes the assessment, never a "
@@ -6884,9 +7035,9 @@ SETTING_HELP = {
     'n1_limit_global': "Assessment limit for n-1 and (n-1)' when 'global assessment limit' is chosen. It is an "
                        "assessment limit only: ratings and thermal data in PowerFactory stay unchanged.",
     'voltage_min_pu': "Lower permitted voltage in p.u. of the nominal voltage, the same for every voltage level. "
-                      "Voltages below it are assessed as a limit violation. GridLens proposal, to be confirmed.",
+                      "Voltages below it are assessed as a limit violation. Outage Assessment proposal, to be confirmed.",
     'voltage_max_pu': "Upper permitted voltage in p.u. of the nominal voltage, the same for every voltage level. "
-                      "Voltages above it are assessed as a limit violation. GridLens proposal, to be confirmed.",
+                      "Voltages above it are assessed as a limit violation. Outage Assessment proposal, to be confirmed.",
     'energized_min_pu': "Below this voltage a node counts as de-energised at that time step: it is no measured value "
                         "and the node is reported as DE-ENERGISED, not as a voltage violation.",
     'loading_appendix_delta': "The appendix lists every line and transformer from the warning threshold on, and "
@@ -6896,9 +7047,9 @@ SETTING_HELP = {
     'top_n': "Number of rows of the Top-N lists (most loaded lines, strongly loaded lines by case).",
     'max_plot_points': "Time plots draw every time step up to this number; longer series are drawn on an even grid "
                        "that is the same for REF and every case. The assessment always uses every time step.",
-    'run_reference': "On: GridLens calculates the reference REF (R0 or Rfix) and compares every case with it. Off: "
+    'run_reference': "On: Outage Assessment calculates the reference REF (R0 or Rfix) and compares every case with it. Off: "
                      "no reference; violations cannot be split into new and pre-existing.",
-    'qds_period': "First to last planned outage: GridLens sets the QDS period for the run from one QDS step before "
+    'qds_period': "First to last planned outage: Outage Assessment sets the QDS period for the run from the start of "
                   "the first planned outage of the calculated cases to one step after the last (ComStatsim calcPeriod, "
                   "startTime, endTime) and restores it afterwards, so REF and every case cover the same time. As set "
                   "in ComStatsim: the period of the QDS is used unchanged; outages outside it are not calculated.",
@@ -6925,7 +7076,7 @@ SETTING_HELP = {
     'contingency_set': "Defines which additional unplanned equipment outages are analysed in PowerFactory.",
     'contingency_categories': "Equipment categories for which PowerFactory creates contingencies.",
     'monitored_scope': "Equipment and network areas whose results the contingency analysis monitors.",
-    'calculation_method': "AC or DC load flow of the contingency analysis. GridLens prefers an AC load flow for the "
+    'calculation_method': "AC or DC load flow of the contingency analysis. Outage Assessment prefers an AC load flow for the "
                           "final security assessment.",
     'islanding': "Takes into account whether an additional outage splits the network into electrically separate parts.",
     'unsupplied_load': "Takes into account supply interruptions, i.e. the load that can no longer be supplied after a "
@@ -6933,12 +7084,12 @@ SETTING_HELP = {
     'load_shedding': "How load shedding after a contingency is treated.",
     'post_fault_phases': "The post-fault time phases defined in PowerFactory.",
     'remedial_actions': "The remedial actions defined in PowerFactory. They can change the calculated result.",
-    'limits': "Defines from when GridLens assesses a calculated state as critical. Changing assessment limits does not "
+    'limits': "Defines from when Outage Assessment assesses a calculated state as critical. Changing assessment limits does not "
               "change the physical network model.",
     'classification': "Compares n-1 and (n-1)' at the same point in time, for the same contingency and the same "
                       "monitored equipment. Rules version " + CLASSIFICATION_VERSION + ".",
     'calculation_parameters': "Category B: these parameters can change what PowerFactory calculates. " + CONTINGENCY_SETTINGS_NOTE,
-    'restore_defaults': "Removes the user overrides and loads the valid default values of GridLens (and of PowerFactory, "
+    'restore_defaults': "Removes the user overrides and loads the valid default values of Outage Assessment (and of PowerFactory, "
                         "once those are read).",
     'apply_settings': "Checks the entries and uses the settings for the next selected calculations.",
     'save_settings': "Checks the entries and saves the settings for later use. Provisional: they are written into the "
@@ -6955,14 +7106,14 @@ SETTING_HELP = {
                          "contingencies out of the evaluation; it cannot add ones that were not calculated.",
     'contingency_elements': "n-1 filter for the calculation. Choose the elements that are outaged in n-1 and (n-1)': "
                             "only contingencies that outage at least one selected element are analysed, every other is "
-                            "set to 'Not analysed' for the n-1 run (or not created when GridLens defines the "
+                            "set to 'Not analysed' for the n-1 run (or not created when Outage Assessment defines the "
                             "contingencies). None selected: every element is outaged. The loading of every element is "
                             "still assessed under the analysed contingencies. In a re-evaluation it leaves the other "
                             "contingencies out of the evaluation.",
     'contingency_preview': "How many contingencies of the study case's contingency analysis the selection would keep. "
                            "Their equipment is read with ComOutage.GetObject; nothing is changed.",
     'grid_buttons': "Selects every grid, or clears the selection so that every grid is assessed. Takes effect at once.",
-    'source': "Origin of the value: GridLens (GridLens default), PowerFactory (read from the model or the calculation "
+    'source': "Origin of the value: Outage Assessment (Outage Assessment default), PowerFactory (read from the model or the calculation "
               "configuration) or user (changed by you). 'edited, not applied' means the entry differs from the applied "
               "value until you apply or save the settings.",
 }
@@ -6998,7 +7149,7 @@ COLUMN_HELP = {
             "cannot be ticked.",
     'outage_status': "in simulated period: the window lies in the ComStatsim period.\n"
                      "outside simulated period: has no effect in this run.\n"
-                     "Ignored in PowerFactory: set to Ignored there; GridLens applies it only for a case that "
+                     "Ignored in PowerFactory: set to Ignored there; Outage Assessment applies it only for a case that "
                      "contains it.",
     'prio': "Priority of the planned outage in PowerFactory.",
 }
@@ -7435,8 +7586,8 @@ class CaseEditor:
         if windows and not any(None in window for window in windows):
             span = '{} - {}'.format(_format_pf_time(min(window[0] for window in windows)),
                                     _format_pf_time(max(window[1] for window in windows)))
-            return 'planned outages {}, plus one QDS step before and after (ComStatsim: {})'.format(span, self._qds_text)
-        return 'from the first to the last planned outage of the calculated cases, plus one QDS step before and after ' \
+            return 'planned outages {}, plus one QDS step after (ComStatsim: {})'.format(span, self._qds_text)
+        return 'from the first to the last planned outage of the calculated cases, plus one QDS step after ' \
                '(ComStatsim: {})'.format(self._qds_text)
 
     def settings_rows(self):
@@ -7454,7 +7605,7 @@ class CaseEditor:
         parsed, problems = {}, []
         try:
             current = effective_settings(self.settings_overrides())
-        except GridLensError:
+        except OutageAssessmentError:
             current = default_settings()
         for key, value in values.items():
             number, problem = parse_setting(key, value)
@@ -7471,7 +7622,7 @@ class CaseEditor:
         return problems
 
     def restore_default_settings(self):
-        """Remove every user override; the GridLens defaults apply again."""
+        """Remove every user override; the Outage Assessment defaults apply again."""
         self.config['settings'] = {}
 
     # --- network scope ---------------------------------------------------------------
@@ -7498,7 +7649,7 @@ class CaseEditor:
             return problem
         try:
             current = effective_settings(self.settings_overrides())
-        except GridLensError:
+        except OutageAssessmentError:
             current = default_settings()
         current['contingency_elements'] = value
         self.config['settings'] = clean_overrides(current)
@@ -7516,7 +7667,7 @@ class CaseEditor:
             return problem
         try:
             current = effective_settings(self.settings_overrides())
-        except GridLensError:
+        except OutageAssessmentError:
             current = default_settings()
         current[key] = value
         self.config['settings'] = clean_overrides(current)
@@ -7806,7 +7957,7 @@ def stylesheet(zoom=1.0, family='', images=None):
     pixels = lambda value: '{}px'.format(max(1, round(value * zoom)))
     font = 'font-family: "{}";'.format(family) if family else ''
     return '''
-    QDialog#GridLensCaseManager, QWidget#page, QWidget#scrollBody {{ background: {bg}; }}
+    QDialog#OutageAssessmentCaseManager, QWidget#page, QWidget#scrollBody {{ background: {bg}; }}
     QWidget {{ color: {text}; font-size: {body}; {font} }}
     QFrame#masthead {{ background: {mast}; border: none; }}
     QLabel#brand {{ color: {mast_text}; font-size: {brand}; font-weight: 700; }}
@@ -7938,7 +8089,7 @@ def indicator_images(qt):
     temporary folder; nothing is written into the project or the PowerFactory database.
     """
     QtCore, QtGui = qt.QtCore, qt.QtGui
-    folder = os.path.join(tempfile.gettempdir(), 'gridlens_qt_' + hashlib.sha1(
+    folder = os.path.join(tempfile.gettempdir(), 'outage_assessment_qt_' + hashlib.sha1(
         repr(sorted((key, value) for key, value in vars(Theme).items() if not key.startswith('_'))).encode('utf-8')
     ).hexdigest()[:10])
     os.makedirs(folder, exist_ok=True)
@@ -8675,7 +8826,7 @@ def qt_application(qt):
                 attribute = getattr(qt.Qt, name, None)
                 if attribute is not None:
                     qt.QtCore.QCoreApplication.setAttribute(attribute, True)
-        app = qt.QtWidgets.QApplication(['GridLens'])
+        app = qt.QtWidgets.QApplication(['Outage Assessment'])
     if not isinstance(app, qt.QtWidgets.QApplication):
         raise CaseManagerUnavailable('The Qt application of this process has no widget support.')
     if qt.QtCore.QThread.currentThread() != app.thread():
@@ -8734,7 +8885,7 @@ class CaseManagerDialog:
 
     def report_error(self, kind, value, _trace):
         try:
-            self.qt.QtWidgets.QMessageBox.critical(self.window, 'GridLens Case Manager',
+            self.qt.QtWidgets.QMessageBox.critical(self.window, 'Outage Assessment Case Manager',
                                                    '{}: {}'.format(kind.__name__, value))
         except Exception:
             pass
@@ -8834,9 +8985,9 @@ class CaseManagerDialog:
         qt = self.qt
         widgets = qt.QtWidgets
         self.window = window = qt.Window()
-        window.setObjectName('GridLensCaseManager')
+        window.setObjectName('OutageAssessmentCaseManager')
         window.on_reject = self.safe(self.on_escape)
-        window.setWindowTitle('GridLens {} - Case Manager'.format(PUBLISHER_VERSION))
+        window.setWindowTitle('Outage Assessment - Case Manager')
         window.setAttribute(qt.enum('WidgetAttribute.WA_QuitOnClose'), False)
         window.setWindowFlags(window.windowFlags() | qt.enum('WindowType.WindowMaximizeButtonHint')
                               | qt.enum('WindowType.WindowMinimizeButtonHint'))
@@ -8888,8 +9039,7 @@ class CaseManagerDialog:
         layout.setSpacing(16)
         brand = widgets.QVBoxLayout()
         brand.setSpacing(2)
-        brand.addWidget(self.label('GridLens', 'brand'))
-        brand.addWidget(self.label(PUBLISHER_VERSION, 'version'), 0, qt.enum('AlignmentFlag.AlignLeft'))
+        brand.addWidget(self.label('Outage Assessment', 'brand'))
         layout.addLayout(brand)
         divider = widgets.QFrame()
         divider.setFixedWidth(1)
@@ -9678,7 +9828,7 @@ class CaseManagerDialog:
             return
         invalid, pending = self.invalid_settings(), self.pending_settings()
         overrides = self.editor.settings_overrides()
-        parts = ['{} user override(s)'.format(len(overrides)) if overrides else 'GridLens defaults']
+        parts = ['{} user override(s)'.format(len(overrides)) if overrides else 'Outage Assessment defaults']
         if pending:
             parts.append('{} edited, not applied'.format(len(pending)))
         if invalid:
@@ -9997,7 +10147,7 @@ class CaseManagerDialog:
             return
         window = widgets.QDialog(self.window)
         window.setWindowTitle('Planned outage')
-        window.setObjectName('GridLensCaseManager')
+        window.setObjectName('OutageAssessmentCaseManager')
         window.setStyleSheet(stylesheet(self.zoom, self.family, self.images))
         window.setMinimumWidth(560)
         layout = widgets.QVBoxLayout(window)
@@ -10094,7 +10244,7 @@ class CaseManagerDialog:
             return
         try:
             stored = save_case_config(self.config_path, self.editor.config, self.user)
-        except (OSError, GridLensError) as exc:
+        except (OSError, OutageAssessmentError) as exc:
             self.error('Save configuration', str(exc))
             return
         self.info('Save configuration', 'Saved revision {} to\n{}'.format(stored['revision'], self.config_path))
@@ -10102,7 +10252,7 @@ class CaseManagerDialog:
     def load_saved(self):
         try:
             saved = load_case_config(self.config_path)
-        except GridLensError as exc:
+        except OutageAssessmentError as exc:
             self.error('Load saved configuration', str(exc))
             return
         if saved is None:
@@ -10125,7 +10275,7 @@ class CaseManagerDialog:
         self.refresh_all(ids[0] if ids else None)
 
     def start(self):
-        """Check the configuration and hand it to GridLens; the calculation starts after the window closes."""
+        """Check the configuration and hand it to Outage Assessment; the calculation starts after the window closes."""
         self.finish_editing()
         if not self._settings_ready('Start calculation'):
             return
@@ -10202,7 +10352,7 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
         try:
             dialog.run()
         except Exception as exc:
-            raise GridLensError('The case manager stopped with an error: {}. Nothing was calculated.'.format(
+            raise OutageAssessmentError('The case manager stopped with an error: {}. Nothing was calculated.'.format(
                 _friendly_exception(exc))) from None
         finally:
             dialog.window.deleteLater()
@@ -10257,7 +10407,7 @@ def qds_period_source(qds):
         return "startTime .. endTime"
     if kind == QDS_PERIOD_USER_DEFINED:
         return "startTime .. endTime (calcPeriod 4)"
-    return ("calcPeriod {:g}, a kind of time period GridLens does not read; set the QDS time period to "
+    return ("calcPeriod {:g}, a kind of time period Outage Assessment does not read; set the QDS time period to "
             "user-defined to compare the planned outages with it".format(kind))
 
 
@@ -10306,7 +10456,7 @@ def set_qds_span(guard, qds, plans, logger):
     for attribute, value in (("calcPeriod", QDS_PERIOD_USER_DEFINED),) + times:
         if not guard.set(qds, attribute, value, "QDS period [{}]".format(attribute)):
             found, current = _read_setting(qds, attribute)
-            raise GridLensError(
+            raise OutageAssessmentError(
                 "The QDS period could not be set from the planned outages: [{}] of the ComStatsim did not take "
                 "the value, so no run was started.".format(attribute),
                 details=["Wanted: {} = {}".format(attribute, _format_pf_time(value) if attribute.endswith("Time") else value),
@@ -10317,10 +10467,10 @@ def set_qds_span(guard, qds, plans, logger):
         # Derived by PowerFactory in some versions; written where it is not, so both agree on the period.
         guard.set(qds, "stepNumber", int(round((end - start) / step)), "QDS period [stepNumber]")
     if qds_period(qds) != (float(start), float(end)):
-        raise GridLensError("The QDS period was written but reads back as {}, so no run was started.".format(
+        raise OutageAssessmentError("The QDS period was written but reads back as {}, so no run was started.".format(
             qds_period_text(qds_period(qds))), details=["Wanted: " + qds_period_text((start, end))])
-    logger.write("CALCULATION", "QDS period for every run: {} (calcPeriod 4), from one QDS step before the first "
-                 "planned outage of the calculated cases to one step after the last; restored afterwards. As set "
+    logger.write("CALCULATION", "QDS period for every run: {} (calcPeriod 4), from the first planned outage of "
+                 "the calculated cases to one QDS step after the last; restored afterwards. As set "
                  "before: {}.".format(qds_period_text((start, end)), before), 4)
     return {"span": (start, end), "before": before}
 
@@ -10346,7 +10496,7 @@ def _restore_planned_outage_option(qds, original, logger):
 class ResultStore:
     """The ElmRes of every run. They stay in the study case after the run, one per case.
 
-    Names read GridLens_<yymmdd-HHMMSS>_<case id> (at most 39 characters), so the runs of one GridLens
+    Names read OA_<yymmdd-HHMMSS>_<case id> (at most 39 characters), so the runs of one Outage Assessment
     execution sort together and every case can be opened in PowerFactory.
     """
 
@@ -10401,7 +10551,7 @@ def _case_result_object(study_case, template, case_id, name=None):
                 except Exception:
                     snapshot = None
     if snapshot is None:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "PowerFactory could not copy the result object of {} after its run, so the run cannot be kept; the "
             "next run would overwrite it.".format(case_id),
             details=["Result object to copy: {}".format(object_key(template) if template is not None else "none"),
@@ -10418,7 +10568,7 @@ def _case_result_object(study_case, template, case_id, name=None):
                 snapshot.Delete()
             except Exception:
                 pass
-            raise GridLensError(
+            raise OutageAssessmentError(
                 "PowerFactory could not name the result object of the case: {}".format(
                     _friendly_exception(exc))) from None
     if object_name(snapshot) != name:
@@ -10426,7 +10576,7 @@ def _case_result_object(study_case, template, case_id, name=None):
             snapshot.Delete()
         except Exception:
             pass
-        raise GridLensError("PowerFactory did not retain the name of the result object of the case.")
+        raise OutageAssessmentError("PowerFactory did not retain the name of the result object of the case.")
     return snapshot
 
 
@@ -10480,10 +10630,10 @@ def recorded_text(counted, limit=10):
 
 
 def check_recording(snapshot, produced, qds, case_id, logger):
-    """Right after the first run: does its kept result object record what GridLens assesses? Else stop at once.
+    """Right after the first run: does its kept result object record what Outage Assessment assesses? Else stop at once.
 
     `produced` is the result object PowerFactory wrote the run into and
-    `snapshot` GridLens' copy of it. Without the assessed variables every
+    `snapshot` Outage Assessment' copy of it. Without the assessed variables every
     further run would be wasted; the error names what both record and the
     variable selection of the QDS result object.
     """
@@ -10506,10 +10656,10 @@ def check_recording(snapshot, produced, qds, case_id, logger):
         cause = ("The variable selection of the quasi-dynamic simulation's result object contains none of the assessed "
                  "variables.")
         hint = ("Open ComStatsim > Result Variables and select c:loading for lines and transformers and m:u for "
-                "terminals, then run GridLens again.")
+                "terminals, then run Outage Assessment again.")
     raise RecordingError(
-        "{} was calculated, but its kept result object '{}' records none of the variables GridLens assesses ({}). "
-        "Every further run would record the same, so GridLens stopped after the first run.".format(
+        "{} was calculated, but its kept result object '{}' records none of the variables Outage Assessment assesses ({}). "
+        "Every further run would record the same, so Outage Assessment stopped after the first run.".format(
             case_id, object_name(snapshot), ", ".join(sorted(ASSESSED_VARIABLES))),
         details=["Kept result object (copy made after the run): {} ({})".format(object_name(snapshot), object_key(snapshot)),
                  "Recorded in the kept result object: " + recorded_text(counted),
@@ -10526,8 +10676,8 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
 
     PowerFactory writes a QDS into its own result object of the study case
     (it creates one with its default variable selection when the bound object
-    has none) and overwrites it with the next run. GridLens therefore keeps
-    every run as a copy made right after it, named GridLens_<stamp>_<case>.
+    has none) and overwrites it with the next run. Outage Assessment therefore keeps
+    every run as a copy made right after it, named OA_<stamp>_<case>.
     Nothing is read here.
     """
     if announce:
@@ -10549,7 +10699,7 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
         returned = qds.Execute()
     except Exception as exc:
         RUN_STATS.add("QDS calculation (PowerFactory)", time.monotonic() - started)
-        raise GridLensError(
+        raise OutageAssessmentError(
             "{} calculation was interrupted or failed: {}. {}".format(
                 case_id, _friendly_exception(exc), REFUSED_HINT)) from None
     elapsed = time.monotonic() - started
@@ -10557,15 +10707,18 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
     RUN_STATS.count("qds_runs")
     code = return_code(returned)
     if code is None or code != 0.0:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "{} calculation ended after {:.1f}s with {}. Review the "
             "PowerFactory calculation messages and QDS configuration.".format(
                 case_id, elapsed,
                 "an unreadable return value" if code is None
                 else "error code {:g}".format(code)))
     produced = safe_attr(qds, "results")
+    if produced is None:
+        produced, returned = _bind_empty_result(study_case, qds, case_id, logger)
+        elapsed = time.monotonic() - started
     if produced is None or class_name(produced) != "ElmRes":
-        raise GridLensError(
+        raise OutageAssessmentError(
             "{} was calculated, but ComStatsim.results names no result object afterwards.".format(case_id),
             details=["ComStatsim.results after the run: {}".format(
                 "none" if produced is None else "{} ({})".format(object_name(produced), class_name(produced)))])
@@ -10576,7 +10729,7 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
         changed = switch_changes_text(switches_before, switch_states(app))
     if changed:
         logger.detail("Switches in another state after the QDS than before it ({}): {}. PowerFactory left them so; "
-                      "GridLens does not change switches.".format(len(changed), clip_text(", ".join(changed), 400)),
+                      "Outage Assessment does not change switches.".format(len(changed), clip_text(", ".join(changed), 400)),
                       "WARNING")
     elif switches_before:
         logger.detail("Switch states after the QDS: all {} switches as before it.".format(len(switches_before)))
@@ -10595,10 +10748,46 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
             "result_object": object_name(snapshot)}
 
 
+# Name of the result object Outage Assessment creates when ComStatsim.results is empty and PowerFactory binds none.
+EMPTY_RESULT_NAME = 'Quasi-Dynamic Simulation AC'
+
+
+def _bind_empty_result(study_case, qds, case_id, logger):
+    """ComStatsim.results was empty and PowerFactory bound nothing: an empty ElmRes, bound, and the run once more.
+
+    The object stays bound after the run, as one created by hand would; the next runs use it. Returns the
+    result object and the return value of the repeated run.
+    """
+    try:
+        created = study_case.CreateObject('ElmRes', EMPTY_RESULT_NAME)
+    except Exception:
+        created = None
+    created = _as_objects(created)[0] if _as_objects(created) else None
+    if created is None or not _set_scalar_attribute(qds, 'results', created) or not _same_object(
+            safe_attr(qds, 'results'), created):
+        raise OutageAssessmentError("{} was calculated, but ComStatsim.results stays empty and no result object could be "
+                            "created and bound in the study case.".format(case_id),
+                            hint="Bind a result object to the quasi-dynamic simulation once, then run again.")
+    logger.write("CALCULATION", "PowerFactory bound no result object, so Outage Assessment created the empty result object "
+                 "'{}' in the study case and bound it to ComStatsim.results (it stays bound). {} is calculated "
+                 "once more into it.".format(object_name(created), case_id), 4, "WARNING")
+    try:
+        returned = qds.Execute()
+    except Exception as exc:
+        raise OutageAssessmentError("{} calculation was interrupted or failed: {}. {}".format(
+            case_id, _friendly_exception(exc), REFUSED_HINT)) from None
+    code = return_code(returned)
+    if code is None or code != 0.0:
+        raise OutageAssessmentError("{} calculation into the new result object ended with {}.".format(
+            case_id, "an unreadable return value" if code is None else "error code {:g}".format(code)))
+    RUN_STATS.count("qds_runs")
+    return safe_attr(qds, 'results'), returned
+
+
 def mark_result_object(obj, case_id, fingerprint=''):
     """Write case and fingerprint into the description of a kept result object, for a later re-evaluation."""
     try:
-        obj.desc = ["GridLens {}; case {}; fingerprint {}".format(PUBLISHER_VERSION, case_id, fingerprint or '-')]
+        obj.desc = ["Outage Assessment {}; case {}; fingerprint {}".format(PUBLISHER_VERSION, case_id, fingerprint or '-')]
     except Exception:
         pass
 
@@ -10639,9 +10828,9 @@ def outage_component_lines(result, reference, plan):
                 continue
             recorded = True
             values = item['values']
-            off = [row for row in range(len(values)) if abs(values[row] or 0.0) <= OFF_LOADING]
+            off = [row for row in range(len(values)) if _magnitude(values[row]) <= OFF_LOADING]
             ref_values = (ref_items.get(key) or {}).get('values')
-            ref_off = sum(1 for value in ref_values if abs(value or 0.0) <= OFF_LOADING) if ref_values else None
+            ref_off = sum(1 for value in ref_values if _magnitude(value) <= OFF_LOADING) if ref_values else None
             lines.append("Outage '{}', component '{}' ({}, {}): without load in {} of {} step(s) inside its window and "
                          "in {} of {} outside it; REF: {}.".format(
                              record['name'], item['element_name'], class_name(item['object']), item['variable_id'],
@@ -10687,9 +10876,10 @@ def evaluate_qds(run, description, plan, logger):
                     '{:g} h'.format(plot_times[-1] - plot_times[0])), 6)
         logger.detail(result_object_text(snapshot, counters, labels, plot_times))
         _log_extraction_detail(logger, series, counters)
+        _log_operation_changes(logger, series, labels, counters)
     except Exception as exc:
-        raise GridLensError(
-            "{} was calculated, but GridLens cannot use its result object {}: {}".format(
+        raise OutageAssessmentError(
+            "{} was calculated, but Outage Assessment cannot use its result object {}: {}".format(
                 case_id, object_name(snapshot), _friendly_exception(exc))) from None
     finally:
         try:
@@ -10725,10 +10915,14 @@ def _log_kept_results(results_store, logger):
 
 
 def _log_results_binding(qds, original_result, logger):
-    """GridLens does not bind ComStatsim.results. PowerFactory may bind its own result object during a QDS (in place
-    of a temporary one without variable selection), as a run by hand does; that binding is left as it is."""
+    """Outage Assessment binds ComStatsim.results only when it was empty and PowerFactory bound nothing (_bind_empty_result).
+    PowerFactory may bind its own result object during a QDS (in place of a temporary one without variable
+    selection), as a run by hand does; either binding is left as it is."""
     now = safe_attr(qds, "results")
-    if not _same_object(now, original_result):
+    if original_result is None and now is not None:
+        logger.write("RESTORE", "ComStatsim.results was empty and is now bound to '{}'; left so for the next "
+                     "runs.".format(object_name(now)), 5)
+    elif not _same_object(now, original_result):
         logger.write("RESTORE", "PowerFactory bound its own result object '{}' to ComStatsim.results during the QDS "
                      "(before: '{}'), as a run by hand does; left as it is.".format(
                          object_name(now), object_name(original_result)), 5)
@@ -10778,19 +10972,19 @@ def _capture_study_time(app):
     try:
         study_time = app.GetFromStudyCase("SetTime")
     except Exception as exc:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "The initial Study Case date/time could not be accessed: {}. No "
             "calculation was started.".format(_friendly_exception(exc))) from None
     if study_time is None:
-        raise GridLensError(
-            "No SetTime object was found in the active Study Case. GridLens "
+        raise OutageAssessmentError(
+            "No SetTime object was found in the active Study Case. Outage Assessment "
             "cannot guarantee restoration of the Study Case clock, so no "
             "calculation was started.")
     date_found, date_value = _read_setting(study_time, "cDate")
     time_found, time_value = _read_setting(study_time, "cTime")
     if not date_found or not time_found:
-        raise GridLensError(
-            "SetTime.cDate or SetTime.cTime is unavailable. GridLens cannot "
+        raise OutageAssessmentError(
+            "SetTime.cDate or SetTime.cTime is unavailable. Outage Assessment cannot "
             "guarantee restoration of the Study Case clock, so no calculation "
             "was started.")
     return {
@@ -10839,7 +11033,7 @@ def _restore_study_time(state, logger, stage="RESTORE", step=5):
 def _log_qds_settings(qds, result, study_time_state, logger):
     logger.write(
         "SETTINGS",
-        "Active ComStatsim settings; GridLens changes only the 'Planned "
+        "Active ComStatsim settings; Outage Assessment changes only the 'Planned "
         "Outages' option and restores it:", 2)
     for label, attribute in QDS_CORE_SETTINGS:
         found, value = _read_setting(qds, attribute)
@@ -10926,8 +11120,8 @@ def _generated_by():
     return value or os.environ.get("USERNAME") or os.environ.get("USER") or "Unknown user"
 
 
-class StateRestoreError(GridLensError):
-    """A setting changed by GridLens could not be put back."""
+class StateRestoreError(OutageAssessmentError):
+    """A setting changed by Outage Assessment could not be put back."""
 
 
 def _same_setting(current, original):
@@ -10987,7 +11181,7 @@ def _isolate_outages(guard, active_keys, records, label):
     for record in records:
         wanted = 0 if record["key"] in active_keys else 1
         if not guard.set(record["_object"], "outserv", wanted, "'Ignored' flag of outage '{}'".format(record["name"])):
-            raise GridLensError(
+            raise OutageAssessmentError(
                 "The 'Ignored' flag (outserv) of outage '{}' could not be set, so {} cannot be calculated "
                 "with exactly its own planned outages.".format(record["name"], label))
 
@@ -10998,7 +11192,7 @@ def _apply_overrides(guard, plan):
         start, end = plan["windows"][record["key"]]
         for attribute, value in (("starttime", start), ("endtime", end)):
             if not guard.set(record["_object"], attribute, value, "{} of outage '{}'".format(attribute, record["name"])):
-                raise GridLensError("{} of outage '{}' could not be set for case {}.".format(attribute, record["name"], plan["id"]))
+                raise OutageAssessmentError("{} of outage '{}' could not be set for case {}.".format(attribute, record["name"], plan["id"]))
 
 
 def applied_text(command, records, option=PLANNED_OUTAGE_OPTION):
@@ -11028,7 +11222,7 @@ def _calculate_reference(app, study_case, qds, request, records, original_result
     name = REFERENCE_NAME if not background else "Reference (fixed outages)"
     if not background:
         if not _set_scalar_attribute(qds, PLANNED_OUTAGE_OPTION, 0):
-            raise GridLensError(
+            raise OutageAssessmentError(
                 "The 'Planned Outages' option [{}] could not be switched off, so a reference free of planned "
                 "outages could not be guaranteed. No calculation was started.".format(PLANNED_OUTAGE_OPTION))
         result = _calculate_qds(app, study_case, qds, REFERENCE_CASE_ID, name, original_result, logger, result_objects,
@@ -11036,7 +11230,7 @@ def _calculate_reference(app, study_case, qds, request, records, original_result
         result.update(description="Network state without planned outages.", run_note="iopt_maint=0: no planned outage applied")
     else:
         if not _set_scalar_attribute(qds, PLANNED_OUTAGE_OPTION, 1):
-            raise GridLensError("The 'Planned Outages' option [{}] could not be switched on for the reference with "
+            raise OutageAssessmentError("The 'Planned Outages' option [{}] could not be switched on for the reference with "
                                 "fixed outages. No calculation was started.".format(PLANNED_OUTAGE_OPTION))
         logger.case("Case {} · {}".format(REFERENCE_CASE_ID, name))
         logger.detail("Fixed outages active in the reference and in every case: {}".format(
@@ -11050,7 +11244,7 @@ def _calculate_reference(app, study_case, qds, request, records, original_result
                       run_note="iopt_maint=1; " + _active_text(None, background))
     clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
     if clock_errors:
-        raise GridLensError("The initial Study Case time could not be restored after REF: {}. The case runs were "
+        raise OutageAssessmentError("The initial Study Case time could not be restored after REF: {}. The case runs were "
                             "not started.".format("; ".join(clock_errors)))
     return result
 
@@ -11096,13 +11290,13 @@ def _calculate_case(app, study_case, qds, plan, request, records, original_resul
         run.update(info, run_note=note)
     except (StateRestoreError, RecordingError):
         raise
-    except GridLensError as exc:
+    except OutageAssessmentError as exc:
         logger.write("CALCULATION", "{} could not be calculated: {}".format(plan["id"], exc), 4, "ERROR")
         log_error_details(logger, exc)
         run = dict(info, failed=str(exc), run_note=note, result_object=result_objects.by_case.get(plan["id"], ""))
     clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
     if clock_errors:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "The initial Study Case time could not be restored after {}: {}. "
             "The next case was not started.".format(plan["id"], "; ".join(clock_errors)))
     return run
@@ -11158,7 +11352,7 @@ def evaluate_case(run, reference, logger):
                 compare_case(result, reference, [plan["windows"][record["key"]] for record in plan["members"]], out_of_service)
         except Exception as exc:
             # The QDS ran and its ElmRes is kept; only this case's assessment is lost.
-            raise GridLensError("{} was calculated, but its comparison with the reference failed: {}".format(
+            raise OutageAssessmentError("{} was calculated, but its comparison with the reference failed: {}".format(
                 plan["id"], _friendly_exception(exc))) from None
         finally:
             release_values(result)
@@ -11171,7 +11365,7 @@ def evaluate_case(run, reference, logger):
                                                     assessment.get("window_rows", 0), assessment.get("spill_rows", 0),
                                                     time.monotonic() - started))
         return result
-    except GridLensError as exc:
+    except OutageAssessmentError as exc:
         logger.write("EXTRACTION", "{} could not be evaluated: {}".format(plan["id"], exc), 6, "ERROR")
         result = failed_case(info, str(exc))
         result.update(result_object=run.get("result_object", ""), run_note=run.get("run_note", ""))
@@ -11220,7 +11414,7 @@ def contingency_equipment(command):
     return found
 
 
-# Equipment GridLens defines contingencies for when the study case has no contingency analysis: branches,
+# Equipment Outage Assessment defines contingencies for when the study case has no contingency analysis: branches,
 # transformers, reactors, compensation and FACTS. Not: generators, loads, busbars and terminals.
 N1_CONTINGENCY_CLASSES = ('ElmLne', 'ElmBranch', 'ElmZpu', 'ElmTr2', 'ElmTr3', 'ElmTr4', 'ElmSind', 'ElmScap',
                           'ElmShnt', 'ElmSvs', 'ElmVsc', 'ElmVscmono')
@@ -11264,17 +11458,17 @@ def create_contingency_analysis(app, study_case, grids, name):
     chosen = set(current_setting('contingency_elements'))
     elements = [element for element in contingency_candidates(app, grids) if not chosen or object_key(element) in chosen]
     if not elements:
-        raise GridLensError("no branch, transformer, reactor, compensation or FACTS element is calculation relevant in "
+        raise OutageAssessmentError("no branch, transformer, reactor, compensation or FACTS element is calculation relevant in "
                             "{}, so no contingency can be defined".format(', '.join(grids) if grids else 'the network'))
     try:
         command = study_case.CreateObject(N1_COMMAND_CLASS, name)
     except Exception as exc:
-        raise GridLensError("the contingency analysis '{}' could not be created: {}".format(
+        raise OutageAssessmentError("the contingency analysis '{}' could not be created: {}".format(
             name, _friendly_exception(exc))) from None
     if command is None or class_name(command) != N1_COMMAND_CLASS:
-        raise GridLensError("PowerFactory did not create the contingency analysis '{}'".format(name))
+        raise OutageAssessmentError("PowerFactory did not create the contingency analysis '{}'".format(name))
     if not _set_scalar_attribute(command, N1_SWEEP_OPTION, 1):
-        raise GridLensError("the time sweep [{}] of the new contingency analysis '{}' could not be switched on".format(
+        raise OutageAssessmentError("the time sweep [{}] of the new contingency analysis '{}' could not be switched on".format(
             N1_SWEEP_OPTION, name))
     made, refused = 0, 0
     for element in elements:
@@ -11288,7 +11482,7 @@ def create_contingency_analysis(app, study_case, grids, name):
         else:
             refused += 1
     if not made:
-        raise GridLensError("no contingency could be defined in '{}' (ComOutage.SetObjs refused all {} elements)".format(
+        raise OutageAssessmentError("no contingency could be defined in '{}' (ComOutage.SetObjs refused all {} elements)".format(
             name, len(elements)))
     return command, made, refused
 
@@ -11351,7 +11545,7 @@ def sweep_period(times, step, limit=None):
     first, last = min(times), max(times)
     count = int(round((last - first) / step)) + 1
     if count > limit:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "The n-1 time sweep from the first to the last study time of the outage windows covers {} QDS steps, more "
             "than {}; every one calculates every contingency.".format(count, limit),
             details=["Study times inside the windows: " + times_text(times)],
@@ -11387,18 +11581,18 @@ def run_n1_sweep(command, times, step, active_keys, records, excluded, label, ke
     contingencies outside the contingency grids. With `keep` = (study case,
     name, mark) the result object is kept as a copy for phase 2; without it,
     or when the copy fails, the results are read at once, before restoring.
-    A failed calculation raises GridLensError.
+    A failed calculation raises OutageAssessmentError.
     """
     with StateGuard() as guard:
         if not guard.set(command, N1_PLANNED_OPTION, 1 if active_keys else 0,
                          "'Planned outages' option of the contingency analysis"):
-            raise GridLensError("The 'Planned outages' option [{}] of the contingency analysis could not be set for "
+            raise OutageAssessmentError("The 'Planned outages' option [{}] of the contingency analysis could not be set for "
                                 "{}.".format(N1_PLANNED_OPTION, label))
         if active_keys:
             _isolate_outages(guard, active_keys, records, label)
         for outage in excluded:
             if not guard.set(outage, 'outserv', 1, "'Not analysed' flag of contingency '{}'".format(object_name(outage))):
-                raise GridLensError("Contingency '{}' could not be set to 'Not analysed' for the contingency grid "
+                raise OutageAssessmentError("Contingency '{}' could not be set to 'Not analysed' for the contingency grid "
                                     "selection.".format(object_name(outage)))
         period = sweep_period(times, step)
         size, unit = step_setting(step)
@@ -11406,7 +11600,7 @@ def run_n1_sweep(command, times, step, active_keys, records, excluded, label, ke
                                  ('startTime', int(round(period[0]))), ('endTime', int(round(period[-1] + step)))):
             if not guard.set(command, attribute, value, "time sweep [{}] of the contingency analysis".format(attribute)):
                 found, current = _read_setting(command, attribute)
-                raise GridLensError(
+                raise OutageAssessmentError(
                     "The time sweep of the contingency analysis could not be set for {}: [{}] did not take the "
                     "value.".format(label, attribute),
                     details=["Wanted: {} = {}".format(attribute, _format_pf_time(value) if attribute.endswith('Time')
@@ -11423,18 +11617,18 @@ def run_n1_sweep(command, times, step, active_keys, records, excluded, label, ke
             code = command.Execute()
         except Exception as exc:
             RUN_STATS.add("n-1 contingency analysis (PowerFactory)", time.monotonic() - started)
-            raise GridLensError("The contingency analysis for {} stopped: {}. {}".format(
+            raise OutageAssessmentError("The contingency analysis for {} stopped: {}. {}".format(
                 label, _friendly_exception(exc), REFUSED_HINT.split(' The result object')[0])) from None
         RUN_STATS.add("n-1 contingency analysis (PowerFactory)", time.monotonic() - started)
         RUN_STATS.count("n1_sweeps")
         if finite_number(code) != 0:
-            raise GridLensError("The contingency analysis for {} ended with error code {}.".format(label, code),
+            raise OutageAssessmentError("The contingency analysis for {} ended with error code {}.".format(label, code),
                                 details=["Settings before the run: " + settings, applied],
                                 hint="Read the PowerFactory messages of the contingency analysis just above.")
         calculated = calculated_times(command)
         missing = _missing_times(times, calculated)
         if missing:
-            raise GridLensError(
+            raise OutageAssessmentError(
                 "The contingency analysis for {} did not calculate {} of the {} study times inside the outage windows, "
                 "so its results cannot be placed in the windows.".format(label, len(missing), len(times)),
                 details=["Wanted (QDS steps inside the outage windows): " + times_text(times),
@@ -11539,14 +11733,14 @@ def load_n1(found):
     if wanted is not None:
         missing = _missing_times(wanted, list(data['times']))
         if missing:
-            raise GridLensError("the n-1 result lacks {} of the {} study times inside the outage windows".format(
+            raise OutageAssessmentError("the n-1 result lacks {} of the {} study times inside the outage windows".format(
                 len(missing), len(wanted)), details=["Missing: " + times_text(missing),
                                                      "Held: " + times_text(data['times'])])
         # The steps between windows that lie apart were calculated with the period; only the windows are assessed.
         data = dict(data, times={moment: values for moment, values in data['times'].items()
                                  if not _missing_times([moment], wanted)})
     if not data['times']:
-        raise GridLensError("the kept n-1 result holds no study time")
+        raise OutageAssessmentError("the kept n-1 result holds no study time")
     RUN_STATS.count("n1_times", len(data['times']))
     RUN_STATS.count("n1_loadflows", len({(moment, key[0]) for moment, values in data['times'].items() for key in values}))
     return data
@@ -11594,7 +11788,7 @@ def calculate_n1_case(command, plan, request, records, grid, excluded, prime, re
     times = n1_study_times([plan['windows'][record['key']] for record in plan['members']], grid)
     if not times:
         return {'status': 'NOT EVALUATED', 'reason': 'no QDS time step lies inside the outage windows', 'times': 0}
-    mark = 'GridLens {}; case {} {{}}; fingerprint {}'.format(PUBLISHER_VERSION, plan['id'], plan['fingerprint'])
+    mark = 'Outage Assessment {}; case {} {{}}; fingerprint {}'.format(PUBLISHER_VERSION, plan['id'], plan['fingerprint'])
     background = {record['key'] for record in request['background']}
     key = tuple(times)
     reference = references.get(key)
@@ -11756,7 +11950,7 @@ def read_contingencies(study_case):
 
 def contingency_element_choices(app, info):
     """[(key, name, class, grid)] the n-1 element filter offers: the equipment of the contingencies of the study
-    case, else the elements GridLens would define contingencies for; sorted by name."""
+    case, else the elements Outage Assessment would define contingencies for; sorted by name."""
     found = {}
     if isinstance(info, dict):
         for contingency in info.get('contingencies') or ():
@@ -11845,12 +12039,12 @@ def obtain_case_request(app, records, candidates, period, logger, qds_info=None,
     saved = load_case_config(path)
     if CASE_SOURCE == "saved":
         if saved is None:
-            raise GridLensError("CASE_SOURCE is 'saved' but there is no saved case configuration at {}. Open the case "
+            raise OutageAssessmentError("CASE_SOURCE is 'saved' but there is no saved case configuration at {}. Open the case "
                                 "manager once (CASE_SOURCE = 'gui') and save the cases.".format(path))
         return resolve_request(saved, records, period, "saved",
                                "saved configuration revision {} ({})".format(saved.get("revision"), path))
     if CASE_SOURCE != "gui":
-        raise GridLensError("CASE_SOURCE must be 'gui', 'saved' or 'per_outage', not {!r}.".format(CASE_SOURCE))
+        raise OutageAssessmentError("CASE_SOURCE must be 'gui', 'saved' or 'per_outage', not {!r}.".format(CASE_SOURCE))
     logger.write("CASES", "Opening the case manager. PowerFactory waits until it is closed; nothing has been "
                  "changed or calculated yet.", 3)
     try:
@@ -11868,10 +12062,10 @@ def obtain_case_request(app, records, candidates, period, logger, qds_info=None,
         request["source_text"] += " (case manager unavailable)"
         return request
     if config is None:
-        raise GridLensCancelled("Cancelled in the case manager. Nothing was calculated and nothing was changed.")
+        raise OutageAssessmentCancelled("Cancelled in the case manager. Nothing was calculated and nothing was changed.")
     try:
         latest = load_case_config(path)
-    except GridLensError:
+    except OutageAssessmentError:
         latest = None
     unsaved = latest is None or any(latest.get(name) != config.get(name)
                                     for name in ("cases", "background", "rules", "settings"))
@@ -11960,8 +12154,26 @@ def _log_extraction_detail(logger, series, counters):
         skipped.append("{} DC node(s)".format(counters["dc_nodes"]))
     if counters.get("deenergized_nodes"):
         skipped.append("{} node(s) without voltage".format(counters["deenergized_nodes"]))
+    if counters.get("unvalued_branches"):
+        skipped.append("{} line(s) or transformer(s) without any loading value (not in operation during the whole "
+                       "period)".format(counters["unvalued_branches"]))
     if skipped:
         logger.detail("Not assessed: {}.".format(", ".join(skipped)))
+
+
+def _log_operation_changes(logger, series, labels, counters, limit=40):
+    """When series get or lose their values over time: equipment put into or taken out of operation."""
+    rows = operation_change_rows(series, labels)
+    if not rows:
+        return
+    logger.detail("Time-dependent operation: {} series have values only during part of the period ({} loading "
+                  "step(s) without a value). Cause: expansion or switching stages; in a case also equipment it switches "
+                  "off or cuts off. They are assessed only where they have a value. Changes by time:".format(
+                      counters.get('partial_series', 0), counters.get('loading_gap_steps', 0)))
+    logger.table(("Time", "Values from here on (into operation)", "No values from here on (out of operation)"),
+                 rows[:limit])
+    if len(rows) > limit:
+        logger.detail("... and {} more change time(s).".format(len(rows) - limit))
 
 
 def _log_results(logger, results, request):
@@ -12044,21 +12256,21 @@ def n1_filter_text():
 
 
 def _n1_command(app, study_case, grid, logger):
-    """(contingency analysis, reason): the one of the study case, else one GridLens defines and keeps."""
+    """(contingency analysis, reason): the one of the study case, else one Outage Assessment defines and keeps."""
     command = contingency_analysis(study_case)
     if command is None and not _contents(study_case, '*.' + N1_COMMAND_CLASS) and grid is not None:
-        # No contingency analysis here (e.g. the QDS study case): GridLens defines one and keeps it.
+        # No contingency analysis here (e.g. the QDS study case): Outage Assessment defines one and keeps it.
         name = "{}{}_N1".format(SNAPSHOT_PREFIX, datetime.now().strftime("%y%m%d-%H%M%S"))
         try:
             with RUN_STATS.measure("n-1: define contingencies"):
                 command, made, refused = create_contingency_analysis(app, study_case, contingency_grid_selection(), name)
             RUN_STATS.count("n1_created")
-            logger.write("CALCULATION", "The study case holds no contingency analysis: GridLens created '{}' with {} "
+            logger.write("CALCULATION", "The study case holds no contingency analysis: Outage Assessment created '{}' with {} "
                          "contingencies (one per branch, transformer, reactor, compensation and FACTS element in {}; no "
                          "generators, loads or busbars){}. It stays in the study case.".format(
                              name, made, ', '.join(contingency_grid_selection()) or 'every grid',
                              '; {} element(s) refused'.format(refused) if refused else ''), 4)
-        except GridLensError as exc:
+        except OutageAssessmentError as exc:
             return None, str(exc)
     if command is None:
         return None, 'the active study case holds more than one contingency analysis (ComSimoutage)'
@@ -12084,7 +12296,7 @@ def _equipment_map(commands):
 def calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state, result_objects):
     """Phase 1 of n-1 and, if requested, (n-1)' for every ready planning case: {case id: entry}.
 
-    Every sweep is kept as a copy (GridLens_<stamp>_<case>_N1 and _N1P) and
+    Every sweep is kept as a copy (OA_<stamp>_<case>_N1 and _N1P) and
     read in phase 2. A case that cannot be calculated gets status NOT
     EVALUATED with the reason and the others continue; a state that cannot be
     restored stops the run. Cases with the same outages and windows share one
@@ -12119,11 +12331,11 @@ def calculate_n1(app, study_case, qds, request, records, ready, logger, study_ti
                                       (study_case, result_objects.name_for(plan['id'])))
         except StateRestoreError:
             raise
-        except GridLensError as exc:
+        except OutageAssessmentError as exc:
             entry = {'status': 'NOT EVALUATED', 'reason': str(exc), 'times': 0, 'error': exc}
         clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
         if clock_errors:
-            raise GridLensError("The initial Study Case time could not be restored after the n-1 run of {}: {}.".format(
+            raise OutageAssessmentError("The initial Study Case time could not be restored after the n-1 run of {}: {}.".format(
                 plan['id'], "; ".join(clock_errors)))
         if entry['status'] == 'CALCULATED':
             entry['elements_of'] = elements_of
@@ -12155,7 +12367,7 @@ def evaluate_n1(entries, request, ready, results, logger):
                 logger.case("n-1 evaluation · Case {} · {}".format(plan['id'], plan['name']))
             try:
                 done[id(entry)] = evaluate_n1_case(entry, plan, entry.get('elements_of') or {}, request.get('run_id') or '')
-            except GridLensError as exc:
+            except OutageAssessmentError as exc:
                 done[id(entry)] = {'status': 'NOT EVALUATED', 'reason': str(exc), 'times': 0}
             evaluated = done[id(entry)]
             for line in evaluated.get('details') or ():
@@ -12170,12 +12382,14 @@ def evaluate_n1(entries, request, ready, results, logger):
 def evaluate_runs(runs, request, logger):
     """Phase 2 of the QDS: REF first, then every case from its kept result object, compared with REF."""
     results, by_id, reference = [], {}, None
+    OFFLINE.clear()
     for run in runs:
         if run['id'] == REFERENCE_CASE_ID:
             logger.case("Evaluation · {} · {}".format(REFERENCE_CASE_ID, run.get('name', REFERENCE_NAME)))
             if run.get('failed'):
-                raise GridLensError(run['failed'])
+                raise OutageAssessmentError(run['failed'])
             reference = evaluate_qds(run, run.get('description', ''), None, logger)
+            set_offline(reference)
             reference['run_note'] = run.get('run_note', '')
             results.append(reference)
             check_run_budget(results)
@@ -12214,7 +12428,7 @@ KEPT_STAMP = re.compile(r'^' + re.escape(SNAPSHOT_PREFIX) + r'(\d{6}-\d{6})_')
 
 
 def kept_stamps(study_case):
-    """The stamps of earlier GridLens runs whose result objects are kept in the study case, newest first."""
+    """The stamps of earlier Outage Assessment runs whose result objects are kept in the study case, newest first."""
     stamps = set()
     for obj in _contents(study_case, '*.ElmRes'):
         match = KEPT_STAMP.match(object_name(obj))
@@ -12226,7 +12440,7 @@ def kept_stamps(study_case):
 def kept_runs(study_case, stamp, request, ready, logger, grid=None):
     """Phase 1 without a calculation: the runs and n-1 entries from the result objects of an earlier run.
 
-    Every object is found by its name GridLens_<stamp>_<case>; a case whose
+    Every object is found by its name OA_<stamp>_<case>; a case whose
     outages or windows changed since (another fingerprint) or whose object is
     missing is not evaluated, with the reason. A changed REF stops the run.
     """
@@ -12238,11 +12452,11 @@ def kept_runs(study_case, stamp, request, ready, logger, grid=None):
     if setting_value('run_reference'):
         obj = objects.get(prefix + REFERENCE_CASE_ID)
         if obj is None:
-            raise GridLensError("The run {} kept no reference result object '{}'.".format(stamp, prefix + REFERENCE_CASE_ID))
+            raise OutageAssessmentError("The run {} kept no reference result object '{}'.".format(stamp, prefix + REFERENCE_CASE_ID))
         if result_fingerprint(obj) is None:
-            raise GridLensError('The kept reference has no verifiable fingerprint. Calculate again.')
+            raise OutageAssessmentError('The kept reference has no verifiable fingerprint. Calculate again.')
         if result_fingerprint(obj) != reference_fingerprint(request):
-            raise GridLensError("The fixed background outages changed since the run {}, so its reference does not fit "
+            raise OutageAssessmentError("The fixed background outages changed since the run {}, so its reference does not fit "
                                 "the cases any more. Calculate again.".format(stamp))
         runs.append({'id': REFERENCE_CASE_ID, 'name': REFERENCE_NAME, 'snapshot': obj, 'elapsed': 0.0,
                      'result_object': object_name(obj), 'description': 'Kept reference of the run {}.'.format(stamp),
@@ -12353,7 +12567,7 @@ def _element_name(item, entry):
 # ---------------------------------------------------------------------------
 
 
-def execute_gridlens(app):
+def execute_outage_assessment(app):
     """Execute one assessment in the active PowerFactory study case.
 
     Resolve and validate the request before calculation. Keep native results,
@@ -12367,45 +12581,45 @@ def execute_gridlens(app):
     logger = RunLogger(app)
     logger.step(1, "Startup and context")
     logger.write(
-        "STARTUP", "GridLens publisher {} started.".format(PUBLISHER_VERSION), 1)
+        "STARTUP", "Outage Assessment publisher {} started.".format(PUBLISHER_VERSION), 1)
     script = app.GetCurrentScript()
     study_case = app.GetActiveStudyCase()
     if script is None:
-        raise GridLensError("No active ComPython script was found.")
+        raise OutageAssessmentError("No active ComPython script was found.")
     if study_case is None:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "No active study case was found. Activate a study case and retry.")
     # Calculation and publication are separate: without an IntReport above the
-    # script GridLens calculates, builds and checks every report table and logs
+    # script Outage Assessment calculates, builds and checks every report table and logs
     # the results, but publishes nothing.
     report = script.GetParent()
     if report is None or class_name(report) != "IntReport":
         report = None
-        logger.write("CONTEXT", "This ComPython is not below an IntReport: GridLens calculates and builds the report "
+        logger.write("CONTEXT", "This ComPython is not below an IntReport: Outage Assessment calculates and builds the report "
                      "tables but does not publish them (standalone run). Place it below the IntReport to publish.", 1)
     qds = app.GetFromStudyCase("ComStatsim")
     if qds is None:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "No ComStatsim was found in the active study case. Configure the "
-            "quasi-dynamic simulation before running GridLens.")
+            "quasi-dynamic simulation before running Outage Assessment.")
     original_result = safe_attr(qds, "results")
     if original_result is None:
-        raise GridLensError(
-            "ComStatsim.results is empty. Configure a result object and the "
-            "required variables before running GridLens.")
-    if object_name(original_result).startswith(SNAPSHOT_PREFIX):
+        logger.write("CONTEXT", "ComStatsim.results is empty. The first run (REF) lets PowerFactory bind its own result "
+                     "object; if it binds none, Outage Assessment creates an empty one in the study case. Nothing to do.",
+                     1, "WARNING")
+    elif object_name(original_result).startswith(SNAPSHOT_PREFIX):
         # The QDS writes into the bound result object; a kept run would be overwritten.
-        raise GridLensError(
-            "ComStatsim.results is bound to '{}', a kept result object of an earlier GridLens run; the QDS would "
+        raise OutageAssessmentError(
+            "ComStatsim.results is bound to '{}', a kept result object of an earlier Outage Assessment run; the QDS would "
             "overwrite it. No calculation was started.".format(object_name(original_result)),
             details=["Bound result object: " + object_key(original_result)],
             hint="Bind ComStatsim.results to another result object, or run the quasi-dynamic simulation once by hand "
-                 "so that PowerFactory binds its own, then run GridLens again.")
+                 "so that PowerFactory binds its own, then run Outage Assessment again.")
     option_found, original_option = _read_setting(qds, PLANNED_OUTAGE_OPTION)
     if not option_found:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "The active ComStatsim does not expose the 'Planned Outages' "
-            "option [{}]. GridLens cannot control whether PowerFactory applies "
+            "option [{}]. Outage Assessment cannot control whether PowerFactory applies "
             "planned outages, so no calculation was started.".format(
                 PLANNED_OUTAGE_OPTION))
     study_time_state = _capture_study_time(app)
@@ -12465,7 +12679,7 @@ def execute_gridlens(app):
                                                  result_objects, study_time_state))
             if ready:
                 if not _set_scalar_attribute(qds, PLANNED_OUTAGE_OPTION, 1):
-                    raise GridLensError(
+                    raise OutageAssessmentError(
                         "The 'Planned Outages' option [{}] could not be switched "
                         "on, so no case run was started.".format(
                             PLANNED_OUTAGE_OPTION))
@@ -12514,11 +12728,11 @@ def execute_gridlens(app):
         _log_results_binding(qds, original_result, logger)
         _log_kept_results(result_objects, logger)
         RUN_CONTEXT['restore'] = ("NOT fully restored: " + "; ".join(state_errors)) if state_errors else (
-            "restored and verified (Study Case time, 'Planned Outages' option, QDS period, every value GridLens wrote)")
+            "restored and verified (Study Case time, 'Planned Outages' option, QDS period, every value Outage Assessment wrote)")
         RUN_STATS.add("restore PowerFactory state", time.monotonic() - restoring)
     if state_errors:
-        raise GridLensError(
-            "GridLens could not fully restore PowerFactory state: {}. Stop and "
+        raise OutageAssessmentError(
+            "Outage Assessment could not fully restore PowerFactory state: {}. Stop and "
             "verify the study case manually before continuing.".format(
                 "; ".join(state_errors)))
     logger.write("RESTORE", "Original PowerFactory state restored and verified.", 5)
@@ -12593,7 +12807,7 @@ def execute_gridlens(app):
 # Said when a run fails without publication: generating the report then
 # fails in PowerFactory with "exit with error, see ReportsNet.log" because the
 # Scripted... tables do not exist.
-NO_REPORT_DATA = ("No report tables were published in this run. GridLens ends with exit code {} so that "
+NO_REPORT_DATA = ("No report tables were published in this run. Outage Assessment ends with exit code {} so that "
                   "PowerFactory does not generate the report from them; generating it by hand would fail with "
                   "'Scripted... not found' (see ReportsNet.log). Generate the report only after a run that ends "
                   "with 'Report published successfully'.")
@@ -12608,21 +12822,21 @@ def main():
         import powerfactory
     except ImportError:
         print(
-            "[GridLens][ERROR][STARTUP] The PowerFactory Python module is not "
+            "[Outage Assessment][ERROR][STARTUP] The PowerFactory Python module is not "
             "available. Run this file from DIgSILENT PowerFactory 2026.",
             flush=True)
         return False
     app = powerfactory.GetApplication()
     if app is None:
         print(
-            "[GridLens][ERROR][STARTUP] PowerFactory did not return an "
+            "[Outage Assessment][ERROR][STARTUP] PowerFactory did not return an "
             "application object.", flush=True)
         return False
     logger = RunLogger(app)
     try:
-        execute_gridlens(app)
+        execute_outage_assessment(app)
         return True
-    except GridLensCancelled as exc:
+    except OutageAssessmentCancelled as exc:
         logger.write("CANCELLED", "{} Report generation cancelled.".format(exc), level="INFO")
         # This script can be an IntReport extension. Returning False here is
         # discarded by the top-level main() call and looks like a successful
@@ -12632,14 +12846,14 @@ def main():
     except KeyboardInterrupt:
         logger.write(
             "ABORTED",
-            "The run was cancelled. GridLens attempted to restore all state; "
+            "The run was cancelled. Outage Assessment attempted to restore all state; "
             "review the RESTORE messages above before continuing.",
             level="ERROR")
     except BaseException as exc:
         logger.write(
             "FAILED",
             "{} Recommended action: correct the reported condition, verify the "
-            "active study case, and run GridLens again. {}".format(
+            "active study case, and run Outage Assessment again. {}".format(
                 _friendly_exception(exc), NO_REPORT_DATA.format(NO_REPORT_EXIT_CODE)), level="ERROR")
         log_failure(logger, exc)
         log_run_summary(logger)

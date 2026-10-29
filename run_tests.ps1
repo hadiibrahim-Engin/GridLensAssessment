@@ -1,10 +1,11 @@
 <#
 .SYNOPSIS
-Run GridLens tests from any working directory (PowerShell 5.1 or later).
+Run Outage Assessment tests from any working directory (PowerShell 5.1 or later).
 .DESCRIPTION
 Uses only the manually created .venv in the repository's parent directory.
 Does not create environments, install packages, or change execution policies.
-GUI tests need an interactive desktop. PowerFactory itself is not required.
+Native GUI tests are opt-in and automated. They need a graphical session.
+PowerFactory itself is not required.
 .EXAMPLE
 .\run_tests.ps1
 .EXAMPLE
@@ -69,7 +70,7 @@ try {
         $testArguments += @('-m', 'not gui')
     }
     if ($PyQtOnly) {
-        $testArguments += 'tests/test_preview_pyqt_dialog.py'
+        $testArguments += @('--run-gui', 'tests/test_preview_pyqt_dialog.py')
     }
     $testArguments += $PytestArgs
     & $testPython @testArguments

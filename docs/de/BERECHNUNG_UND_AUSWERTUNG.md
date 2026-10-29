@@ -1,10 +1,10 @@
-# GridLens – Berechnung und Auswertung, und wie GridLens Zeit spart
+# Outage Assessment – Berechnung und Auswertung, und wie Outage Assessment Zeit spart
 
-Wie GridLens rechnet und auswertet, welche Stunden jeder Schritt abdeckt,
+Wie Outage Assessment rechnet und auswertet, welche Stunden jeder Schritt abdeckt,
 wo die Filter wirken und jede Maßnahme, die Rechen- oder Auswertezeit spart.
 Englische Fassung:
 [`docs/CALCULATION_AND_EVALUATION.md`](../CALCULATION_AND_EVALUATION.md);
-beide werden gemeinsam gepflegt. Wie GridLens mit PowerFactory arbeitet,
+beide werden gemeinsam gepflegt. Wie Outage Assessment mit PowerFactory arbeitet,
 beschreibt [`POWERFACTORY.md`](POWERFACTORY.md).
 
 ---
@@ -18,9 +18,9 @@ flowchart LR
         C --> N["n-1 und (n-1)':<br/>nur die Stunden in<br/>den FS-Fenstern"]
     end
     subgraph K["erhalten im Study Case"]
-        E1["GridLens_&lt;stamp&gt;_REF"]
-        E2["GridLens_&lt;stamp&gt;_&lt;Fall&gt;"]
-        E3["GridLens_&lt;stamp&gt;_&lt;Fall&gt;_N1 / _N1P"]
+        E1["OA_&lt;stamp&gt;_REF"]
+        E2["OA_&lt;stamp&gt;_&lt;Fall&gt;"]
+        E3["OA_&lt;stamp&gt;_&lt;Fall&gt;_N1 / _N1P"]
     end
     subgraph P2["Phase 2 · Auswertung (Python)"]
         V["lesen, mit REF vergleichen,<br/>einstufen, Bericht bauen"]
@@ -40,7 +40,7 @@ flowchart LR
 Weil die Ergebnisse erhalten bleiben, kann Phase 2 jederzeit **ohne Phase 1**
 erneut laufen: *Results* im Fall-Manager listet die erhaltenen Läufe auf. **Der
 Ingenieur allein entscheidet**, ob neu gerechnet oder ein erhaltener Lauf neu
-ausgewertet wird; GridLens wechselt nie von selbst.
+ausgewertet wird; Outage Assessment wechselt nie von selbst.
 
 ---
 
@@ -72,7 +72,7 @@ gantt
 
 | Schritt | Stunden | Warum |
 |---|---|---|
-| QDS, REF und jeder Fall | **jede Stunde von einem Schritt vor der ersten bis einen Schritt nach der letzten FS der gerechneten Fälle** | GridLens setzt diesen Zeitraum für den Lauf (`calcPeriod` 4); PowerFactory wendet jede FS in ihrem eigenen Fenster während einer QDS an und kann keine Stunden überspringen. Bei *as set in ComStatsim*: jede Stunde des eingestellten Zeitraums |
+| QDS, REF und jeder Fall | **jede Stunde von der ersten bis einen Schritt nach der letzten FS der gerechneten Fälle** | Outage Assessment setzt diesen Zeitraum für den Lauf (`calcPeriod` 4); PowerFactory wendet jede FS in ihrem eigenen Fenster während einer QDS an und kann keine Stunden überspringen. Bei *as set in ComStatsim*: jede Stunde des eingestellten Zeitraums |
 | n-1 und (n-1)' | **nur die QDS-Schritte von der ersten bis zur letzten Fensterstunde des Falls** | `calcPeriod = 4` mit `startTime`/`endTime`; jeder Schritt außerhalb der Fenster würde nur REF wiederholen |
 | Auswertung n-0 | die Fensterstunden, dazu jede Stunde außerhalb, in der sich Fall und REF unterscheiden (Spill-over) | außerhalb der Fenster sollten Fall und REF gleich sein |
 | Auswertung n-1 | nur die Fensterstunden | die Schritte zwischen auseinanderliegenden Fenstern werden gerechnet, aber nicht bewertet |
@@ -89,7 +89,7 @@ abgelehnt. Den Fall aufzuteilen oder ein Sweep je Fenster vermeidet das.
 | Maßnahme | Was sie spart | Wo | Status |
 |---|---|---|---|
 | **Erhaltenen Lauf neu auswerten** | die ganze Phase 1: keine QDS, kein n-1 | *Results* im Fall-Manager, `kept_runs` | genutzt |
-| **QDS-Zeitraum aus den FS** | jeden QDS-Schritt vor der ersten und nach der letzten FS der Fälle (im Beispiel oben: Januar, Februar, Oktober bis Dezember) | `outage_span`, `set_qds_span` | genutzt, noch nicht in PowerFactory gelaufen |
+| **QDS-Zeitraum aus den FS** | jeden QDS-Schritt vor der ersten und nach der letzten FS der Fälle (ein Schritt danach bleibt) (im Beispiel oben: Januar, Februar, Oktober bis Dezember) | `outage_span`, `set_qds_span` | genutzt, noch nicht in PowerFactory gelaufen |
 | **Gleiche Fälle einmal rechnen** | eine QDS und ein n-1 je verschiedener Menge aus FS und Fenstern; die übrigen sind `REUSED` | `plan_fingerprint` | genutzt |
 | **Gemeinsame n-1-Referenz** | der n-1-Sweep wird je Menge von Zeitpunkten einmal gerechnet und von jedem Fall mit denselben Stunden geteilt | `references` in `calculate_n1_case` | genutzt |
 | **n-1 nur in den Fenstern** | statt jeder Stunde des Zeitraums nur die Fensterstunden (erster Lauf: 2 von 8784) | `n1_study_times`, `sweep_period` | geprüft 24.10.2026 |
@@ -111,10 +111,10 @@ Rechnungen; so lässt sich die Wirkung jeder Maßnahme an einem Lauf ablesen.
    die festen FS).
 2. **Jeder Fall**: `iopt_maint = 1`; die FS des Falls und die festen haben
    `outserv = 0`, jede andere `outserv = 1`. Eine QDS über den Zeitraum des
-   Laufs: standardmäßig von einem QDS-Schritt vor der ersten bis einen Schritt
-   nach der letzten FS der gerechneten Fälle (REF genauso).
-   Direkt danach kopiert GridLens das Ergebnisobjekt, in das PowerFactory
-   schrieb, als `GridLens_<stamp>_<Fall>`.
+   Laufs: standardmäßig von der ersten bis einen QDS-Schritt nach der letzten
+   FS der gerechneten Fälle (REF genauso).
+   Direkt danach kopiert Outage Assessment das Ergebnisobjekt, in das PowerFactory
+   schrieb, als `OA_<stamp>_<Fall>`.
 3. **n-1**: je Fall ein Sweep mit `isPlannedOutages = 0` (oder nur den festen
    FS) über den Zeitraum von der ersten bis zur letzten Fensterstunde.
 4. **(n-1)'**: derselbe Zeitraum mit den FS des Falls.
@@ -158,7 +158,7 @@ weglassen; die Vorschau des Fall-Managers sagt, was für die gewählten
 ## 7. Neu auswerten in der Praxis
 
 1. Fall-Manager öffnen.
-2. *Results*: den erhaltenen Lauf (`GridLens_<stamp>_…`) wählen oder *Calculate now*.
+2. *Results*: den erhaltenen Lauf (`OA_<stamp>_…`) wählen oder *Calculate now*.
 3. Berichtsfilter, Grenzwerte oder Schwellen nach Bedarf ändern; die
    n-1-Filter ändern, um die Auswertung einzugrenzen.
 4. *Start calculation*: mit einem erhaltenen Lauf rechnet PowerFactory nichts.
@@ -176,7 +176,7 @@ Berichtsdatenbank liegen: Python liest sie weiterhin aus PowerFactory
 (Stimulsoft kann kein `ElmRes` lesen) und müsste dann jeden Wert mit
 `IntReport.SetValue` schreiben, ein Aufruf je Zelle. Ein Jahr stündlich mit 450
 Reihen, REF und fünf Fällen sind rund 24 Millionen Aufrufe; heute schreibt
-GridLens einige tausend Ergebniszellen.
+Outage Assessment einige tausend Ergebniszellen.
 
 Ob das tragbar ist, hängt davon ab, wie schnell `SetValue` in PowerFactory ist;
 das ist nicht gemessen. `powerfactory_tests/benchmark_report_writes.py` misst es: Es läuft unter

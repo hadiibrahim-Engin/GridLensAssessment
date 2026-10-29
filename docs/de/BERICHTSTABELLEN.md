@@ -1,7 +1,7 @@
-# GridLens – wie jede Berichtstabelle berechnet und erstellt wird
+# Outage Assessment – wie jede Berichtstabelle berechnet und erstellt wird
 
-GridLens veröffentlicht **38 Tabellen** (Datenvertrag 7.0), die beide Berichte
-lesen: `MASTER_GRIDLENS` (Hauptbericht) und `MASTER_GRIDLENS_DETAIL`
+Outage Assessment veröffentlicht **38 Tabellen** (Datenvertrag 7.0), die beide Berichte
+lesen: `MASTER_OUTAGE_ASSESSMENT` (Hauptbericht) und `MASTER_OUTAGE_ASSESSMENT_DETAIL`
 (technischer Detailbericht), gehalten als Pages in `designer-pages/<Bericht>/`
 (ein `.dct`-Dictionary und je Seite eine `.pg`-Datei). Für dieselbe Run-ID
 drucken beide Berichte dieselbe Statistik. Dieses Dokument beschreibt Tabelle
@@ -114,7 +114,7 @@ PowerFactory-Berichtsengine Relationen auf Diagramme nicht anwendet.
 
 | Feld | Berechnung |
 |---|---|
-| `run_id` | Stempel der Ergebnisobjekte, die der Lauf behält oder neu auswertet (`GridLens_<Stempel>_…`); in jeder Kopfzeile |
+| `run_id` | Stempel der Ergebnisobjekte, die der Lauf behält oder neu auswertet (`OA_<Stempel>_…`); in jeder Kopfzeile |
 | `study_name` | Name des aktiven Study Case |
 | `model_name` | Name des Projekts |
 | `model_version` | `PowerFactory 2026` |
@@ -158,7 +158,7 @@ PowerFactory-Berichtsengine Relationen auf Diagramme nicht anwendet.
 | `security_scope` | WARNING: was der Bericht nicht belegt (n-1-Sicherheit, Schutz, …) |
 | `limit_loading`, `limit_voltage` | INFO: die verwendeten Grenzen |
 | `network_scope` | INFO: Berichtsfilter und Umfang der Fehlerfälle |
-| `settings` | INFO, oder WARNING, wenn Einstellungen von den GridLens-Standards abweichen |
+| `settings` | INFO, oder WARNING, wenn Einstellungen von den Outage Assessment-Standards abweichen |
 | `outages_<case>` | hat jede Außerbetriebnahme gewirkt (`APPLIED`, `EFFECT SEEN`, `NO EFFECT`, `NOT CHECKABLE`) |
 | `outages_after_<case>` | eine Außerbetriebnahme, die nach ihrem Fenster weiterwirkt |
 | `n1_<case>` | (n-1)' gegen n-1: Zählungen je Status; FAIL, wenn der Fall `NEW` oder `WORSENED` verursacht, WARNING, wenn Ergebnisse fehlen |
@@ -266,7 +266,7 @@ jeder Planungsfall, der nicht gerechnet wurde (`_calculation_runs`).
 | `period_text`, `time_steps` | erste bis letzte Zeitbeschriftung, Zahl der Zeitschritte |
 | `elapsed_text` | QDS-Zeit in s; `-` für einen wiederverwendeten Lauf, `0.0 s` für einen aus seinem Ergebnisobjekt neu ausgewerteten Lauf |
 | `status`, `provenance_text` | Status des Laufs; `CALCULATED`, `REUSED` oder `NOT CALCULATED` |
-| `result_object` | das erhaltene Ergebnisobjekt `GridLens_<Stempel>_<Fall>` |
+| `result_object` | das erhaltene Ergebnisobjekt `OA_<Stempel>_<Fall>` |
 | `note` | was angewendet wurde (`iopt_maint=1; active: …`) oder dass der Lauf neu ausgewertet wurde |
 
 ### 3.11 `ScriptedTopLinesByCase` – höchstbelastete Leitungen je Fall
@@ -339,7 +339,7 @@ enthält auch NOT APPLICABLE je Fehlerfall.
 
 ## 4. Kapitel und ihre Tabellen
 
-**Hauptbericht** (`MASTER_GRIDLENS`):
+**Hauptbericht** (`MASTER_OUTAGE_ASSESSMENT`):
 
 | Kapitel | Tabellen |
 |---|---|
@@ -356,7 +356,7 @@ enthält auch NOT APPLICABLE je Fehlerfall.
 | 12 Time Criticality | `ScriptedTimeCriticality`, `ScriptedTimeMatrix` |
 | 13 Settings and Evidence | `ScriptedAssessmentSettings`, `ScriptedResultProvenance`, `ScriptedCalculationRuns` |
 
-**Detailbericht** (`MASTER_GRIDLENS_DETAIL`):
+**Detailbericht** (`MASTER_OUTAGE_ASSESSMENT_DETAIL`):
 
 | Kapitel | Tabellen |
 |---|---|

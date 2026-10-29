@@ -1,4 +1,4 @@
-"""GridLens probe: show which elements the grid filter assesses and ignores.
+"""Outage Assessment probe: show which elements the grid filter assesses and ignores.
 
 A stand-alone diagnostic: it needs nothing but PowerFactory. It only reads;
 nothing is calculated, written or published.
@@ -250,7 +250,7 @@ def report_result_series(app):
         return
     result = safe_attr(found[0], "results")
     if result is None:
-        emit(app, "  ComStatsim.results is not bound to a result object; GridLens would stop with that message.")
+        emit(app, "  ComStatsim.results is not bound to a result object; Outage Assessment would stop with that message.")
         emit(app, "  Bind the result object of the quasi-dynamic simulation, then run this probe again.")
         return
     emit(app, "  Result object: '{}'".format(object_name(result)))
@@ -293,7 +293,7 @@ def report_result_series(app):
             if len(examples_out) < EXAMPLES_PER_GROUP:
                 examples_out.append("{} {} [{}] in '{}'".format(class_name(obj), object_name(obj), variable, grid))
     elapsed = time.monotonic() - started
-    emit(app, "  Columns: {}{}; not a GridLens variable: {}; filter time {:.1f} s ({:.0f} us per column)".format(
+    emit(app, "  Columns: {}{}; not a Outage Assessment variable: {}; filter time {:.1f} s ({:.0f} us per column)".format(
         columns, " (first {} inspected)".format(inspected) if inspected < columns else "",
         unsupported, elapsed, 1e6 * elapsed / max(inspected, 1)))
     emit(app, "  ASSESSED series: {}".format(sum(assessed.values())))
@@ -321,7 +321,7 @@ def main():
     if app is None:
         print("PowerFactory returned no application object.", flush=True)
         return
-    emit(app, "=== GridLens grid-filter probe (read-only) ===")
+    emit(app, "=== Outage Assessment grid-filter probe (read-only) ===")
     emit(app, PRIVACY_NOTE)
     emit(app, "GRID_NAME_FILTER : {!r}".format(GRID_NAME_FILTER))
     emit(app, "MONITORING_GRIDS : {!r}".format(MONITORING_GRIDS))

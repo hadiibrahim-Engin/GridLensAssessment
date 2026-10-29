@@ -1,6 +1,6 @@
-"""GridLens probe: report how PowerFactory 2026 models planned outages.
+"""Outage Assessment probe: report how PowerFactory 2026 models planned outages.
 
-This is a diagnostic tool, not part of the GridLens delivery. Install it as a
+This is a diagnostic tool, not part of the Outage Assessment delivery. Install it as a
 separate ComPython script anywhere in the active study case and run it once.
 
 PRIVACY: LOCAL USE ONLY. Its purpose needs project data, so its output contains
@@ -414,7 +414,7 @@ def main():
         print("PowerFactory returned no application object.", flush=True)
         return
 
-    emit(app, "=== GridLens planned-outage probe (read-only) ===")
+    emit(app, "=== Outage Assessment planned-outage probe (read-only) ===")
     emit(app, PRIVACY_NOTE)
     try:
         project = app.GetActiveProject()

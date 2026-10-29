@@ -1,6 +1,6 @@
-# GridLens und PowerFactory 2026 – wie GridLens mit PowerFactory arbeitet
+# Outage Assessment und PowerFactory 2026 – wie Outage Assessment mit PowerFactory arbeitet
 
-Dieses Dokument beschreibt alles, was GridLens in PowerFactory 2026 tut: wie es
+Dieses Dokument beschreibt alles, was Outage Assessment in PowerFactory 2026 tut: wie es
 Objekte findet und liest, was es schreibt und wieder zurücksetzt, wie Planned
 Outages wirken, wie die quasi-dynamische Simulation (QDS) und die Contingency
 Analysis (n-1) laufen und wie aus der Fallkonfiguration Rechnungen werden.
@@ -13,7 +13,7 @@ Jede Aussage trägt einen Status:
 | Status | Bedeutung |
 |---|---|
 | **geprüft** | in PowerFactory 2026 beobachtet (Probe- oder Testlauf, Datum genannt) |
-| **genutzt** | GridLens verwendet es und es lief in PowerFactory ohne Fehler, aber nicht gezielt geprüft |
+| **genutzt** | Outage Assessment verwendet es und es lief in PowerFactory ohne Fehler, aber nicht gezielt geprüft |
 | **offen** | Annahme oder Beobachtung, die noch bestätigt werden muss |
 
 Die Funktionsnamen in `code` stehen in `outage-assessment/main.py`.
@@ -22,7 +22,7 @@ Die Funktionsnamen in `code` stehen in `outage-assessment/main.py`.
 
 ## 1. Grundlagen der Python-API
 
-GridLens läuft als ComPython-Skript in PowerFactory und braucht nur die
+Outage Assessment läuft als ComPython-Skript in PowerFactory und braucht nur die
 Standardbibliothek und das Modul `powerfactory`.
 
 ```python
@@ -38,7 +38,7 @@ app.PrintPlain("Text")                       # Ausgabe ins Ausgabefenster
 
 | Was | Wie | Hinweis |
 |---|---|---|
-| Klasse eines Objekts | `obj.GetClassName()` → `"ElmLne"` | GridLens prüft jede gefundene Klasse, bevor es ein Objekt benutzt |
+| Klasse eines Objekts | `obj.GetClassName()` → `"ElmLne"` | Outage Assessment prüft jede gefundene Klasse, bevor es ein Objekt benutzt |
 | Name | `obj.loc_name` | im Bericht nur dieser Kurzname |
 | Identität | `obj.GetFullName()` → Pfad mit Klassen | interner Schlüssel (`object_key`); erscheint nie im Bericht |
 | Attribut lesen | `obj.<attribut>` bzw. `getattr(obj, "attribut")`, sonst `obj.GetAttribute("attribut")` | `safe_attr` und `_read_setting` fangen Fehler ab |
@@ -46,12 +46,12 @@ app.PrintPlain("Text")                       # Ausgabe ins Ausgabefenster
 | Inhalt eines Ordners | `obj.GetContents("*.Klasse")`, rekursiv `obj.GetContents("*.Klasse", 1)` | bei manchen Objekten nur ohne zweites Argument |
 | rechenrelevante Objekte | `app.GetCalcRelevantObjects("*.ElmLne")` | nur Betriebsmittel aktiver Netze |
 | Projektordner | `app.GetProjectFolder("outage")`, `app.GetProjectFolder("netdat")` | Operational Library bzw. Netzdaten |
-| Objekt anlegen | `ordner.CreateObject("Klasse", "Name")` | GridLens legt nur `ComSimoutage`, `ComOutage` und den Spaltenpuffer `IntVec` an |
+| Objekt anlegen | `ordner.CreateObject("Klasse", "Name")` | Outage Assessment legt nur `ComSimoutage`, `ComOutage` und den Spaltenpuffer `IntVec` an |
 | Objekt kopieren | `ziel.AddCopy(obj)` → Kopie (bzw. Liste) | für die erhaltenen Ergebnisobjekte |
-| Objekt löschen | `obj.Delete()` | GridLens löscht nur seinen eigenen Spaltenpuffer |
+| Objekt löschen | `obj.Delete()` | Outage Assessment löscht nur seinen eigenen Spaltenpuffer |
 | Rechnung starten | `kommando.Execute()` → `0` bei Erfolg | blockiert, bis PowerFactory fertig ist |
 
-**Aktivieren.** GridLens ruft nie `Activate()` oder `Deactivate()` auf; es
+**Aktivieren.** Outage Assessment ruft nie `Activate()` oder `Deactivate()` auf; es
 wechselt weder Projekt noch Study Case, Operation Scenario oder Variante. Was
 eine Rechnung berücksichtigt, steuert es nur über Attribute:
 
@@ -64,12 +64,12 @@ eine Rechnung berücksichtigt, steuert es nur über Attribute:
 
 ---
 
-## 2. Welche Objekte GridLens findet und woher
+## 2. Welche Objekte Outage Assessment findet und woher
 
 | Objekt | Klasse | Wie gefunden | Funktion |
 |---|---|---|---|
-| laufendes Skript | `ComPython` | `app.GetCurrentScript()` | `execute_gridlens` |
-| Bericht | `IntReport` | Elternobjekt des Skripts; fehlt es, läuft GridLens eigenständig und publiziert nicht | `execute_gridlens` |
+| laufendes Skript | `ComPython` | `app.GetCurrentScript()` | `execute_outage_assessment` |
+| Bericht | `IntReport` | Elternobjekt des Skripts; fehlt es, läuft Outage Assessment eigenständig und publiziert nicht | `execute_outage_assessment` |
 | Study Case | `IntCase` | `app.GetActiveStudyCase()` | |
 | QDS | `ComStatsim` | `app.GetFromStudyCase("ComStatsim")` | |
 | Studienzeit | `SetTime` | `app.GetFromStudyCase("SetTime")` | `_restore_study_time` |
@@ -78,41 +78,46 @@ eine Rechnung berücksichtigt, steuert es nur über Attribute:
 | Fehlerfälle | `ComOutage` | Inhalt der `ComSimoutage` | `contingency_equipment` |
 | Netze | `ElmNet` | `app.GetCalcRelevantObjects("*.ElmNet")` (aktiv) und `GetProjectFolder("netdat")` (alle) | `project_grids` |
 | Netz eines Betriebsmittels | – | Attribut `cpGrid`, sonst das `ElmNet` im Pfad | `element_grid_name` |
-| Ergebnisse | `ElmRes` | nach dem QDS-Lauf `qds.results`; die Kopien von GridLens im Study Case | `_calculate_qds` |
+| Ergebnisse | `ElmRes` | nach dem QDS-Lauf `qds.results`; die Kopien von Outage Assessment im Study Case | `_calculate_qds` |
 
 Die veraltete Klasse `IntOutage` (dort legt PowerFactory auch Demand Transfers
-ab) liest GridLens nicht.
+ab) liest Outage Assessment nicht.
 
 ---
 
-## 3. Was GridLens schreibt und wie es zurücksetzt
+## 3. Was Outage Assessment schreibt und wie es zurücksetzt
 
 Jeder Schreibzugriff wird **zurückgelesen** und verglichen. Die Werte eines
 Laufs gehen über `StateGuard`: Der alte Wert wird gemerkt, der neue geschrieben;
 am Ende des Blocks (auch nach einem Fehler) werden alle Werte in umgekehrter
 Reihenfolge zurückgesetzt und wieder zurückgelesen. `iopt_maint` und die
-Studienzeit setzt GridLens direkt und im Schritt „Restore“ verifiziert zurück.
+Studienzeit setzt Outage Assessment direkt und im Schritt „Restore“ verifiziert zurück.
 Lässt sich ein Wert nicht zurücksetzen, stoppt der Lauf mit `StateRestoreError`
 und nennt erwarteten und gefundenen Wert.
 
 | Objekt | Attribut | Wann | Zurückgesetzt |
 |---|---|---|---|
 | `ComStatsim` | `iopt_maint` | 0 für REF, 1 für alle Fälle | nach dem Rechenschritt (Schritt 5) |
-| `ComStatsim` | `calcPeriod`, `startTime`, `endTime`, `stepNumber` | *QDS period* = *first to last planned outage*: ein QDS-Schritt vor der ersten bis einer nach der letzten Außerbetriebnahme der gerechneten Fälle, `calcPeriod` 4 | nach dem Rechenschritt (Schritt 5) |
+| `ComStatsim` | `calcPeriod`, `startTime`, `endTime`, `stepNumber` | *QDS period* = *first to last planned outage*: von der ersten bis einen QDS-Schritt nach der letzten Außerbetriebnahme der gerechneten Fälle, `calcPeriod` 4 | nach dem Rechenschritt (Schritt 5) |
 | `IntPlannedout` (alle) | `outserv` | je Lauf: 0 für die Außerbetriebnahmen des Falls und die festen, 1 für alle anderen | nach jedem Lauf |
 | `SetTime` | `cDate`, `cTime` | PowerFactory setzt die Studienzeit beim Rechnen weiter | nach jedem Lauf |
 | `ComSimoutage` | `isPlannedOutages` | 0 für n-1, 1 für (n-1)' | nach jedem Sweep |
 | `ComSimoutage` | `calcPeriod`, `stepUnit`, `stepSize`, `startTime`, `endTime`, `stepNumber` | Zeitraum des Sweeps (Abschnitt 7.3) | nach jedem Sweep |
 | `ComOutage` | `outserv` | 1 für Fehlerfälle außerhalb der gewählten Netze | nach jedem Sweep |
 
-Was GridLens **anlegt** und im Study Case lässt:
+Was Outage Assessment **anlegt** und im Study Case lässt:
 
-- `GridLens_<yymmdd-HHMMSS>_<Fall>` (`ElmRes`): je QDS-Lauf eine Kopie der Ergebnisse,
-- `GridLens_<stamp>_<Fall>_N1` und `_N1P` (`ElmRes`): Kopien der n-1- und (n-1)'-Ergebnisse,
-- `GridLens_<stamp>_N1` (`ComSimoutage`): nur wenn der Study Case keine Contingency Analysis hat.
+- `OA_<yymmdd-HHMMSS>_<Fall>` (`ElmRes`): je QDS-Lauf eine Kopie der Ergebnisse,
+- `OA_<stamp>_<Fall>_N1` und `_N1P` (`ElmRes`): Kopien der n-1- und (n-1)'-Ergebnisse,
+- `OA_<stamp>_N1` (`ComSimoutage`): nur wenn der Study Case keine Contingency Analysis hat.
 
-Was GridLens **nie** tut: Ergebnisobjekte löschen, `ComStatsim.results`
-umbinden, Operation Scenarios, Varianten oder Study Cases anlegen,
+Ist `ComStatsim.results` leer und bindet PowerFactory beim REF-Lauf kein
+Ergebnisobjekt, legt Outage Assessment ein leeres `ElmRes` *Quasi-Dynamic
+Simulation AC* im Study Case an, bindet es und lässt es gebunden; das ist die
+einzige Bindung, die es vornimmt.
+
+Was Outage Assessment **nie** tut: Ergebnisobjekte löschen, ein gebundenes
+`ComStatsim.results` umbinden, Operation Scenarios, Varianten oder Study Cases anlegen,
 `starttime`/`endtime` einer Außerbetriebnahme oder den Zeitschritt der QDS
 ändern. Eigene Termine je Fall werden nur angezeigt.
 
@@ -124,7 +129,7 @@ umbinden, Operation Scenarios, Varianten oder Study Cases anlegen,
 
 `IntPlannedout` ist in PowerFactory 2026 ein **reines Datenobjekt**. Es hat
 **weder `Apply` noch `Reset` noch `Check`** (geprüft, Probe Oktober 2026).
-GridLens liest:
+Outage Assessment liest:
 
 | Attribut | Inhalt |
 |---|---|
@@ -149,7 +154,7 @@ wenn alle drei Bedingungen gelten (geprüft):
 3. der Rechenzeitpunkt liegt in ihrem Fenster.
 
 PowerFactory wendet **jede** solche Außerbetriebnahme an, nicht nur die
-gewünschte. GridLens wählt deshalb über `outserv` aus, **welche** gelten:
+gewünschte. Outage Assessment wählt deshalb über `outserv` aus, **welche** gelten:
 für einen Lauf 0 für genau die Außerbetriebnahmen des Falls (und die festen),
 1 für alle anderen (`_isolate_outages`). Im Ausgabefenster meldet
 PowerFactory dann z. B. „Switch … opened“, „Outage … applied“ und „1 Planned
@@ -157,25 +162,25 @@ Outages were automatically applied“. Wechselt die Menge der aktiven
 Außerbetriebnahmen zwischen zwei Zeitpunkten, wendet PowerFactory sie neu an
 (geprüft im n-1-Time-Sweep, 23.10.2026).
 
-### 4.3 Wie GridLens prüft, dass sie wirkt
+### 4.3 Wie Outage Assessment prüft, dass sie wirkt
 
-- **Vor jedem Lauf** liest GridLens zurück, was gilt (`applied_text`):
+- **Vor jedem Lauf** liest Outage Assessment zurück, was gilt (`applied_text`):
   „'Planned outages' [iopt_maint] = 1; planned outages applied: …“.
 - **Nach dem Lauf** prüft es jede Außerbetriebnahme gegen REF in ihrem Fenster
   (`outage_effects`): **APPLIED** (ein aufgezeichnetes Betriebsmittel ist im
   Fall lastfrei, in REF nicht), **EFFECT SEEN**, **NO EFFECT** (Warnung) oder
   **NOT CHECKABLE**. Im Bericht steht je Fall eine QA-Zeile `outages_<Fall>`.
-- **Im Schritt 3** protokolliert GridLens für jede Außerbetriebnahme ihre Daten
+- **Im Schritt 3** protokolliert Outage Assessment für jede Außerbetriebnahme ihre Daten
   (alle Attribute, über `dir()` gelesen) und was unter ihr liegt
   (Schaltaktionen mit ihren Daten), oder dass nichts darunter liegt – dann
   isoliert PowerFactory die Betriebsmittel selbst (`outage_contents_text`).
   Im Schritt 2 stehen die QDS-Optionen mit PowerFactorys eigener Beschriftung
   (`GetAttributeDescription`), z. B. `iopt_action` und `iopt_rep`.
-- **Um jeden QDS-Lauf** liest GridLens den Zustand (`on_off`) aller
+- **Um jeden QDS-Lauf** liest Outage Assessment den Zustand (`on_off`) aller
   rechenrelevanten Schalter (`ElmCoup`, `StaSwitch`) vorher und nachher und
-  protokolliert jeden, der sich geändert hat (`switch_states`); GridLens
+  protokolliert jeden, der sich geändert hat (`switch_states`); Outage Assessment
   selbst schaltet nichts.
-- **Nach dem Fensterende** prüft GridLens im Ergebnis, ob die Betriebsmittel
+- **Nach dem Fensterende** prüft Outage Assessment im Ergebnis, ob die Betriebsmittel
   der Außerbetriebnahme im Fall weiter lastfrei sind, während REF Last zeigt
   (`outage_persistence`): Log-Zeile „stays in effect after its window … for N h
   (until …)“ oder „back in service right at its window end“, dazu die QA-Zeile
@@ -187,7 +192,7 @@ Im ersten vollständigen Lauf (24.10.2026) unterschied sich ein Fall mit einer
 zweistündigen Außerbetriebnahme von REF in **fast allen Zeitschritten vom
 Fensterende bis zum Ende des Jahres**. Das spricht dafür, dass die QDS die von
 der Außerbetriebnahme geöffneten Schalter nach dem Fenster **nicht wieder
-schließt** (der Schaltzustand bleibt bestehen). GridLens bewertet solche
+schließt** (der Schaltzustand bleibt bestehen). Outage Assessment bewertet solche
 Zeitschritte als Spill-over und warnt in der QA („Effect outside the outage
 windows“); die verursachten Stunden werden dadurch zu groß. Zu prüfen: die
 Auslastung des ausgeschalteten Betriebsmittels im erhaltenen Ergebnisobjekt
@@ -201,7 +206,7 @@ Log-Zeilen aus 4.3 beantworten das im nächsten Lauf.
 
 ## 5. Quasi-dynamische Simulation (QDS)
 
-### 5.1 Einstellungen, die GridLens liest
+### 5.1 Einstellungen, die Outage Assessment liest
 
 | Attribut von `ComStatsim` | Bedeutung |
 |---|---|
@@ -212,7 +217,7 @@ Log-Zeilen aus 4.3 beantworten das im nächsten Lauf.
 | `iopt_maint` | Planned Outages anwenden (wird gesetzt) |
 | `results` | gebundenes Ergebnisobjekt (nur gelesen) |
 
-Alle übrigen Einstellungen (Profile, Lastfluss-Optionen) nutzt GridLens
+Alle übrigen Einstellungen (Profile, Lastfluss-Optionen) nutzt Outage Assessment
 unverändert.
 
 ### 5.2 Rechnen und Ergebnisse erhalten (geprüft 24.10.2026)
@@ -221,7 +226,7 @@ unverändert.
 code = qds.Execute()                 # 0 = Erfolg
 produced = qds.results               # das ElmRes, in das PowerFactory schrieb
 copy = study_case.AddCopy(produced)  # Kopie DANACH
-copy.loc_name = "GridLens_<stamp>_<Fall>"
+copy.loc_name = "OA_<stamp>_<Fall>"
 ```
 
 - PowerFactory schreibt eine QDS in **sein eigenes Ergebnisobjekt im Study
@@ -234,19 +239,19 @@ copy.loc_name = "GridLens_<stamp>_<Fall>"
   Werte und `IntMon` und bleibt nach dem nächsten Lauf unverändert. Eine
   **vor** dem Lauf angelegte Kopie eines Objekts ohne Variablenauswahl
   zeichnet dagegen nur `b:noconv` und `b:number` auf.
-- Deshalb bindet GridLens `ComStatsim.results` nicht, rechnet wie konfiguriert
+- Deshalb bindet Outage Assessment `ComStatsim.results` nicht, rechnet wie konfiguriert
   und kopiert danach (`_calculate_qds`, `_case_result_object`). Die Bindung, die
   PowerFactory setzt, bleibt wie nach einem Lauf von Hand.
-- Ist `ComStatsim.results` an ein erhaltenes GridLens-Objekt gebunden, stoppt
-  GridLens vor jeder Rechnung: die QDS würde es überschreiben.
-- Direkt nach dem ersten Lauf prüft GridLens, ob die Kopie Auslastung oder
+- Ist `ComStatsim.results` an ein erhaltenes Outage Assessment-Objekt gebunden, stoppt
+  Outage Assessment vor jeder Rechnung: die QDS würde es überschreiben.
+- Direkt nach dem ersten Lauf prüft Outage Assessment, ob die Kopie Auslastung oder
   Spannung aufzeichnet (`check_recording`); sonst stoppt es mit
   `RecordingError` und nennt, was aufgezeichnet ist.
-- In die Beschreibung (`desc`) jeder Kopie schreibt GridLens Version, Fall und
+- In die Beschreibung (`desc`) jeder Kopie schreibt Outage Assessment Version, Fall und
   einen Fingerabdruck der Außerbetriebnahmen; damit kann ein erhaltener Lauf
   später ohne Rechnung neu ausgewertet werden (`kept_runs`).
 - PowerFactory setzt die Studienzeit nach der QDS auf den letzten Zeitpunkt;
-  GridLens setzt sie nach jedem Lauf zurück.
+  Outage Assessment setzt sie nach jedem Lauf zurück.
 
 ### 5.3 Variablen
 
@@ -266,16 +271,16 @@ cols = res.GetNumberOfColumns()
 var = res.GetVariable(col)               # "c:loading"
 obj = res.GetObject(col)                 # das Betriebsmittel der Spalte
 err, value = res.GetValue(row, col)      # eine Zelle; err != 0: kein Wert
-vec = script.CreateObject("IntVec", "GridLens_column_buffer")
+vec = script.CreateObject("IntVec", "OutageAssessment_column_buffer")
 res.GetColumnValues(vec, col)            # eine ganze Spalte nach vec.V
 res.Release()
 ```
 
-- Spalte für Spalte liest GridLens mit `GetColumnValues` in einen `IntVec`,
+- Spalte für Spalte liest Outage Assessment mit `GetColumnValues` in einen `IntVec`,
   den es im laufenden ComPython anlegt und am Ende wieder löscht
   (`open_column_buffer`, `read_column`); geht das nicht, Zelle für Zelle mit
   `GetValue` (langsam, im Laufbericht gezählt).
-- Die Zeitspalte liefert die absolute Zeitachse; GridLens prüft, dass REF und
+- Die Zeitspalte liefert die absolute Zeitachse; Outage Assessment prüft, dass REF und
   jeder Fall dieselbe Zeitachse haben.
 - NaN, Unendlich, `None`, Booleans und Fehlercodes sind keine Messwerte. Eine
   Spannung unter 0,1 p.u. oder NaN gilt als spannungslos.
@@ -293,8 +298,8 @@ res.Release()
 
 ### 7.1 Das Kommando und die Fehlerfälle
 
-- GridLens nutzt die **eine** `ComSimoutage` des aktiven Study Case. Gibt es
-  keine (z. B. im QDS-Study-Case), legt es `GridLens_<stamp>_N1` an
+- Outage Assessment nutzt die **eine** `ComSimoutage` des aktiven Study Case. Gibt es
+  keine (z. B. im QDS-Study-Case), legt es `OA_<stamp>_N1` an
   (`create_contingency_analysis`): je ein `ComOutage` pro rechenrelevantem
   Betriebsmittel der Klassen `ElmLne`, `ElmBranch`, `ElmZpu`, `ElmTr2`,
   `ElmTr3`, `ElmTr4`, `ElmSind`, `ElmScap`, `ElmShnt`, `ElmSvs`, `ElmVsc`,
@@ -308,10 +313,10 @@ fault = ca.CreateObject("ComOutage", element.loc_name)
 fault.SetObjs([element])                       # 0 = Erfolg
 ```
 
-- Welche Betriebsmittel ein Fehlerfall schaltet, liest GridLens mit
+- Welche Betriebsmittel ein Fehlerfall schaltet, liest Outage Assessment mit
   `ComOutage.GetObject(i)` für i = 0, 1, … bis `None` (`contingency_equipment`).
 - Fehlerfälle außerhalb der n-1-Netze oder ohne eines der im
-  n-1-Betriebsmittelfilter gewählten Betriebsmittel setzt GridLens für den Lauf auf „Not analysed“
+  n-1-Betriebsmittelfilter gewählten Betriebsmittel setzt Outage Assessment für den Lauf auf „Not analysed“
   (`ComOutage.outserv = 1`, geprüft 23.10.2026; `excluded_contingencies`). Wo die
   Filter wirken, auch bei einer Neuauswertung:
   [`BERECHNUNG_UND_AUSWERTUNG.md`](BERECHNUNG_UND_AUSWERTUNG.md).
@@ -331,7 +336,7 @@ Mit `calcPeriod = 4` rechnet die Contingency Analysis von `startTime` bis
 `endTime` (**exklusiv**) in Schritten von `stepSize`/`stepUnit`; der Vektor
 `studyTime` wird dann **ignoriert**, auch wenn er geschrieben und unverändert
 zurückgelesen wird. (Im Testlauf vom 23.10. war ein anderer `calcPeriod`
-gewählt; dort folgte der Sweep `studyTime`.) GridLens schreibt deshalb je
+gewählt; dort folgte der Sweep `studyTime`.) Outage Assessment schreibt deshalb je
 Sweep den Zeitraum (`sweep_period`, `run_n1_sweep`):
 
 | Attribut | Wert |
@@ -344,7 +349,7 @@ Sweep den Zeitraum (`sweep_period`, `run_n1_sweep`):
 
 Liegen Fenster auseinander, werden die Schritte dazwischen mitgerechnet, aber
 nicht bewertet; ein Zeitraum über dem n-1-Limit wird abgelehnt. Direkt nach
-dem Sweep prüft GridLens, ob jeder Zeitpunkt in den Fenstern gerechnet wurde.
+dem Sweep prüft Outage Assessment, ob jeder Zeitpunkt in den Fenstern gerechnet wurde.
 
 ### 7.4 Ergebnisse
 
@@ -354,9 +359,9 @@ dem Sweep prüft GridLens, ob jeder Zeitpunkt in den Fenstern gerechnet wurde.
   die Betriebsmittel** (`c:loading`, `m:u`). Fehlerfälle ohne relevantes
   Betriebsmittel fehlen.
 - Werte innerhalb der Aufzeichnungsgrenzen (`loadmax`, `vlmin`, `vlmax`)
-  schreibt PowerFactory nicht: `GetValue` liefert Code 3. GridLens wertet sie
+  schreibt PowerFactory nicht: `GetValue` liefert Code 3. Outage Assessment wertet sie
   als „innerhalb der Grenze“, wenn die Grenze das beweist.
-- Nach jedem Sweep kopiert GridLens `p_rescnt` als `…_N1` bzw. `…_N1P` in den
+- Nach jedem Sweep kopiert Outage Assessment `p_rescnt` als `…_N1` bzw. `…_N1P` in den
   Study Case (`keep_copy`); die Aufzeichnungsgrenzen stehen in `desc`.
 - **Im Log (Schritt 6)** steht für jedes n-1-Ergebnis (`n1_data_text`): wie
   viele Zeitpunkte bewertet und gerechnet wurden und von wie vielen
@@ -374,10 +379,10 @@ dem Sweep prüft GridLens, ob jeder Zeitpunkt in den Fenstern gerechnet wurde.
 Die Fälle kommen aus dem Fall-Manager (`CASE_SOURCE = 'gui'`), aus der
 gespeicherten Datei (`'saved'`, JSON unter `CASE_CONFIG_DIR`) oder je
 Außerbetriebnahme ein Fall (`'per_outage'`). Die Datei hat Schema
-`gridlens.cases` Version 2:
+`outage_assessment.cases` Version 2:
 
 ```json
-{"schema": "gridlens.cases", "schema_version": 2, "revision": 3,
+{"schema": "outage_assessment.cases", "schema_version": 2, "revision": 3,
  "assessments": ["n-0", "n-1", "(n-1)'"],
  "background": ["<Schlüssel einer festen Außerbetriebnahme>"],
  "cases": [{"id": "C1", "name": "…", "description": "…",

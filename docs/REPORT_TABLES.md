@@ -1,7 +1,7 @@
-# GridLens – how every report table is calculated and built
+# Outage Assessment – how every report table is calculated and built
 
-GridLens publishes **38 tables** (data contract 7.0) that both reports read:
-`MASTER_GRIDLENS` (main report) and `MASTER_GRIDLENS_DETAIL` (technical detail
+Outage Assessment publishes **38 tables** (data contract 7.0) that both reports read:
+`MASTER_OUTAGE_ASSESSMENT` (main report) and `MASTER_OUTAGE_ASSESSMENT_DETAIL` (technical detail
 report), kept as pages in `designer-pages/<report>/` (one `.dct` dictionary and
 one `.pg` file per page). For the same run ID both reports print the same
 statistics. This document describes, table by table, where each row comes
@@ -113,7 +113,7 @@ engine does not apply relations to charts.
 
 | Field | Calculation |
 |---|---|
-| `run_id` | stamp of the result objects the run keeps or re-evaluates (`GridLens_<stamp>_…`); in every page header |
+| `run_id` | stamp of the result objects the run keeps or re-evaluates (`OA_<stamp>_…`); in every page header |
 | `study_name` | name of the active study case |
 | `model_name` | name of the project |
 | `model_version` | `PowerFactory 2026` |
@@ -157,7 +157,7 @@ engine does not apply relations to charts.
 | `security_scope` | WARNING: what the report does not prove (n-1 security, protection, …) |
 | `limit_loading`, `limit_voltage` | INFO: the limits used |
 | `network_scope` | INFO: report filter and contingency scope |
-| `settings` | INFO, or WARNING when settings differ from the GridLens defaults |
+| `settings` | INFO, or WARNING when settings differ from the Outage Assessment defaults |
 | `outages_<case>` | did each outage take effect (`APPLIED`, `EFFECT SEEN`, `NO EFFECT`, `NOT CHECKABLE`) |
 | `outages_after_<case>` | an outage that stays in effect after its window |
 | `n1_<case>` | (n-1)' against n-1: counts per status; FAIL when the case causes `NEW` or `WORSENED`, WARNING when results are missing |
@@ -264,7 +264,7 @@ every planning case that was not run (`_calculation_runs`).
 | `period_text`, `time_steps` | first to last time label, number of time steps |
 | `elapsed_text` | QDS time in s; `-` for a reused run, `0.0 s` for a run re-evaluated from its kept result object |
 | `status`, `provenance_text` | status of the run; `CALCULATED`, `REUSED` or `NOT CALCULATED` |
-| `result_object` | the kept result object `GridLens_<stamp>_<case>` |
+| `result_object` | the kept result object `OA_<stamp>_<case>` |
 | `note` | what was applied (`iopt_maint=1; active: …`) or that the run was re-evaluated |
 
 ### 3.11 `ScriptedTopLinesByCase` – top lines per case
@@ -334,7 +334,7 @@ NOT APPLICABLE per contingency.
 
 ## 4. Chapters and their tables
 
-**Main report** (`MASTER_GRIDLENS`):
+**Main report** (`MASTER_OUTAGE_ASSESSMENT`):
 
 | Chapter | Tables |
 |---|---|
@@ -351,7 +351,7 @@ NOT APPLICABLE per contingency.
 | 12 Time Criticality | `ScriptedTimeCriticality`, `ScriptedTimeMatrix` |
 | 13 Settings and Evidence | `ScriptedAssessmentSettings`, `ScriptedResultProvenance`, `ScriptedCalculationRuns` |
 
-**Detail report** (`MASTER_GRIDLENS_DETAIL`):
+**Detail report** (`MASTER_OUTAGE_ASSESSMENT_DETAIL`):
 
 | Chapter | Tables |
 |---|---|

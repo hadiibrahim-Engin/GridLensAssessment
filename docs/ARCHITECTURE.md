@@ -1,6 +1,6 @@
-# GridLens – how the tool works
+# Outage Assessment – how the tool works
 
-GridLens is a ComPython for DIgSILENT PowerFactory 2026. It assesses
+Outage Assessment is a ComPython for DIgSILENT PowerFactory 2026. It assesses
 engineer-defined **planning cases** – sets of planned outages
 (`IntPlannedout`) – with the quasi-dynamic simulation (QDS) and, on request,
 with the contingency analysis (n-1). Every case is compared with a reference
@@ -20,7 +20,7 @@ Related documents:
 
 - [CASE_MANAGER.md](CASE_MANAGER.md) – operating the case manager window
 - [CALCULATION_AND_EVALUATION.md](CALCULATION_AND_EVALUATION.md) – formulas and rules of the assessment in detail
-- [POWERFACTORY.md](POWERFACTORY.md) – every PowerFactory object and attribute GridLens reads or writes
+- [POWERFACTORY.md](POWERFACTORY.md) – every PowerFactory object and attribute Outage Assessment reads or writes
 - [REPORT_TABLES.md](REPORT_TABLES.md) – the 38 report tables and their fields
 - German version: [de/ARCHITEKTUR.md](de/ARCHITEKTUR.md)
 
@@ -32,8 +32,8 @@ Related documents:
 |---|---|
 | `outage-assessment/main.py` | the complete tool with the case manager in tkinter (standard library) |
 | `outage-assessment/main_qt.py` | the same tool with the case manager in PyQt6 or PyQt5; everything else is identical |
-| `designer-pages/MASTER_GRIDLENS/` | main report: one `.dct` dictionary and one `.pg` file per page |
-| `designer-pages/MASTER_GRIDLENS_DETAIL/` | detail report, same structure |
+| `designer-pages/MASTER_OUTAGE_ASSESSMENT/` | main report: one `.dct` dictionary and one `.pg` file per page |
+| `designer-pages/MASTER_OUTAGE_ASSESSMENT_DETAIL/` | detail report, same structure |
 
 The script needs only Python's standard library, the PowerFactory module and,
 for the case manager, tkinter (or PyQt for `main_qt.py`). It imports no other
@@ -45,7 +45,7 @@ flowchart LR
         OL[("IntPlannedout<br/>outage library")]
         QDS["ComStatsim"]
         CA["ComSimoutage<br/>(n-1)"]
-        RES[("ElmRes copies<br/>GridLens_&lt;stamp&gt;_&lt;case&gt;")]
+        RES[("ElmRes copies<br/>OA_&lt;stamp&gt;_&lt;case&gt;")]
         REP["IntReport<br/>Scripted… tables"]
     end
     subgraph GL["main.py"]
@@ -56,7 +56,7 @@ flowchart LR
         P2["phase 2: read and<br/>compare kept results"]
         RP["build, validate,<br/>publish 38 tables"]
     end
-    CFG[("~/GridLens/cases/*.json")]
+    CFG[("~/OutageAssessment/cases/*.json")]
     OL --> IN --> CM --> RQ --> P1
     CFG <--> CM
     P1 --> QDS --> RES
@@ -71,13 +71,13 @@ flowchart LR
 | Requirement | Why | If it is missing |
 |---|---|---|
 | an active study case | everything is read from and written to it | the run stops before any change |
-| exactly the ComStatsim of the study case, configured (time step, load profiles, calculation options; period when *QDS period* is *as set in ComStatsim*) | GridLens runs it for every case; only the period is set from the planned outages (step 4) | the run stops |
-| `ComStatsim.results` bound to a result object that is **not** a `GridLens_…` copy | the QDS writes into it; a kept copy would be overwritten | the run stops with the bound name |
+| exactly the ComStatsim of the study case, configured (time step, load profiles, calculation options; period when *QDS period* is *as set in ComStatsim*) | Outage Assessment runs it for every case; only the period is set from the planned outages (step 4) | the run stops |
+| `ComStatsim.results` empty or bound to a result object that is **not** an `OA_…` copy | the QDS writes into it; a kept copy would be overwritten | bound to a kept copy: the run stops with its name. Empty: the REF run lets PowerFactory bind its own; if it binds none, Outage Assessment creates an empty `ElmRes` *Quasi-Dynamic Simulation AC* in the study case, binds it, calculates REF once more and leaves it bound |
 | the option *Planned Outages* (`iopt_maint`) on the ComStatsim | the only switch that makes PowerFactory apply planned outages | the run stops |
 | recorded variables: `c:loading` or `m:loading` of lines (`ElmLne`) and transformers (`ElmTr2`, `ElmTr3`), `m:u` or `m:u1` of terminals (`ElmTerm`) | the assessed quantities | the run stops right after the first QDS run and names what is recorded instead |
 | planned outages as `IntPlannedout` in the outage library (otherwise anywhere in the project) | the material of the planning cases | without any, only the reference can be calculated |
 | the ComPython below the `IntReport` | needed to publish the tables | the run calculates and checks everything but publishes nothing (standalone run) |
-| for n-1: at most one `ComSimoutage` in the study case | GridLens uses it; without one it defines its own | with more than one, n-1 is not evaluated, with the reason |
+| for n-1: at most one `ComSimoutage` in the study case | Outage Assessment uses it; without one it defines its own | with more than one, n-1 is not evaluated, with the reason |
 
 ---
 
@@ -101,7 +101,7 @@ flowchart TD
     G -- "Start calculation" --> RQ
     SV --> RQ
     PO --> RQ["resolve cases: members, windows,<br/>rules, network states, fingerprints"]
-    RQ --> S4["4 Phase 1: calculate REF, every case, n-1<br/>each run kept as GridLens_&lt;stamp&gt;_&lt;case&gt;"]
+    RQ --> S4["4 Phase 1: calculate REF, every case, n-1<br/>each run kept as OA_&lt;stamp&gt;_&lt;case&gt;"]
     S4 --> S5["5 Restore and verify PowerFactory state"]
     S5 --> S6["6 Phase 2: read kept results, compare with REF,<br/>classify n-1"]
     S6 --> S7["7 Build, validate and publish the report tables"]
@@ -109,7 +109,7 @@ flowchart TD
 
 ### Step 1 – Startup and context
 
-GridLens finds the running ComPython, the active study case, its `IntReport`
+Outage Assessment finds the running ComPython, the active study case, its `IntReport`
 parent (if any), the ComStatsim and the bound result object. It checks every
 requirement of section 2 that can be checked without a calculation and reads
 the *Planned Outages* option. It records the study time (`SetTime.cDate`,
@@ -118,14 +118,14 @@ the *Planned Outages* option. It records the study time (`SetTime.cDate`,
 ### Step 2 – ComStatsim settings
 
 The calculation settings of the ComStatsim (period, time step, load-flow
-options, result object and its variable selection) are logged. GridLens
+options, result object and its variable selection) are logged. Outage Assessment
 changes none of them, except the *Planned Outages* option during the runs.
 
 ### Step 3 – Planned outages and planning cases
 
 1. **Planned outages are read** (read only) from the outage folder of the
    project; only when it holds none is the whole project searched. For each
-   `IntPlannedout` GridLens keeps its full path (the identity), name, window
+   `IntPlannedout` Outage Assessment keeps its full path (the identity), name, window
    (`starttime`, `endtime` in epoch seconds), components, priority and
    *Ignored* flag (`outserv`). Outages that switch the same components are
    grouped into one technical outage (`definition_id`).
@@ -140,7 +140,7 @@ changes none of them, except the *Planned Outages* option during the runs.
    manager has closed: the period of the run follows the outages.
 3. **Grids, contingencies and kept runs are read** (read only) for the case
    manager: the grids of the model, the contingencies of the study case's
-   contingency analysis, and the stamps of earlier GridLens runs.
+   contingency analysis, and the stamps of earlier Outage Assessment runs.
 4. **The planning cases are obtained** according to `CASE_SOURCE`:
 
    | `CASE_SOURCE` | Behaviour |
@@ -161,14 +161,16 @@ changes none of them, except the *Planned Outages* option during the runs.
 Phase 1 only calculates and keeps; nothing is read yet.
 
 0. **QDS period.** With *QDS period* = *first to last planned outage* (the
-   default) GridLens sets the period of the ComStatsim for every run: from one
-   QDS step before the earliest start to one step after the latest end of the
-   outages of all READY cases, on the QDS step grid that starts at local
+   default) Outage Assessment sets the period of the ComStatsim for every run: from the
+   earliest start to one QDS step after the latest end of the outages of all
+   READY cases, on the QDS step grid that starts at local
    midnight of the earliest start (`outage_span`). It writes `calcPeriod` = 4
    (user-defined), `startTime`, `endTime` and, where readable, `stepNumber`,
    reads them back and logs the period and the one set before. REF and every
    case so cover exactly the same time; the step after the last end catches an
-   effect that lasts beyond a window. Fixed background outages do not extend
+   effect that lasts beyond a window. No step is added before the first start:
+   no outage acts there, and it can fall into another network state (an
+   expansion stage that starts with the outage left a loading without a value). Fixed background outages do not extend
    the period. When a window or the time step is not readable, the period
    stays as set, with a warning. With *as set in ComStatsim* nothing is
    written.
@@ -178,7 +180,7 @@ Phase 1 only calculates and keeps; nothing is read yet.
    can be switched off in the settings; violations can then not be split into
    new and pre-existing.
 2. **One QDS per case.** *Planned Outages* is switched on. For each case with
-   status READY, GridLens sets the *Ignored* flag of **every** planned outage:
+   status READY, Outage Assessment sets the *Ignored* flag of **every** planned outage:
    `0` for the case's outages and the fixed outages, `1` for all others.
    PowerFactory then applies each active outage in its own window during the
    QDS. Apart from the period (point 0) the ComStatsim runs exactly as
@@ -187,16 +189,16 @@ Phase 1 only calculates and keeps; nothing is read yet.
    windows and fixed outages as an already calculated case (same fingerprint)
    reuses that result and is marked *reused*.
 4. **Every run is kept.** PowerFactory writes each QDS into its own result
-   object and overwrites it with the next run. Right after each run GridLens
-   copies it into the study case as `GridLens_<yymmdd-HHMMSS>_<case>` (REF:
+   object and overwrites it with the next run. Right after each run Outage Assessment
+   copies it into the study case as `OA_<yymmdd-HHMMSS>_<case>` (REF:
    `…_REF`) and writes case and fingerprint into the copy's description. The
-   copies stay; GridLens never deletes them.
-5. **Recording check.** Right after the first run GridLens checks that the
+   copies stay; Outage Assessment never deletes them.
+5. **Recording check.** Right after the first run Outage Assessment checks that the
    copy records at least one assessed variable. If not, the run stops at once
    instead of calculating the remaining cases for nothing.
 6. **After every run** the *Ignored* flags are restored and read back, the
    study time is put back, and switches that are in another state than before
-   the run are logged (GridLens does not change switches).
+   the run are logged (Outage Assessment does not change switches).
 7. **n-1**, when ticked in the case manager: see section 8.
 
 Before every run with planned outages the log shows what PowerFactory will
@@ -214,12 +216,12 @@ value; the study case must then be checked by hand.
 ### Step 6 – Phase 2: evaluation
 
 1. Results are read column by column into a temporary `IntVec`
-   (`GridLens_column_buffer`, created in the running ComPython and deleted at
+   (`OutageAssessment_column_buffer`, created in the running ComPython and deleted at
    the end of the step). Without it every value is one call (slow); the run
    summary shows which way was used.
 2. REF is read first, then every case from its kept object, then compared
    with REF (section 7).
-3. For every outage GridLens checks whether it took effect and whether it
+3. For every outage Outage Assessment checks whether it took effect and whether it
    stays in effect after its window (section 7.6).
 4. n-1 results are read and classified (section 8).
 5. A memory budget (`MAX_RUN_CELLS`) stops the evaluation before the next
@@ -228,10 +230,10 @@ value; the study case must then be checked by hand.
 
 ### Step 7 – Report
 
-GridLens builds the 38 tables (see [REPORT_TABLES.md](REPORT_TABLES.md)),
+Outage Assessment builds the 38 tables (see [REPORT_TABLES.md](REPORT_TABLES.md)),
 checks every row against the data contract and publishes them to the
 `IntReport`. The report is then generated in PowerFactory from that
-`IntReport` as a separate step. Without an `IntReport` parent GridLens logs
+`IntReport` as a separate step. Without an `IntReport` parent Outage Assessment logs
 the number of rows per table and publishes nothing.
 
 Exit code: 0 after a published report or a standalone run; 1 when nothing was
@@ -241,29 +243,30 @@ cancellation.
 
 ---
 
-## 4. What GridLens changes in PowerFactory
+## 4. What Outage Assessment changes in PowerFactory
 
-GridLens changes only these values, temporarily, and puts each one back
+Outage Assessment changes only these values, temporarily, and puts each one back
 (recorded before writing, restored in reverse order, read back and compared):
 
 | Object | Attribute | When | Restored |
 |---|---|---|---|
 | ComStatsim | `iopt_maint` (*Planned Outages*) | REF and case runs | step 5 |
+| ComStatsim | `results`, only when empty and PowerFactory binds none | first run | not restored: the created result object stays bound |
 | ComStatsim | `calcPeriod`, `startTime`, `endTime`, `stepNumber` (QDS period) | all runs, with *QDS period* = *first to last planned outage* | step 5 |
 | every `IntPlannedout` | `outserv` (*Ignored*) | each case run, Rfix, each n-1 sweep | right after that run |
 | study time `SetTime` | `cDate`, `cTime` | changed by PowerFactory during a run | after every run and in step 5 |
 | ComSimoutage (n-1 only) | `calcPeriod`, step, `startTime`, `endTime`, `stepNumber`, `isPlannedOutages` | each n-1 sweep | right after that sweep |
 | contingencies `ComOutage` (n-1 only) | *Not analysed* for contingencies outside the n-1 filter | each n-1 sweep | right after that sweep |
 
-Objects GridLens **creates and keeps**:
+Objects Outage Assessment **creates and keeps**:
 
-- `GridLens_<stamp>_<case>` – copy of each QDS result (`ElmRes`)
-- `GridLens_<stamp>_<case>_N1`, `…_N1P` – copies of the n-1 and (n-1)' results
-- `GridLens_<stamp>_N1` – a contingency analysis with one contingency per
+- `OA_<stamp>_<case>` – copy of each QDS result (`ElmRes`)
+- `OA_<stamp>_<case>_N1`, `…_N1P` – copies of the n-1 and (n-1)' results
+- `OA_<stamp>_N1` – a contingency analysis with one contingency per
   element, only when the study case has none
 
 The temporary `IntVec` of step 6 is created and deleted in the same run.
-GridLens never applies an outage itself (`IntPlannedout` has no `Apply` or
+Outage Assessment never applies an outage itself (`IntPlannedout` has no `Apply` or
 `Reset` in PowerFactory 2026), never changes the network model, ratings,
 switches or the ComStatsim time step, and creates no operation
 scenarios, variations or study cases.
@@ -277,7 +280,7 @@ scenarios, variations or study cases.
 A planning case is a named set of planned outage **occurrences**. Each case
 contains only the outages directly assigned to it; an outage may be in any
 number of cases. Cases are independent: changing, excluding or deleting one
-does not affect another, and GridLens never combines cases automatically. To
+does not affect another, and Outage Assessment never combines cases automatically. To
 assess two outages together, put both into one case.
 
 | Field | Meaning |
@@ -320,7 +323,7 @@ outages. Equal fingerprints share one calculation.
 
 ### 5.5 Network states
 
-During one QDS the set of active outages changes over time. GridLens computes
+During one QDS the set of active outages changes over time. Outage Assessment computes
 these states for log, preview and report; PowerFactory applies them. For the
 outages `O` of a case, the active set at time `t` is
 `A(t) = { o ∈ O | start_o ≤ t < end_o }` (half-open windows). All start and end
@@ -348,9 +351,9 @@ gantt
 
 FS1 in week 10 and FS2 in week 40 in one case A, a full-year ComStatsim:
 
-1. REF: one QDS over the year with `iopt_maint=0`, kept as `GridLens_<stamp>_REF`.
+1. REF: one QDS over the year with `iopt_maint=0`, kept as `OA_<stamp>_REF`.
 2. Case A: one QDS over the year with FS1 and FS2 active, all other outages
-   *Ignored*, kept as `GridLens_<stamp>_A`. PowerFactory applies FS1 in week 10
+   *Ignored*, kept as `OA_<stamp>_A`. PowerFactory applies FS1 in week 10
    and FS2 in week 40; network states `FS1 | ∅ | FS2`.
 3. Comparison: the rows of weeks 10 and 40 with REF at the same time steps,
    plus every row in between where case and REF differ (spill-over).
@@ -372,10 +375,34 @@ shortened.
 | report filter | optional grid selection (Settings → Network scope); the grid of an element comes from `cpGrid`, else from the `ElmNet` in its path. Without a selection every grid is assessed (or `GRID_NAME_FILTER`, if set in the script) |
 | DC terminals | `ElmTerm.systype == 1` are not assessed and counted on the quality page |
 | de-energised | a voltage below *De-energised below* (default 0.1 p.u.) or NaN is no measured value; the node counts as de-energised at that step |
-| invalid values | NaN, ±∞, `None`, booleans and unreadable cells are no measured values; an invalid loading cell fails the case, an invalid voltage cell counts as de-energised |
+| invalid values | NaN, ±∞, `None`, booleans and unreadable cells are no measured values; a loading cell without a value is *no value* at that step (section 6.1), a voltage cell without a value counts as de-energised |
 | missing series | equipment switched off or not recorded gets no series; no artificial zeros |
 | element names | the report shows `loc_name` only; full paths are internal identities |
 | size limits | at most 35 040 rows (`MAX_RESULT_ROWS`) and 20 000 000 cells per result object (`MAX_RESULT_CELLS`), 120 000 000 cells per run (`MAX_RUN_CELLS`) |
+
+### 6.1 Equipment not in operation over time
+
+Time-dependent expansion and switching stages put equipment into operation or
+take it out during the simulated period. PowerFactory then writes no value
+(NaN) for it at the steps where it is not in operation. Outage Assessment tells
+the causes of a missing value apart by their pattern, with REF as the measure
+of the network state:
+
+| Pattern | Cause | Treatment |
+|---|---|---|
+| no value in REF at step t | not in operation at t (expansion or switching stage) | not assessed at t in any run, no error; listed in the log with the time it is put into or taken out of operation |
+| no value only in the case, equipment of the case's outage, inside its window | switched off by the case | OUT OF SERVICE |
+| no value only in the case, otherwise | cut off by the case | DE-ENERGISED (yellow on the quality page), never RESOLVED or IMPROVED |
+| a value in the case, none in REF | no reference value | the case value is assessed alone (EXCEEDED above the limit), so it is never overlooked |
+| n-1 / (n-1)': no value where REF n-0 has none | not in operation | the cell is left out and counted, no quality problem |
+| (n-1)' has no value, n-1 has one | switched off or cut off by the case | NOT_EVALUATED with that reason, never IMPROVED |
+| a series has no value in the whole run | not in operation during the whole period | left out and counted |
+| no line or transformer has a value at one step | the load flow failed at that step | the case stops with that step |
+
+A missing value never becomes 0, never produces a delta and never counts as a
+maximum. After every run the log shows a table *Time-dependent operation*: per
+time, the equipment whose values start (put into operation) or end (taken out
+of operation). The quality page names the counts of the reference.
 
 ---
 
@@ -405,7 +432,7 @@ case.
 
 ```mermaid
 flowchart TD
-    A{"case value present?"} -- "no, REF present (node)" --> DE["DE-ENERGISED"]
+    A{"case value present?"} -- "no, REF present" --> DE["DE-ENERGISED"]
     A -- yes --> B{"REF value present?"}
     B -- no --> EX{"case beyond limit?"}
     EX -- yes --> EXC["EXCEEDED"]
@@ -474,7 +501,7 @@ For every outage of a case, inside its own window:
 | NO EFFECT | the case equals REF in the window – most likely not applied; logged as a warning |
 | NOT CHECKABLE | no REF on the same time axis or no result row in the window |
 
-After the window GridLens counts the steps in which a component still
+After the window Outage Assessment counts the steps in which a component still
 carries no load while it does in REF (persistence) and reports how long the
 outage stays in effect. The quality page carries one row per case.
 
@@ -495,8 +522,8 @@ Ticked in the case manager (*Calculation*). n-0 is always calculated.
 | n-1 | contingency analysis of the reference | only the fixed background outages |
 | (n-1)' | contingency analysis of the planning case; needs n-1 | the case's outages and the fixed ones |
 
-1. **Contingency analysis.** GridLens uses the `ComSimoutage` of the study
-   case. If there is none, it defines `GridLens_<stamp>_N1` with one
+1. **Contingency analysis.** Outage Assessment uses the `ComSimoutage` of the study
+   case. If there is none, it defines `OA_<stamp>_N1` with one
    contingency per branch, transformer, reactor, compensation and FACTS
    element (no generators, loads or busbars) and keeps it. With more than one
    `ComSimoutage` n-1 is not evaluated.
@@ -510,9 +537,9 @@ Ticked in the case manager (*Calculation*). n-0 is always calculated.
    windows that lie apart are calculated but not assessed.
 4. **Sweep.** Period, step and `isPlannedOutages` are written for the sweep,
    the *Ignored* flags set as for the QDS, and everything is restored right
-   after it. GridLens checks that every study time was calculated; a missing
+   after it. Outage Assessment checks that every study time was calculated; a missing
    one stops that case's n-1 with the wanted and the found times.
-5. **Kept results.** Each sweep is copied as `GridLens_<stamp>_<case>_N1` and
+5. **Kept results.** Each sweep is copied as `OA_<stamp>_<case>_N1` and
    `…_N1P`. Cases with the same study times share one n-1 reference sweep.
 6. **Classification.** (n-1)' is compared with n-1 at the same study time,
    contingency, monitored element and quantity, per criterion *loading*,
@@ -534,7 +561,7 @@ Ticked in the case manager (*Calculation*). n-0 is always calculated.
 Decision order: FAILED, NOT_APPLICABLE, NOT_COMPARABLE, NOT_EVALUATED, then the
 numeric decision. A side is violated when its excess exceeds the limit
 tolerance plus the numeric tolerance (defaults 0 and 1e-9). Missing values are
-never replaced by zero. *Reduced margin* marks an OK result whose reserve to
+never replaced by zero; for equipment not in operation see section 6.1. *Reduced margin* marks an OK result whose reserve to
 the limit shrank by more than the WORSENED tolerance, for loading only from the
 *Reduced margin warning* threshold (default 80 %).
 
@@ -575,7 +602,7 @@ PowerFactory calculates and are shown read only.
 | Run | n-1 study times per case, at most | 2000 (at most 20 000) |
 | Contingency analysis | contingency set, categories, monitored scope, AC/DC, islanding, unsupplied load, load shedding, post-fault phases, remedial actions | read only (category B) |
 
-The voltage band of 0.95–1.05 p.u. is a GridLens proposal and has to be
+The voltage band of 0.95–1.05 p.u. is a Outage Assessment proposal and has to be
 confirmed for the network. Only overrides are stored, under `settings` in the
 case configuration file. The report names every override on the quality page
 (row *Settings*, WARNING when one is active).
@@ -584,8 +611,9 @@ case configuration file. The report names every override on the quality page
 
 ## 10. Saved configuration
 
-File: `~/GridLens/cases/<project>_<hash>.v2.json` (folder changeable with
-`CASE_CONFIG_DIR`). It holds the cases, fixed outages, rules, assessments and
+File: `~/OutageAssessment/cases/<project>_<hash>.v2.json` (folder changeable with
+`CASE_CONFIG_DIR`). Until the first save there, the file of the same project in
+`~/GridLens/cases` (the former name) is read. It holds the cases, fixed outages, rules, assessments and
 setting overrides, with schema, revision, user and time – never results.
 It is checked field by field on load; a damaged file stops the run with its
 path. *Save configuration* in the case manager writes it; the project is not
@@ -613,6 +641,7 @@ contingencies out of a re-evaluation, not add ones that were not calculated.
 | plan | every case with status, outages, windows, network states, reuse |
 | applied outages | before each run: the option and every outage with *Ignored* = 0 |
 | results | verdict per case, outage effect, persistence, n-1 summary |
+| time-dependent operation | after every run: per time, the equipment put into or taken out of operation (section 6.1) |
 | failure report | on an error: the error, step and case, cause chain, details, code location, PowerFactory state after restore, kept result objects, last warnings, what to do |
 | run summary | always: time and calls per service (reading outages, case manager, each QDS and contingency analysis, reading results, comparison, restore, publication) and counts (QDS runs, time steps, reused cases, values read, n-1 study times, report rows) |
 
@@ -634,6 +663,9 @@ contingencies out of a re-evaluation, not add ones that were not calculated.
 | comparison fails | that case NOT EVALUATED with the reason; its result object is kept |
 | reference fails | the run stops (no case could be compared); state restored |
 | no assessed variable recorded | the run stops after the first QDS and names what is recorded |
+| `ComStatsim.results` empty | no stop: PowerFactory binds its own at REF, otherwise an empty one is created, bound and kept |
+| loading without a value at some steps | no value there, assessed elsewhere (section 6.1) |
+| no loading value at all at one step | that case stops with the step: the load flow failed there |
 | memory budget exceeded | stops before the next case; state restored; calculated runs stay kept |
 | a value cannot be restored | the run stops with expected and found value |
 | outage windows cannot be placed on the time axis | every time step compared; note in log and report |
@@ -665,7 +697,7 @@ problem report usually belongs to one of them:
    loadings match two single cases.
 2. An outage window boundary: does the effect appear inside the window rows
    or in the spill-over rows (an effect one step late is assessed as spill-over)?
-3. The result objects `GridLens_<stamp>_<case>` appear in the study case and
+3. The result objects `OA_<stamp>_<case>` appear in the study case and
    open.
 4. The case manager opens, *Start calculation* and *Cancel* work, PowerFactory
    stays responsive afterwards.

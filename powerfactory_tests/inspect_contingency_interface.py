@@ -1,6 +1,6 @@
-"""GridLens diagnostic probe for the PowerFactory 2026 contingency interface - PRIVACY MODE STRICT.
+"""Outage Assessment diagnostic probe for the PowerFactory 2026 contingency interface - PRIVACY MODE STRICT.
 
-Diagnostic tool, not part of the GridLens delivery. Install it as a separate
+Diagnostic tool, not part of the Outage Assessment delivery. Install it as a separate
 ComPython in the study case that holds the contingency analysis and run it
 once. The output is meant to be passed on to external developers or AI
 systems: it contains only fixed technical labels and fixed status tokens.
@@ -165,7 +165,7 @@ class Report:
         self.current = None
 
     def title(self):
-        self._print("GridLens Diagnostic Probe {}".format(PROBE_VERSION))
+        self._print("Outage Assessment Diagnostic Probe {}".format(PROBE_VERSION))
         self._print("Privacy Mode: {}".format(PRIVACY_MODE))
 
     def section(self, name):
@@ -276,7 +276,7 @@ def check_api(api, report, state):
     report.add("Interface version", version)
     report.add("Python major", sys.version_info[0])
     report.add("Python minor", sys.version_info[1])
-    # Which interface versions GridLens supports is not established yet.
+    # Which interface versions Outage Assessment supports is not established yet.
     report.add("Version compatibility", "NOT_VERIFIED")
 
 
@@ -510,7 +510,7 @@ def check_storage(api, report, state):
     for class_name in STORAGE_CLASSES:
         # Stored anywhere in the project, so the search is recursive (GetContents(pattern, 1)).
         found = project is not None and bool(api.of_class(project, class_name, recursive=True))
-        # Whether GridLens may create such objects needs a separate, released write test.
+        # Whether Outage Assessment may create such objects needs a separate, released write test.
         report.add("{} instances".format(class_name), flag(found, "DETECTED", "NOT_DETECTED"))
 
 

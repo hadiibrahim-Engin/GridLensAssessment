@@ -19,9 +19,9 @@ sources, unsupported methods and every failed read are reported explicitly.
 """
 
 # --------------------------- EDIT THIS NAME ---------------------------------
-RESULT_NAME = ""  # e.g. "GridLens_261024-103000_C1" or its full PowerFactory path
+RESULT_NAME = ""  # e.g. "OA_261024-103000_C1" or its full PowerFactory path
 # ---------------------------------------------------------------------------
-OUTPUT_DIRECTORY = ""  # empty: ~/GridLens/result_inspections
+OUTPUT_DIRECTORY = ""  # empty: ~/OutageAssessment/result_inspections
 EXPORT_ALL_VALUES = True  # False still scans ALL cells for complete statistics
 INSPECT_SUBRESULTS = True
 RESOLVE_OBJECT_CELLS = True  # also resolve object-valued cells (e.g. contingency references)
@@ -691,7 +691,7 @@ class Explorer:
                 "row_objects_by_class": dict(Counter(ref["class"] for ref in self.row_objects.values())),
                 "subresult_study_times": time_summary(study_times, "s", "cnttime", {}, True) if study_times else None,
                 "subresult_study_times_note": "Unique cnttime values of result children (or selected contingency sub-result); "
-                                               "interpreted in seconds, as used by GridLens PowerFactory 2026. No hours inferred from contingency row counts.",
+                                               "interpreted in seconds, as used by Outage Assessment PowerFactory 2026. No hours inferred from contingency row counts.",
                 "time_axes": [{"object_path": r["object"]["path"], "axis": r["axis"]} for r in scanned],
                 "read_exceptions": self.reader.error_count,
                 "environment": {"python": sys.version, "platform": sys.platform,
@@ -768,7 +768,7 @@ def main(app=None):
         if not available:
             printer("  No ElmRes found in the active study case or active project.")
         return None
-    base = Path(os.path.expandvars(OUTPUT_DIRECTORY)).expanduser() if OUTPUT_DIRECTORY else Path.home()/"GridLens"/"result_inspections"
+    base = Path(os.path.expandvars(OUTPUT_DIRECTORY)).expanduser() if OUTPUT_DIRECTORY else Path.home()/"Outage Assessment"/"result_inspections"
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     suffix = hashlib.sha256(identity(result).encode("utf-8")).hexdigest()[:8]
     folder = base / (stamp + "_" + slug(attr(result, "loc_name", "result")) + "_" + suffix)

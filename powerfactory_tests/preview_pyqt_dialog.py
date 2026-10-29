@@ -12,7 +12,7 @@ auto/PyQt6/PyQt5.
 
 Only active project/study names are read in PowerFactory. They are sent to the
 GUI as JSON; the GUI does not connect to the PowerFactory API. No calculation
-or model change is performed. Per-run logs are saved in ~/GridLens/logs.
+or model change is performed. Per-run logs are saved in ~/OutageAssessment/logs.
 
 Qt lifecycle: https://doc.qt.io/qt-6/qapplication.html
 """
@@ -34,7 +34,7 @@ import tempfile
 
 QT_BINDING = 'auto'
 PYTHON_EXECUTABLE = ''  # Optional absolute path to a matching python.exe.
-LOG_DIR = ''  # Default: ~/GridLens/logs.
+LOG_DIR = ''  # Default: ~/OutageAssessment/logs.
 
 def python_identity():
     """The Python ABI and architecture required by the external GUI interpreter."""
@@ -138,14 +138,14 @@ def launch_gui(context, app=None):
     if QT_BINDING not in ('auto', 'PyQt6', 'PyQt5'):
         raise RuntimeError('QT_BINDING muss auto, PyQt6 oder PyQt5 sein.')
     executable = gui_python()
-    folder = Path(LOG_DIR).expanduser() if LOG_DIR else Path.home() / 'GridLens' / 'logs'
+    folder = Path(LOG_DIR).expanduser() if LOG_DIR else Path.home() / 'Outage Assessment' / 'logs'
     folder.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix='PyQtTest-', suffix='.log', dir=str(folder), delete=False) as handle:
         log_path = Path(handle.name)
     log(app, 'Starte PyQt in einem eigenen Prozess mit {}. Protokoll: {}'.format(executable, log_path))
     log(app, 'Zum Fortsetzen das GUI-Fenster schließen.')
     options = {'binding': QT_BINDING, 'context': context}
-    with tempfile.TemporaryDirectory(prefix='gridlens-pyqt-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='outage_assessment-pyqt-') as temporary:
         script = Path(temporary) / 'gui.py'
         config = Path(temporary) / 'context.json'
         script.write_text(CHILD_SOURCE, encoding='utf-8')
@@ -231,7 +231,7 @@ def application(core, widgets):
         if threading.current_thread() is not threading.main_thread():
             raise RuntimeError('PyQt benötigt den GUI-Hauptthread. Den ComPython direkt '
                                'aus der PowerFactory-Oberfläche starten.')
-        app = widgets.QApplication(['GridLens-PyQt-Test'])
+        app = widgets.QApplication(['Outage Assessment-PyQt-Test'])
     if not isinstance(app, widgets.QApplication):
         raise RuntimeError('Die vorhandene Qt-Anwendung unterstützt keine Widgets.')
     if core.QThread.currentThread() != app.thread():
@@ -243,14 +243,14 @@ def application(core, widgets):
 
 def build_dialog(core, widgets, version, context, app=None):
     dialog = widgets.QDialog()
-    dialog.setObjectName('GridLensPyQtTest')
-    dialog.setWindowTitle('GridLens · PyQt-Test für PowerFactory')
+    dialog.setObjectName('OutageAssessmentPyQtTest')
+    dialog.setWindowTitle('Outage Assessment · PyQt-Test für PowerFactory')
     dialog.resize(1080, 720)
     dialog.setMinimumSize(840, 560)
     attribute = getattr(core.Qt, 'WidgetAttribute', core.Qt).WA_QuitOnClose
     dialog.setAttribute(attribute, False)
     dialog.setStyleSheet("""
-        QDialog#GridLensPyQtTest { background: #101827; }
+        QDialog#OutageAssessmentPyQtTest { background: #101827; }
         QWidget { color: #e7edf7; font-family: "Segoe UI"; font-size: 13px; }
         QFrame#sidebar { background: #172236; border-radius: 12px; }
         QFrame#card { background: #1e2d45; border-radius: 12px; }
@@ -274,7 +274,7 @@ def build_dialog(core, widgets, version, context, app=None):
     sidebar.setObjectName('sidebar')
     sidebar.setFixedWidth(205)
     navigation = widgets.QVBoxLayout(sidebar)
-    brand = widgets.QLabel('GRIDLENS\nPyQt-Kompatibilität')
+    brand = widgets.QLabel('OUTAGE ASSESSMENT\nPyQt-Kompatibilität')
     navigation.addWidget(brand)
     navigation.addSpacing(24)
     layout.addWidget(sidebar)
@@ -344,7 +344,7 @@ def build_dialog(core, widgets, version, context, app=None):
         text = 'Testfall: {}\nn-0: {}\nn-1: {}\n\nPyQt-Signal empfangen. Keine Berechnung ausgeführt.'.format(
             name.text(), n0.isChecked(), n1.isChecked())
         log(app, text)
-        widgets.QMessageBox.information(dialog, 'GridLens PyQt-Test erfolgreich', text)
+        widgets.QMessageBox.information(dialog, 'Outage Assessment PyQt-Test erfolgreich', text)
     test.clicked.connect(test_button)
     home.addWidget(test)
     home.addStretch()
