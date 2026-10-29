@@ -5507,6 +5507,11 @@ OUTAGE_EQUIPMENT_ATTRIBUTES = (
     "pDevice", "cpObject", "pElm", "p_target1", "p_target2")
 # ComStatsim carries the simulated period as epoch seconds.
 QDS_PERIOD_ATTRIBUTES = (("startTime", "endTime"), ("starttime", "endtime"))
+# The kind of time period (calcPeriod). 0 runs stepNumber steps from the day in `date` (YYYYMMDD); startTime and
+# endTime then keep the values of an earlier user-defined period (probe of 29 Oct 2026). 4 runs from startTime to
+# endTime, as for ComSimoutage. Other kinds are not verified: the period is then unknown and the planned outages
+# are judged against the result time axis.
+QDS_PERIOD_FROM_DATE, QDS_PERIOD_USER_DEFINED = 0, 4
 REFERENCE_CASE_ID = "REF"
 OUTAGE_CASE_PREFIX = "OUT"
 QDS_CORE_SETTINGS = (
@@ -10137,13 +10142,48 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
 
 
 def qds_period(qds):
-    """The simulated period in epoch seconds, as ComStatsim declares it."""
+    """The simulated period in epoch seconds, as ComStatsim declares it; (None, None) when it is not known."""
+    kind = finite_number(safe_attr(qds, "calcPeriod"))
+    if kind == QDS_PERIOD_FROM_DATE:
+        return _qds_date_period(qds)
+    if kind is not None and kind != QDS_PERIOD_USER_DEFINED:
+        return None, None
     for start_name, end_name in QDS_PERIOD_ATTRIBUTES:
         start = finite_number(safe_attr(qds, start_name))
         end = finite_number(safe_attr(qds, end_name))
         if start is not None and end is not None and end >= start:
             return start, end
     return None, None
+
+
+def _qds_date_period(qds):
+    """[00:00 of `date`, + stepNumber steps) for calcPeriod 0; (None, None) when a part is not readable."""
+    day = finite_number(safe_attr(qds, "date"))
+    count = finite_number(safe_attr(qds, "stepNumber"))
+    size = finite_number(safe_attr(qds, "stepSize"))
+    unit = finite_number(safe_attr(qds, "stepUnit"))
+    if day is None or not count or count < 0 or not size or size < 0 or unit is None \
+            or int(unit) not in STEP_UNIT_SECONDS:
+        return None, None
+    digits = int(round(day))
+    try:
+        start = datetime(digits // 10000, digits // 100 % 100, digits % 100).timestamp()
+    except (OverflowError, OSError, ValueError):
+        return None, None
+    return start, start + count * size * STEP_UNIT_SECONDS[int(unit)]
+
+
+def qds_period_source(qds):
+    """Which ComStatsim attributes define the simulated period, for the log and the case manager."""
+    kind = finite_number(safe_attr(qds, "calcPeriod"))
+    if kind == QDS_PERIOD_FROM_DATE:
+        return "date + stepNumber x stepSize/stepUnit (calcPeriod 0)"
+    if kind is None:
+        return "startTime .. endTime"
+    if kind == QDS_PERIOD_USER_DEFINED:
+        return "startTime .. endTime (calcPeriod 4)"
+    return ("calcPeriod {:g}, a kind of time period GridLens does not read; set the QDS time period to "
+            "user-defined to compare the planned outages with it".format(kind))
 
 
 def _restore_planned_outage_option(qds, original, logger):
@@ -10681,13 +10721,13 @@ def _log_qds_settings(qds, result, study_time_state, logger):
     if period_start is not None:
         logger.write(
             "SETTINGS",
-            "Simulated period [startTime..endTime] = {} .. {}".format(
-                _format_pf_time(period_start), _format_pf_time(period_end)), 2)
+            "Simulated period [{}] = {} .. {}".format(
+                qds_period_source(qds), _format_pf_time(period_start), _format_pf_time(period_end)), 2)
     else:
         logger.write(
             "SETTINGS",
-            "Simulated period is not exposed by this ComStatsim; planned "
-            "outages will be judged against the reference time axis.", 2)
+            "Simulated period is not readable from this ComStatsim ({}); planned "
+            "outages will be judged against the reference time axis.".format(qds_period_source(qds)), 2, "WARNING")
     for attribute in ("iopt_maint", "ciopt_maint", "iopt_action", "iopt_rep"):
         found, value = _read_setting(qds, attribute)
         if found:
@@ -11631,7 +11671,8 @@ def qds_time_info(qds, period):
         lines.append(('QDS time step', '; '.join(parts)))
     else:
         lines.append(('QDS time step', 'as set in the active ComStatsim (not passed to this window)'))
-    lines += [('Time definition', 'ComStatsim startTime / endTime in epoch seconds, shown in the local time of this computer'),
+    source = qds_period_source(qds) if qds is not None else 'ComStatsim period'
+    lines += [('Time definition', '{}, shown in the local time of this computer'.format(source)),
               ('Calculated period', 'the complete ComStatsim period with its time step, in every run; nothing is shortened')]
     return lines
 

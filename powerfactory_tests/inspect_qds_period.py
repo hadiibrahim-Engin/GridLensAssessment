@@ -13,22 +13,26 @@ Q1  how many ComStatsim objects the project holds and where (active study
     case or elsewhere), and which one GridLens reads,
 Q2  for each: calcPeriod and every time-like attribute, so the attribute that
     holds the period of the dialog can be found,
-Q3  the year of the study case time and of the planned outage windows.
+Q3  the year of the study case time and of the planned outage windows,
+Q4  the period GridLens reads (by calcPeriod, as gridlens_period below, a copy
+    of qds_period in main.py) and how many planned outages fall into it.
 
 Privacy: no object name, path, user or result value is printed. Times appear
-only as their year and as hours relative to the first time of the same object.
+only as their year (the period as year and month) and as hours relative to the
+first time of the same object.
 """
 
 import math
 import re
 from datetime import datetime
 
-PROBE_VERSION = "1.0"
+PROBE_VERSION = "1.1"
 TIME_PATTERN = re.compile(r"time|start|end|begin|per|date|year|step|day|month|hour", re.I)
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
 CLASS_RE = re.compile(r"^[A-Z][a-z]{2}[A-Za-z0-9]{1,30}$")
 # Epoch seconds between 1980 and 2100 are treated as times.
 EPOCH_MIN, EPOCH_MAX = 315532800, 4102444800
+STEP_UNIT_SECONDS = {0: 1.0, 1: 60.0, 2: 3600.0, 3: 86400.0}
 
 
 def emit(app, line):
@@ -130,6 +134,36 @@ def read(obj, attribute):
         return False, None
 
 
+def gridlens_period(qds):
+    """(start, end, source) as GridLens reads the period; a copy of qds_period and qds_period_source in main.py."""
+    kind = number(read(qds, "calcPeriod")[1])
+    if kind == 0:
+        day, count = number(read(qds, "date")[1]), number(read(qds, "stepNumber")[1])
+        size, unit = number(read(qds, "stepSize")[1]), number(read(qds, "stepUnit")[1])
+        source = "date + stepNumber x stepSize/stepUnit (calcPeriod 0)"
+        if day is None or not count or count < 0 or not size or size < 0 or unit is None \
+                or int(unit) not in STEP_UNIT_SECONDS:
+            return None, None, source
+        digits = int(round(day))
+        try:
+            start = datetime(digits // 10000, digits // 100 % 100, digits % 100).timestamp()
+        except (OverflowError, OSError, ValueError):
+            return None, None, source
+        return start, start + count * size * STEP_UNIT_SECONDS[int(unit)], source
+    if kind is not None and kind != 4:
+        return None, None, "calcPeriod {:g}, not read by GridLens".format(kind)
+    start, end = number(read(qds, "startTime")[1]), number(read(qds, "endTime")[1])
+    source = "startTime .. endTime" + (" (calcPeriod 4)" if kind is not None else "")
+    return (start, end, source) if start is not None and end is not None and end >= start else (None, None, source)
+
+
+def month_of(seconds):
+    try:
+        return datetime.fromtimestamp(seconds).strftime("%Y-%m")
+    except (OSError, OverflowError, ValueError):
+        return "UNREADABLE"
+
+
 def report_command(app, index, qds, study_case, project, read_by_gridlens):
     emit(app, "")
     emit(app, "ComStatsim #{}: {}{}".format(index, location(qds, study_case, project),
@@ -152,8 +186,12 @@ def report_command(app, index, qds, study_case, project, read_by_gridlens):
         emit(app, "  {}: {}".format(name, value if value == "NOT_FOUND" else shown(value, origin)))
     start, end = number(read(qds, "startTime")[1]), number(read(qds, "endTime")[1])
     readable = start is not None and end is not None and end >= start
-    emit(app, "  period as GridLens reads it (startTime..endTime): {}".format(
+    emit(app, "  startTime..endTime alone (read so before 29 Oct 2026): {}".format(
         "YEAR {} .. YEAR {}".format(year_of(start), year_of(end)) if readable else "NOT READABLE"))
+    begin, finish, source = gridlens_period(qds)
+    emit(app, "  period as GridLens reads it [{}]: {}".format(source, "{} .. {}, {:g} h".format(
+        month_of(begin), month_of(finish), round((finish - begin) / 3600.0, 2)) if begin is not None else "NOT KNOWN"))
+    return begin, finish
 
 
 def main(app=None):
@@ -185,16 +223,29 @@ def main(app=None):
         emit(app, "The active study case holds no ComStatsim: GridLens would create a new one with default settings.")
     elif gridlens_name not in in_case_names:
         emit(app, "GridLens would read a ComStatsim that is not among the ones listed below.")
+    period = (None, None)
     for index, qds in enumerate(in_case + elsewhere, 1):
-        report_command(app, index, qds, study_case, project, full_name(qds) == gridlens_name)
+        found_period = report_command(app, index, qds, study_case, project, full_name(qds) == gridlens_name)
+        if full_name(qds) == gridlens_name:
+            period = found_period
     years = {}
+    placed = {"inside": 0, "outside": 0, "not comparable": 0}
     for outage in contents(project, "*.IntPlannedout"):
-        start = number(read(outage, "starttime")[1])
+        start, end = number(read(outage, "starttime")[1]), number(read(outage, "endtime")[1])
         key = "YEAR {}".format(year_of(start)) if start is not None and EPOCH_MIN < start < EPOCH_MAX else "NOT READABLE"
         years[key] = years.get(key, 0) + 1
+        # The rule of window_overlaps_period in main.py.
+        if period[0] is None or (start is None and end is None):
+            placed["not comparable"] += 1
+        elif (start is not None and start > period[1]) or (end is not None and end < period[0]):
+            placed["outside"] += 1
+        else:
+            placed["inside"] += 1
     emit(app, "")
     emit(app, "planned outages by start year: {}".format(
         ", ".join("{} x{}".format(key, count) for key, count in sorted(years.items())) or "none"))
+    emit(app, "planned outages against the period GridLens reads: {} inside, {} outside, {} not comparable".format(
+        placed["inside"], placed["outside"], placed["not comparable"]))
 
 
 if __name__ == "__main__":

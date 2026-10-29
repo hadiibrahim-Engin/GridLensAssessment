@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>
-# GridLens 8.0.1: 168 definitions.
+# GridLens 8.0.1: 172 definitions.
 import hashlib
 import math
 import re
@@ -517,6 +517,9 @@ CLASSIFICATION_VERSION = '1.0'
 MAX_CONTINGENCY_ELEMENTS = 200
 
 
+STEP_UNIT_SECONDS = {0: 1.0, 1: 60.0, 2: 3600.0, 3: 86400.0}
+
+
 def _contents(obj, pattern):
     try:
         return list(obj.GetContents(pattern) or [])
@@ -580,6 +583,9 @@ OUTAGE_EQUIPMENT_ATTRIBUTES = (
 
 
 QDS_PERIOD_ATTRIBUTES = (("startTime", "endTime"), ("starttime", "endtime"))
+
+
+QDS_PERIOD_FROM_DATE, QDS_PERIOD_USER_DEFINED = 0, 4
 
 
 QDS_CORE_SETTINGS = (
@@ -4543,13 +4549,48 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
 
 
 def qds_period(qds):
-    """The simulated period in epoch seconds, as ComStatsim declares it."""
+    """The simulated period in epoch seconds, as ComStatsim declares it; (None, None) when it is not known."""
+    kind = finite_number(safe_attr(qds, "calcPeriod"))
+    if kind == QDS_PERIOD_FROM_DATE:
+        return _qds_date_period(qds)
+    if kind is not None and kind != QDS_PERIOD_USER_DEFINED:
+        return None, None
     for start_name, end_name in QDS_PERIOD_ATTRIBUTES:
         start = finite_number(safe_attr(qds, start_name))
         end = finite_number(safe_attr(qds, end_name))
         if start is not None and end is not None and end >= start:
             return start, end
     return None, None
+
+
+def _qds_date_period(qds):
+    """[00:00 of `date`, + stepNumber steps) for calcPeriod 0; (None, None) when a part is not readable."""
+    day = finite_number(safe_attr(qds, "date"))
+    count = finite_number(safe_attr(qds, "stepNumber"))
+    size = finite_number(safe_attr(qds, "stepSize"))
+    unit = finite_number(safe_attr(qds, "stepUnit"))
+    if day is None or not count or count < 0 or not size or size < 0 or unit is None \
+            or int(unit) not in STEP_UNIT_SECONDS:
+        return None, None
+    digits = int(round(day))
+    try:
+        start = datetime(digits // 10000, digits // 100 % 100, digits % 100).timestamp()
+    except (OverflowError, OSError, ValueError):
+        return None, None
+    return start, start + count * size * STEP_UNIT_SECONDS[int(unit)]
+
+
+def qds_period_source(qds):
+    """Which ComStatsim attributes define the simulated period, for the log and the case manager."""
+    kind = finite_number(safe_attr(qds, "calcPeriod"))
+    if kind == QDS_PERIOD_FROM_DATE:
+        return "date + stepNumber x stepSize/stepUnit (calcPeriod 0)"
+    if kind is None:
+        return "startTime .. endTime"
+    if kind == QDS_PERIOD_USER_DEFINED:
+        return "startTime .. endTime (calcPeriod 4)"
+    return ("calcPeriod {:g}, a kind of time period GridLens does not read; set the QDS time period to "
+            "user-defined to compare the planned outages with it".format(kind))
 
 
 def counts_text(counted, limit=8):
@@ -4729,7 +4770,8 @@ def qds_time_info(qds, period):
         lines.append(('QDS time step', '; '.join(parts)))
     else:
         lines.append(('QDS time step', 'as set in the active ComStatsim (not passed to this window)'))
-    lines += [('Time definition', 'ComStatsim startTime / endTime in epoch seconds, shown in the local time of this computer'),
+    source = qds_period_source(qds) if qds is not None else 'ComStatsim period'
+    lines += [('Time definition', '{}, shown in the local time of this computer'.format(source)),
               ('Calculated period', 'the complete ComStatsim period with its time step, in every run; nothing is shortened')]
     return lines
 

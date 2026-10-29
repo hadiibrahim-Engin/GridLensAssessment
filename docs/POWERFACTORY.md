@@ -197,9 +197,10 @@ action it applies). The log lines of 4.3 answer this in the next run.
 
 | Attribute of `ComStatsim` | Meaning |
 |---|---|
-| `startTime`, `endTime` | simulated period, epoch seconds (`qds_period`) |
+| `startTime`, `endTime` | simulated period with `calcPeriod` 4, epoch seconds (`qds_period`) |
 | `stepSize`, `stepUnit` | time step; `stepUnit` 0 s, 1 min, 2 h, 3 d (`qds_grid`) |
-| `calcPeriod` | kind of period (logged only) |
+| `calcPeriod` | kind of period: 4 reads `startTime`…`endTime`; 0 reads `date` (YYYYMMDD, 00:00) plus `stepNumber` steps, while `startTime`/`endTime` keep old values (verified 29 Oct 2026); any other kind leaves the period unknown and the planned outages are judged against the result time axis |
+| `date`, `stepNumber` | start day and number of steps with `calcPeriod` 0 |
 | `iopt_maint` | apply planned outages (set) |
 | `results` | bound result object (read only) |
 

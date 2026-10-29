@@ -204,9 +204,10 @@ Log-Zeilen aus 4.3 beantworten das im nächsten Lauf.
 
 | Attribut von `ComStatsim` | Bedeutung |
 |---|---|
-| `startTime`, `endTime` | simulierter Zeitraum, Epoch-Sekunden (`qds_period`) |
+| `startTime`, `endTime` | simulierter Zeitraum bei `calcPeriod` 4, Epoch-Sekunden (`qds_period`) |
 | `stepSize`, `stepUnit` | Zeitschritt; `stepUnit` 0 s, 1 min, 2 h, 3 d (`qds_grid`) |
-| `calcPeriod` | Art des Zeitraums (nur protokolliert) |
+| `calcPeriod` | Art des Zeitraums: 4 liest `startTime`…`endTime`; 0 liest `date` (JJJJMMTT, 00:00) plus `stepNumber` Schritte, `startTime`/`endTime` behalten dann alte Werte (geprüft 29.10.2026); jede andere Art lässt den Zeitraum offen, die Planned Outages werden dann gegen die Zeitachse der Ergebnisse geprüft |
+| `date`, `stepNumber` | Starttag und Schrittzahl bei `calcPeriod` 0 |
 | `iopt_maint` | Planned Outages anwenden (wird gesetzt) |
 | `results` | gebundenes Ergebnisobjekt (nur gelesen) |
 
