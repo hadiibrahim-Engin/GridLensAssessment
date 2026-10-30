@@ -1,6 +1,6 @@
 # Outage Assessment – wie jede Berichtstabelle berechnet und erstellt wird
 
-Outage Assessment veröffentlicht **38 Tabellen** (Datenvertrag 7.0), die beide Berichte
+Outage Assessment veröffentlicht **38 Tabellen** (Datenvertrag 7.1), die beide Berichte
 lesen: `MASTER_OUTAGE_ASSESSMENT` (Hauptbericht) und `MASTER_OUTAGE_ASSESSMENT_DETAIL`
 (technischer Detailbericht), gehalten als Pages in `designer-pages/<Bericht>/`
 (ein `.dct`-Dictionary und je Seite eine `.pg`-Datei). Für dieselbe Run-ID
@@ -232,8 +232,12 @@ Lauf über den ganzen Zeitraum kritische Betriebsmittel.
 
 **Haupt 9** (Balkendiagramm). **Zeilen:** die *Top-N* (Einstellung, Standard
 10) Leitungen mit dem höchsten Maximum in **irgendeinem** Lauf
-(`_line_bars`). `max_value` ist dieses Maximum, `case_name` der Lauf, in dem
-es auftrat.
+(`_line_bars`), die höchste oben. Das Diagramm stapelt drei Reihen:
+`value_ok` (bis zur Warnschwelle, grau), `value_warning` (Warnschwelle bis
+Grenze, gelb) und `value_over` (über der Grenze, rot); nur die Reihe der Klasse
+der Leitung trägt ihr Maximum, die anderen sind 0, so folgt die Farbe den
+Einstellungen. Das Maximum selbst und der Lauf, in dem es auftrat, behält das
+Skript, sie werden nicht veröffentlicht.
 
 ### 3.9 `ScriptedCaseComparison` – Fallvergleich
 
@@ -312,7 +316,7 @@ einzeln.
 | 3.15 | `ScriptedCaseStatusCounts` | Haupt 8 (gestapelte Säulen) | je (n-1)'-Fall | `_case_status_counts` | Befunde NEW, WORSENED, IMPROVED, RESOLVED |
 | 3.16 | `ScriptedCoverage` | Haupt 4, Detail 3 | je Fall und Ebene | `_coverage` | drei Achsen: angefragte/gerechnete Studienzeitpunkte, definierte/anwendbare Fehlerfälle, geforderte/ausgewertete Zellen und die Zellen je Qualitätsstatus |
 | 3.17 | `ScriptedScope` | Detail 3 | je Fall, Ebene, Netz, Spannungsebene, Klasse | `_scope` | überwachte, kritische und nicht vollständig auswertbare Betriebsmittel |
-| 3.18 | `ScriptedOutageWindows` | Haupt 5 (Gantt und Tabelle), Detail 4 | je Außerbetriebnahme jedes Falls | `_outage_windows` | PowerFactory-Pfad, Betriebsmittel, Beginn, Ende; Gantt-Stunden ab dem ersten Beginn |
+| 3.18 | `ScriptedOutageWindows` | Haupt 5 (Fensterdiagramm und Tabelle), Detail 4 | je Außerbetriebnahme jedes Falls | `_outage_windows` | PowerFactory-Pfad, Betriebsmittel, Beginn, Ende; Diagramm: `start_hours` (unsichtbarer Balken bis zum Beginn) und `duration_hours` (das Fenster), Stunden ab dem ersten Beginn |
 | 3.19 | `ScriptedReferenceFindings` | Haupt 7 (Top 10 je Ebene und Kriterium), Detail 5 (jede n-0-Zeile) | je Betriebsmittel und Kriterium ab Warnung oder über der Grenze | `_reference_findings` | n-0 aus der QDS-REF, n-1 aus den Referenz-Extremen; thermisch und Spannung getrennt |
 | 3.20–3.22 | `ScriptedCriticalLines`, `…Transformers`, `…Nodes` | Haupt 10 | bis zu 20 / 15 / 20 auffällige Betriebsmittel, kritischste zuerst | `_critical_elements` | n-1-Referenz-Extrem mit Grenze, absolutes (n-1)'-Extrem je Fall mit Zählern N/W/P/I/R/Q; „x von y gezeigt“ in `critical_note` |
 | 3.23–3.26 | `ScriptedDetailLines`, `…Transformers`, `…VoltageLow`, `…VoltageHigh` | Detail 6–9 | jedes auffällige Betriebsmittel, nach Netz und Spannungsebene | `_detail_matrices` | jedes Extrem mit Studienzeitpunkt und Fehlerfall; Blöcke zu drei Fällen |
@@ -346,7 +350,7 @@ enthält auch NOT APPLICABLE je Fehlerfall.
 | 1, 2 Titelseite, Inhaltsverzeichnis | `ScriptedReportMeta` |
 | 3 Overall Technical Assessment | `ScriptedKpis`, `ScriptedCaseStatistics` |
 | 4 Calculation Quality | `ScriptedCoverage`, `ScriptedModelQuality` |
-| 5 Planned Outage Planning | `ScriptedCases`, `ScriptedOutageWindows` (Gantt und Tabelle) |
+| 5 Planned Outage Planning | `ScriptedCases`, `ScriptedOutageWindows` (Fensterdiagramm und Tabelle) |
 | 6 Case Definition and Network States | `ScriptedCases` |
 | 7 Base Network Reference | `ScriptedPieLines`, `ScriptedPieTransformers`, `ScriptedReferenceFindings` |
 | 8 Scenario Comparison | `ScriptedCaseStatistics`, `ScriptedCaseStatusCounts` |

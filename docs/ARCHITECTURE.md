@@ -12,8 +12,8 @@ The result is a technical **pre-assessment**. It is no release of an outage
 and no proof of n-1 security, security of supply, protection coordination or
 safe electrical isolation.
 
-Current versions: script `8.0.1` (`PUBLISHER_VERSION`), report pages `7.0.0`
-(`TEMPLATE_VERSION`), data contract `7.0` with 38 tables
+Current versions: script `8.1.0` (`PUBLISHER_VERSION`), report pages `7.1.0`
+(`TEMPLATE_VERSION`), data contract `7.1` with 38 tables
 (`DATA_CONTRACT_VERSION`), settings `1.0`, classification rules `1.0`.
 
 Related documents:
@@ -643,7 +643,23 @@ contingencies out of a re-evaluation, not add ones that were not calculated.
 | results | verdict per case, outage effect, persistence, n-1 summary |
 | time-dependent operation | after every run: per time, the equipment put into or taken out of operation (section 6.1) |
 | failure report | on an error: the error, step and case, cause chain, details, code location, PowerFactory state after restore, kept result objects, last warnings, what to do |
-| run summary | always: time and calls per service (reading outages, case manager, each QDS and contingency analysis, reading results, comparison, restore, publication) and counts (QDS runs, time steps, reused cases, values read, n-1 study times, report rows) |
+| run summary | always: the run time, the time per step (1 to 7), per case and phase (calculation, reading, comparison, n-1) and per service, and the counts (QDS runs, time steps, reused cases, values read, n-1 study times, report rows). Run time leaves out the time the case manager window stood open; that time is named apart. Reading results is split below its line into the PowerFactory calls (column headers and grids, `GetColumnValues`) and the Python work (converting, checking values); the statistics for the report, the outage effect check and judging have lines of their own, so *other* stays small. *Compact* shows one line |
+
+Every line carries the clock time and the run time, e.g. `[20:46:33 +12.4s]`.
+
+**Log levels** (case manager → *Calculation* → *Log*, saved per project;
+default `LOG_LEVEL` in the script). Warnings, errors, the failure report, step
+and case headings and the completion line show at every level.
+
+| Level | Shows |
+|---|---|
+| Compact | step headings, warnings and errors, planning cases, QDS period, completion of each run, case results, completion line, one summary line |
+| Standard | compact plus ComStatsim settings, applied outages, outage checks, time-dependent operation, quality findings and the time measurement |
+| Detailed | standard plus every planned outage with its window, switch states, recorded variables, grids, n-1 sweep details and the publication of each table |
+| Diagnostic | detailed plus project paths, the complete data of every planned outage and the object interfaces |
+
+Below *Detailed*, warnings of one kind about many planned outages are grouped
+into one line with the names.
 
 ---
 

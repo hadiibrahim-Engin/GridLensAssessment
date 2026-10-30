@@ -88,6 +88,10 @@ can be dragged.
   - *Results*: *Calculate now*, or *Re-evaluate the kept run of <date time>*.
     The re-evaluation calculates nothing; it reads that run's result objects
     with the current settings. The choice is not saved.
+  - *Log*: how much the PowerFactory output window shows during the run –
+    *Compact*, *Standard* (default), *Detailed* or *Diagnostic*. Saved with the
+    cases of the project, so steps 1 to 3 of the next run already use it.
+    Warnings and errors always show.
   - *Show calculation preview*: the read-only preview of what will be calculated.
 - **Problems and warnings** (bottom right): everything that stops or limits
   the calculation, with where it occurs. The page tab shows the number, e.g.

@@ -3548,7 +3548,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
       <ClientRectangle>0,38.19,27,8</ClientRectangle>
       <Components isList="true" count="3">
         <LinesCountChart Ref="167" type="Stimulsoft.Report.Chart.StiChart" isKey="true">
-          <Area Ref="168" type="Stimulsoft.Report.Chart.StiLineArea" isKey="true">
+          <Area Ref="168" type="Stimulsoft.Report.Chart.StiClusteredColumnArea" isKey="true">
             <BorderColor>Transparent</BorderColor>
             <BorderThickness>1</BorderThickness>
             <Brush>[255:255:255]</Brush>
@@ -3587,8 +3587,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
                 <Step>1</Step>
               </Labels>
               <LineColor>140, 140, 140</LineColor>
-              <ShowEdgeValues>True</ShowEdgeValues>
-              <StartFromZero>False</StartFromZero>
+              <StartFromZero>True</StartFromZero>
               <Step>1</Step>
               <Title Ref="176" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
                 <Color>140, 140, 140</Color>
@@ -3665,24 +3664,16 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Page isRef="0" />
           <Parent isRef="166" />
           <Series isList="true" count="1">
-            <Item168 Ref="186" type="Stimulsoft.Report.Chart.StiLineSeries" isKey="true">
+            <Item168 Ref="186" type="Stimulsoft.Report.Chart.StiClusteredColumnSeries" isKey="true">
               <AllowApplyStyle>False</AllowApplyStyle>
               <ArgumentDataColumn>ScriptedCaseCounts.case_name</ArgumentDataColumn>
+              <BorderColor>181, 18, 62</BorderColor>
+              <Brush>[181:18:62]</Brush>
+              <BrushNegative>[181:18:62]</BrushNegative>
               <Chart isRef="167" />
               <Conditions isList="true" count="0" />
               <Filters isList="true" count="0" />
-              <Lighting>False</Lighting>
-              <LineColor>181, 18, 62</LineColor>
-              <LineColorNegative>Firebrick</LineColorNegative>
-              <LineMarker Ref="187" type="Stimulsoft.Report.Chart.StiLineMarker" isKey="true">
-                <BorderColor>Transparent</BorderColor>
-                <Brush>White</Brush>
-              </LineMarker>
-              <Marker Ref="188" type="Stimulsoft.Report.Chart.StiMarker" isKey="true">
-                <BorderColor>181, 18, 62</BorderColor>
-                <Brush>[181:18:62]</Brush>
-              </Marker>
-              <SeriesLabels Ref="189" type="Stimulsoft.Report.Chart.StiOutsideEndAxisLabels" isKey="true">
+              <SeriesLabels Ref="189" type="Stimulsoft.Report.Chart.StiInsideEndAxisLabels" isKey="true">
                 <BorderColor>Transparent</BorderColor>
                 <Brush>[119:255:255:255]</Brush>
                 <Chart isRef="167" />
@@ -3692,6 +3683,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
                 <ValueTypeSeparator>-</ValueTypeSeparator>
                 <Width>0</Width>
               </SeriesLabels>
+              <ShowInLegend>True</ShowInLegend>
               <ShowShadow>False</ShowShadow>
               <Title>Lines &gt; 100 %</Title>
               <TrendLines isList="true" count="0" />
@@ -3723,7 +3715,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           </Title>
         </LinesCountChart>
         <TransformersCountChart Ref="193" type="Stimulsoft.Report.Chart.StiChart" isKey="true">
-          <Area Ref="194" type="Stimulsoft.Report.Chart.StiLineArea" isKey="true">
+          <Area Ref="194" type="Stimulsoft.Report.Chart.StiClusteredColumnArea" isKey="true">
             <BorderColor>Transparent</BorderColor>
             <BorderThickness>1</BorderThickness>
             <Brush>[255:255:255]</Brush>
@@ -3762,8 +3754,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
                 <Step>1</Step>
               </Labels>
               <LineColor>140, 140, 140</LineColor>
-              <ShowEdgeValues>True</ShowEdgeValues>
-              <StartFromZero>False</StartFromZero>
+              <StartFromZero>True</StartFromZero>
               <Step>1</Step>
               <Title Ref="202" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
                 <Color>140, 140, 140</Color>
@@ -3840,24 +3831,16 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Page isRef="0" />
           <Parent isRef="166" />
           <Series isList="true" count="1">
-            <Item170 Ref="212" type="Stimulsoft.Report.Chart.StiLineSeries" isKey="true">
+            <Item170 Ref="212" type="Stimulsoft.Report.Chart.StiClusteredColumnSeries" isKey="true">
               <AllowApplyStyle>False</AllowApplyStyle>
               <ArgumentDataColumn>ScriptedCaseCounts.case_name</ArgumentDataColumn>
+              <BorderColor>181, 18, 62</BorderColor>
+              <Brush>[181:18:62]</Brush>
+              <BrushNegative>[181:18:62]</BrushNegative>
               <Chart isRef="193" />
               <Conditions isList="true" count="0" />
               <Filters isList="true" count="0" />
-              <Lighting>False</Lighting>
-              <LineColor>181, 18, 62</LineColor>
-              <LineColorNegative>Firebrick</LineColorNegative>
-              <LineMarker Ref="213" type="Stimulsoft.Report.Chart.StiLineMarker" isKey="true">
-                <BorderColor>Transparent</BorderColor>
-                <Brush>White</Brush>
-              </LineMarker>
-              <Marker Ref="214" type="Stimulsoft.Report.Chart.StiMarker" isKey="true">
-                <BorderColor>181, 18, 62</BorderColor>
-                <Brush>[181:18:62]</Brush>
-              </Marker>
-              <SeriesLabels Ref="215" type="Stimulsoft.Report.Chart.StiOutsideEndAxisLabels" isKey="true">
+              <SeriesLabels Ref="215" type="Stimulsoft.Report.Chart.StiInsideEndAxisLabels" isKey="true">
                 <BorderColor>Transparent</BorderColor>
                 <Brush>[119:255:255:255]</Brush>
                 <Chart isRef="193" />
@@ -3867,6 +3850,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
                 <ValueTypeSeparator>-</ValueTypeSeparator>
                 <Width>0</Width>
               </SeriesLabels>
+              <ShowInLegend>True</ShowInLegend>
               <ShowShadow>False</ShowShadow>
               <Title>Transformers &gt; 100 %</Title>
               <TrendLines isList="true" count="0" />
@@ -3898,7 +3882,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           </Title>
         </TransformersCountChart>
         <NodesCountChart Ref="219" type="Stimulsoft.Report.Chart.StiChart" isKey="true">
-          <Area Ref="220" type="Stimulsoft.Report.Chart.StiLineArea" isKey="true">
+          <Area Ref="220" type="Stimulsoft.Report.Chart.StiClusteredColumnArea" isKey="true">
             <BorderColor>Transparent</BorderColor>
             <BorderThickness>1</BorderThickness>
             <Brush>[255:255:255]</Brush>
@@ -3937,8 +3921,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
                 <Step>1</Step>
               </Labels>
               <LineColor>140, 140, 140</LineColor>
-              <ShowEdgeValues>True</ShowEdgeValues>
-              <StartFromZero>False</StartFromZero>
+              <StartFromZero>True</StartFromZero>
               <Step>1</Step>
               <Title Ref="228" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
                 <Color>140, 140, 140</Color>
@@ -4015,24 +3998,16 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Page isRef="0" />
           <Parent isRef="166" />
           <Series isList="true" count="1">
-            <Item172 Ref="238" type="Stimulsoft.Report.Chart.StiLineSeries" isKey="true">
+            <Item172 Ref="238" type="Stimulsoft.Report.Chart.StiClusteredColumnSeries" isKey="true">
               <AllowApplyStyle>False</AllowApplyStyle>
               <ArgumentDataColumn>ScriptedCaseCounts.case_name</ArgumentDataColumn>
+              <BorderColor>181, 18, 62</BorderColor>
+              <Brush>[181:18:62]</Brush>
+              <BrushNegative>[181:18:62]</BrushNegative>
               <Chart isRef="219" />
               <Conditions isList="true" count="0" />
               <Filters isList="true" count="0" />
-              <Lighting>False</Lighting>
-              <LineColor>181, 18, 62</LineColor>
-              <LineColorNegative>Firebrick</LineColorNegative>
-              <LineMarker Ref="239" type="Stimulsoft.Report.Chart.StiLineMarker" isKey="true">
-                <BorderColor>Transparent</BorderColor>
-                <Brush>White</Brush>
-              </LineMarker>
-              <Marker Ref="240" type="Stimulsoft.Report.Chart.StiMarker" isKey="true">
-                <BorderColor>181, 18, 62</BorderColor>
-                <Brush>[181:18:62]</Brush>
-              </Marker>
-              <SeriesLabels Ref="241" type="Stimulsoft.Report.Chart.StiOutsideEndAxisLabels" isKey="true">
+              <SeriesLabels Ref="241" type="Stimulsoft.Report.Chart.StiInsideEndAxisLabels" isKey="true">
                 <BorderColor>Transparent</BorderColor>
                 <Brush>[119:255:255:255]</Brush>
                 <Chart isRef="219" />
@@ -4042,6 +4017,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
                 <ValueTypeSeparator>-</ValueTypeSeparator>
                 <Width>0</Width>
               </SeriesLabels>
+              <ShowInLegend>True</ShowInLegend>
               <ShowShadow>False</ShowShadow>
               <Title>Nodes outside voltage band</Title>
               <TrendLines isList="true" count="0" />
@@ -4088,7 +4064,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
       <ClientRectangle>0,46.99,27,11</ClientRectangle>
       <Components isList="true" count="1">
         <TopLinesBarChart Ref="246" type="Stimulsoft.Report.Chart.StiChart" isKey="true">
-          <Area Ref="247" type="Stimulsoft.Report.Chart.StiClusteredBarArea" isKey="true">
+          <Area Ref="247" type="Stimulsoft.Report.Chart.StiStackedBarArea" isKey="true">
             <BorderColor>Transparent</BorderColor>
             <BorderThickness>1</BorderThickness>
             <Brush>[255:255:255]</Brush>
@@ -4150,7 +4126,8 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
                 <Font>Segoe UI,8</Font>
               </Labels>
               <LineColor>140, 140, 140</LineColor>
-              <StartFromZero>False</StartFromZero>
+              <ShowEdgeValues>True</ShowEdgeValues>
+              <StartFromZero>True</StartFromZero>
               <Title Ref="260" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
                 <Color>140, 140, 140</Color>
                 <Direction>BottomToTop</Direction>
@@ -4211,30 +4188,70 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Name>TopLinesBarChart</Name>
           <Page isRef="0" />
           <Parent isRef="245" />
-          <Series isList="true" count="1">
-            <Item176 Ref="266" type="Stimulsoft.Report.Chart.StiClusteredBarSeries" isKey="true">
+          <Series isList="true" count="3">
+            <Item176 Ref="266" type="Stimulsoft.Report.Chart.StiStackedBarSeries" isKey="true">
               <AllowApplyStyle>False</AllowApplyStyle>
               <ArgumentDataColumn>ScriptedLineLoadingBars.element_name</ArgumentDataColumn>
-              <BorderColor>181, 18, 62</BorderColor>
-              <Brush>[181:18:62]</Brush>
-              <BrushNegative>Firebrick</BrushNegative>
+              <BorderColor>140, 150, 160</BorderColor>
+              <Brush>[140:150:160]</Brush>
+              <BrushNegative>[140:150:160]</BrushNegative>
               <Chart isRef="246" />
               <Conditions isList="true" count="0" />
               <Filters isList="true" count="0" />
-              <SeriesLabels Ref="267" type="Stimulsoft.Report.Chart.StiInsideEndAxisLabels" isKey="true">
-                <BorderColor>Transparent</BorderColor>
-                <Brush>[119:255:255:255]</Brush>
+              <SeriesLabels Ref="267" type="Stimulsoft.Report.Chart.StiNoneLabels" isKey="true">
                 <Chart isRef="246" />
-                <Font>Segoe UI,8</Font>
-                <LabelColor>50, 58, 69</LabelColor>
                 <MarkerSize>8, 6</MarkerSize>
                 <ValueTypeSeparator>-</ValueTypeSeparator>
                 <Width>0</Width>
               </SeriesLabels>
-              <Title>Maximum loading</Title>
+              <ShowInLegend>True</ShowInLegend>
+              <ShowShadow>False</ShowShadow>
+              <Title>Up to the warning threshold</Title>
               <TrendLines isList="true" count="0" />
-              <ValueDataColumn>ScriptedLineLoadingBars.max_value</ValueDataColumn>
+              <ValueDataColumn>ScriptedLineLoadingBars.value_ok</ValueDataColumn>
             </Item176>
+            <Item177 Ref="9111" type="Stimulsoft.Report.Chart.StiStackedBarSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedLineLoadingBars.element_name</ArgumentDataColumn>
+              <BorderColor>217, 140, 31</BorderColor>
+              <Brush>[217:140:31]</Brush>
+              <BrushNegative>[217:140:31]</BrushNegative>
+              <Chart isRef="246" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="9112" type="Stimulsoft.Report.Chart.StiNoneLabels" isKey="true">
+                <Chart isRef="246" />
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <ShowInLegend>True</ShowInLegend>
+              <ShowShadow>False</ShowShadow>
+              <Title>Warning threshold to limit</Title>
+              <TrendLines isList="true" count="0" />
+              <ValueDataColumn>ScriptedLineLoadingBars.value_warning</ValueDataColumn>
+            </Item177>
+            <Item178 Ref="9113" type="Stimulsoft.Report.Chart.StiStackedBarSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedLineLoadingBars.element_name</ArgumentDataColumn>
+              <BorderColor>181, 18, 62</BorderColor>
+              <Brush>[181:18:62]</Brush>
+              <BrushNegative>[181:18:62]</BrushNegative>
+              <Chart isRef="246" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="9114" type="Stimulsoft.Report.Chart.StiNoneLabels" isKey="true">
+                <Chart isRef="246" />
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <ShowInLegend>True</ShowInLegend>
+              <ShowShadow>False</ShowShadow>
+              <Title>Above the limit</Title>
+              <TrendLines isList="true" count="0" />
+              <ValueDataColumn>ScriptedLineLoadingBars.value_over</ValueDataColumn>
+            </Item178>
           </Series>
           <SeriesLabels Ref="268" type="Stimulsoft.Report.Chart.StiNoneLabels" isKey="true">
             <Chart isRef="246" />

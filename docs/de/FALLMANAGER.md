@@ -92,6 +92,10 @@ lassen sich ziehen.
   - *Results*: *Calculate now* oder *Re-evaluate the kept run of <Datum Zeit>*.
     Die Neuauswertung rechnet nichts; sie liest die Ergebnisobjekte dieses
     Laufs mit den aktuellen Einstellungen. Die Auswahl wird nicht gespeichert.
+  - *Log*: wie viel das PowerFactory-Ausgabefenster während des Laufs zeigt –
+    *Compact*, *Standard* (Vorgabe), *Detailed* oder *Diagnostic*. Wird mit den
+    Fällen des Projekts gespeichert, damit schon Schritt 1 bis 3 des nächsten
+    Laufs sie verwenden. Warnungen und Fehler erscheinen immer.
   - *Show calculation preview*: die schreibgeschützte Vorschau dessen, was
     gerechnet wird.
 - **Problems and warnings** (unten rechts): alles, was die Rechnung stoppt oder

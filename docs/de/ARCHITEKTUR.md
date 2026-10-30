@@ -12,8 +12,8 @@ Das Ergebnis ist eine technische **Vorprüfung**. Es ist keine Freigabe einer
 Außerbetriebnahme und kein Nachweis für n-1-Sicherheit, Versorgungssicherheit,
 Schutzkoordination oder sichere elektrische Trennung.
 
-Aktuelle Versionen: Skript `8.0.1` (`PUBLISHER_VERSION`), Berichtsseiten
-`7.0.0` (`TEMPLATE_VERSION`), Datenvertrag `7.0` mit 38 Tabellen
+Aktuelle Versionen: Skript `8.1.0` (`PUBLISHER_VERSION`), Berichtsseiten
+`7.1.0` (`TEMPLATE_VERSION`), Datenvertrag `7.1` mit 38 Tabellen
 (`DATA_CONTRACT_VERSION`), Einstellungen `1.0`, Klassifikationsregeln `1.0`.
 
 Weitere Dokumente:
@@ -676,7 +676,23 @@ Fehlerfälle weglassen, keine hinzufügen, die nicht gerechnet wurden.
 | Ergebnisse | Urteil je Fall, Wirkung der Außerbetriebnahmen, Nachwirkung, n-1-Zusammenfassung |
 | zeitabhängiger Betrieb | nach jedem Lauf: je Zeitpunkt die in oder außer Betrieb genommenen Betriebsmittel (Abschnitt 6.1) |
 | Fehlerbericht | bei einem Fehler: der Fehler, Schritt und Fall, Ursachenkette, Details, Codestelle, PowerFactory-Zustand nach dem Zurücksetzen, erhaltene Ergebnisobjekte, letzte Warnungen, was zu tun ist |
-| Laufzusammenfassung | immer: Zeit und Aufrufe je Dienst (Outages lesen, Fallmanager, jede QDS und Contingency Analysis, Ergebnisse lesen, Vergleich, Zurücksetzen, Veröffentlichung) und Zählungen (QDS-Läufe, Zeitschritte, wiederverwendete Fälle, gelesene Werte, n-1-Studienzeitpunkte, Berichtszeilen) |
+| Laufzusammenfassung | immer: die Laufzeit, die Zeit je Schritt (1 bis 7), je Fall und Phase (Rechnung, Einlesen, Vergleich, n-1) und je Dienst sowie die Zählungen (QDS-Läufe, Zeitschritte, wiederverwendete Fälle, gelesene Werte, n-1-Studienzeitpunkte, Berichtszeilen). Die Laufzeit enthält nicht die Zeit, in der das Fenster des Fallmanagers offen war; diese steht getrennt. Das Einlesen der Ergebnisse ist unter seiner Zeile aufgeteilt in PowerFactory-Aufrufe (Spaltenköpfe und Netze, `GetColumnValues`) und Python-Arbeit (Umwandeln, Prüfen der Werte); Berichtsstatistik, Wirkungsprüfung und Urteil haben eigene Zeilen, so bleibt *other* klein. *Compact* zeigt eine Zeile |
+
+Jede Zeile trägt Uhrzeit und Laufzeit, z. B. `[20:46:33 +12.4s]`.
+
+**Log-Stufen** (Fallmanager → *Calculation* → *Log*, je Projekt gespeichert;
+Vorgabe `LOG_LEVEL` im Skript). Warnungen, Fehler, Fehlerbericht, Schritt- und
+Fallüberschriften und die Abschlusszeile erscheinen in jeder Stufe.
+
+| Stufe | Zeigt |
+|---|---|
+| Compact | Schrittüberschriften, Warnungen und Fehler, Planungsfälle, QDS-Zeitraum, Abschluss jedes Laufs, Fallergebnisse, Abschlusszeile, eine Zeile Zusammenfassung |
+| Standard | Compact plus ComStatsim-Einstellungen, angewendete Außerbetriebnahmen, Wirkungsprüfung, zeitabhängiger Betrieb, Qualitätsbefunde und die Zeitmessung |
+| Detailed | Standard plus jede Außerbetriebnahme mit Fenster, Schalterzustände, aufgezeichnete Variablen, Netze, Einzelheiten der n-1-Sweeps und die Veröffentlichung jeder Tabelle |
+| Diagnostic | Detailed plus Projektpfade, die vollständigen Daten jeder Außerbetriebnahme und die Objektschnittstellen |
+
+Unterhalb von *Detailed* werden gleichartige Warnungen zu vielen
+Außerbetriebnahmen zu einer Zeile mit den Namen zusammengefasst.
 
 ---
 

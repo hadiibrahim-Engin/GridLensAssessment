@@ -1,6 +1,6 @@
 # Outage Assessment – how every report table is calculated and built
 
-Outage Assessment publishes **38 tables** (data contract 7.0) that both reports read:
+Outage Assessment publishes **38 tables** (data contract 7.1) that both reports read:
 `MASTER_OUTAGE_ASSESSMENT` (main report) and `MASTER_OUTAGE_ASSESSMENT_DETAIL` (technical detail
 report), kept as pages in `designer-pages/<report>/` (one `.dct` dictionary and
 one `.pg` file per page). For the same run ID both reports print the same
@@ -230,8 +230,12 @@ whole period in this run.
 ### 3.8 `ScriptedLineLoadingBars` – top lines over all runs
 
 **Main 9** (top lines chart). **Rows:** *Top-N* (setting, default 10) lines with
-the highest maximum in **any** run (`_line_bars`). `max_value` is that maximum,
-`case_name` the run it occurred in.
+the highest maximum in **any** run (`_line_bars`), highest first. The chart
+stacks three series: `value_ok` (up to the warning threshold, grey),
+`value_warning` (warning threshold to limit, amber) and `value_over` (above the
+limit, red); only the series of the line's class holds its maximum, the others
+are 0, so the colour follows the settings. The maximum itself and the run it
+occurred in are kept by the script, not published.
 
 ### 3.9 `ScriptedCaseComparison` – case comparison summary
 
@@ -308,7 +312,7 @@ distinct equipment.
 | 3.15 | `ScriptedCaseStatusCounts` | main 8 (stacked columns) | per (n-1)' case | `_case_status_counts` | NEW, WORSENED, IMPROVED, RESOLVED findings |
 | 3.16 | `ScriptedCoverage` | main 4, detail 3 | per case and level | `_coverage` | three axes: requested/calculated study times, defined/applicable contingencies, required/evaluated cells and the cells per quality status |
 | 3.17 | `ScriptedScope` | detail 3 | per case, level, grid, voltage level, class | `_scope` | monitored, critical and not completely evaluable elements |
-| 3.18 | `ScriptedOutageWindows` | main 5 (Gantt and table), detail 4 | per planned outage of every case | `_outage_windows` | PowerFactory path, equipment, start, end; Gantt hours from the first outage start |
+| 3.18 | `ScriptedOutageWindows` | main 5 (window chart and table), detail 4 | per planned outage of every case | `_outage_windows` | PowerFactory path, equipment, start, end; chart: `start_hours` (invisible bar up to the start) and `duration_hours` (the window), hours from the first outage start |
 | 3.19 | `ScriptedReferenceFindings` | main 7 (top 10 per level and criterion), detail 5 (every n-0 row) | per element and criterion at or above warning or beyond the limit | `_reference_findings` | n-0 from the QDS REF, n-1 from the reference extremes; thermal and voltage apart |
 | 3.20–3.22 | `ScriptedCriticalLines`, `…Transformers`, `…Nodes` | main 10 | up to 20 / 15 / 20 conspicuous elements, most critical first | `_critical_elements` | n-1 reference extreme with limit, absolute (n-1)' extreme per case with counters N/W/P/I/R/Q; "shown x of y" in `critical_note` |
 | 3.23–3.26 | `ScriptedDetailLines`, `…Transformers`, `…VoltageLow`, `…VoltageHigh` | detail 6–9 | every conspicuous element, by grid and voltage level | `_detail_matrices` | each extreme with its study time and contingency; blocks of three cases |
@@ -341,7 +345,7 @@ NOT APPLICABLE per contingency.
 | 1, 2 Cover, table of contents | `ScriptedReportMeta` |
 | 3 Overall Technical Assessment | `ScriptedKpis`, `ScriptedCaseStatistics` |
 | 4 Calculation Quality | `ScriptedCoverage`, `ScriptedModelQuality` |
-| 5 Planned Outage Planning | `ScriptedCases`, `ScriptedOutageWindows` (Gantt and table) |
+| 5 Planned Outage Planning | `ScriptedCases`, `ScriptedOutageWindows` (window chart and table) |
 | 6 Case Definition and Network States | `ScriptedCases` |
 | 7 Base Network Reference | `ScriptedPieLines`, `ScriptedPieTransformers`, `ScriptedReferenceFindings` |
 | 8 Scenario Comparison | `ScriptedCaseStatistics`, `ScriptedCaseStatusCounts` |

@@ -949,7 +949,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <VertAlignment>Center</VertAlignment>
         </OutageGantt_Title>
         <OutageGanttChart Ref="28" type="Stimulsoft.Report.Chart.StiChart" isKey="true">
-          <Area Ref="29" type="Stimulsoft.Report.Chart.StiGanttArea" isKey="true">
+          <Area Ref="29" type="Stimulsoft.Report.Chart.StiStackedBarArea" isKey="true">
             <BorderColor>Transparent</BorderColor>
             <BorderThickness>1</BorderThickness>
             <Brush>[255:255:255]</Brush>
@@ -1011,7 +1011,8 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
                 <Font>Segoe UI,8</Font>
               </Labels>
               <LineColor>140, 140, 140</LineColor>
-              <StartFromZero>False</StartFromZero>
+              <ShowEdgeValues>True</ShowEdgeValues>
+              <StartFromZero>True</StartFromZero>
               <Title Ref="42" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
                 <Color>140, 140, 140</Color>
                 <Direction>BottomToTop</Direction>
@@ -1061,13 +1062,13 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Name>OutageGanttChart</Name>
           <Page isRef="0" />
           <Parent isRef="26" />
-          <Series isList="true" count="1">
-            <Item29 Ref="47" type="Stimulsoft.Report.Chart.StiGanttSeries" isKey="true">
+          <Series isList="true" count="2">
+            <Item29 Ref="47" type="Stimulsoft.Report.Chart.StiStackedBarSeries" isKey="true">
               <AllowApplyStyle>False</AllowApplyStyle>
               <ArgumentDataColumn>ScriptedOutageWindows.gantt_label</ArgumentDataColumn>
-              <BorderColor>181, 18, 62</BorderColor>
-              <Brush>[181:18:62]</Brush>
-              <BrushNegative>Firebrick</BrushNegative>
+              <BorderColor>Transparent</BorderColor>
+              <Brush>[0:255:255:255]</Brush>
+              <BrushNegative>[0:255:255:255]</BrushNegative>
               <Chart isRef="28" />
               <Conditions isList="true" count="0" />
               <Filters isList="true" count="0" />
@@ -1077,10 +1078,33 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
                 <ValueTypeSeparator>-</ValueTypeSeparator>
                 <Width>0</Width>
               </SeriesLabels>
-              <Title>Planned outage</Title>
+              <ShowInLegend>False</ShowInLegend>
+              <ShowShadow>False</ShowShadow>
+              <Title>Before the window</Title>
+              <TrendLines isList="true" count="0" />
               <ValueDataColumn>ScriptedOutageWindows.start_hours</ValueDataColumn>
-              <ValueDataColumnEnd>ScriptedOutageWindows.end_hours</ValueDataColumnEnd>
             </Item29>
+            <Item30 Ref="9101" type="Stimulsoft.Report.Chart.StiStackedBarSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedOutageWindows.gantt_label</ArgumentDataColumn>
+              <BorderColor>181, 18, 62</BorderColor>
+              <Brush>[181:18:62]</Brush>
+              <BrushNegative>[181:18:62]</BrushNegative>
+              <Chart isRef="28" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="9102" type="Stimulsoft.Report.Chart.StiNoneLabels" isKey="true">
+                <Chart isRef="28" />
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <ShowInLegend>True</ShowInLegend>
+              <ShowShadow>False</ShowShadow>
+              <Title>Planned outage</Title>
+              <TrendLines isList="true" count="0" />
+              <ValueDataColumn>ScriptedOutageWindows.duration_hours</ValueDataColumn>
+            </Item30>
           </Series>
           <SeriesLabels Ref="49" type="Stimulsoft.Report.Chart.StiNoneLabels" isKey="true">
             <Chart isRef="28" />

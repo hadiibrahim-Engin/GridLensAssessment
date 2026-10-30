@@ -62,10 +62,10 @@ ENERGIZED_MIN_PU = 0.1
 # Upper bound of n-1 study times per case: every study time calculates every contingency.
 MAX_N1_TIMES = 2000
 TIME_UNIT_FALLBACK = 'h'
-PUBLISHER_VERSION = '8.0.1'
+PUBLISHER_VERSION = '8.1.0'
 TEMPLATE_NAME = 'MASTER_OUTAGE_ASSESSMENT'
-TEMPLATE_VERSION = '7.0.0'
-DATA_CONTRACT_VERSION = '7.0'
+TEMPLATE_VERSION = '7.1.0'
+DATA_CONTRACT_VERSION = '7.1'
 RUN_REFERENCE_CASE = True
 # Where the planning cases come from:
 #   'gui'        open the case manager; without PyQt use the saved
@@ -75,6 +75,9 @@ RUN_REFERENCE_CASE = True
 CASE_SOURCE = 'gui'
 # Folder of the saved case configurations; '' is ~/OutageAssessment/cases.
 CASE_CONFIG_DIR = ''
+# How much the output window shows; chosen per project in the case manager (Calculation -> Log), this is the
+# default. 'compact', 'standard', 'detailed' or 'diagnostic'. Warnings and errors are always shown.
+LOG_LEVEL = 'standard'
 # The folder of the saved cases below the home folder; the one of the former name is read until a save here.
 CONFIG_FOLDER, PREVIOUS_CONFIG_FOLDER = 'OutageAssessment', 'GridLens'
 # Default planning-case limit, adjustable in Settings -> Report and run.
@@ -222,7 +225,8 @@ TABLES = (
         ("case_order", "integer"), ("case_name", "string"), ("line_count", "integer"),
         ("transformer_count", "integer"), ("node_count", "integer"))),
     ("ScriptedLineLoadingBars", (
-        ("rank", "integer"), ("element_name", "string"), ("max_value", "number"), ("case_name", "string"))),
+        ("rank", "integer"), ("element_name", "string"), ("max_value", "number"), ("case_name", "string"),
+        ("value_ok", "number"), ("value_warning", "number"), ("value_over", "number"))),
     ("ScriptedCaseComparison", MATRIX_FIELDS),
     ("ScriptedCalculationRuns", (
         ("run_order", "integer"), ("run_id", "string"), ("run_kind", "string"), ("case_name", "string"),
@@ -259,7 +263,7 @@ TABLES = (
     ("ScriptedOutageWindows", (
         ("row_order", "integer"), ("case_order", "integer"), ("case_name", "string"), ("outage_name", "string"),
         ("outage_path", "string"), ("equipment_name", "string"), ("start_text", "string"), ("end_text", "string"),
-        ("start_hours", "number"), ("end_hours", "number"), ("gantt_label", "string"))),
+        ("start_hours", "number"), ("end_hours", "number"), ("gantt_label", "string"), ("duration_hours", "number"))),
     ("ScriptedReferenceFindings", (
         ("row_order", "integer"), ("level", "string"), ("criterion_order", "integer"), ("main_rank", "integer"),
         ("element_name", "string"), ("element_type", "string"), ("grid_name", "string"), ("criterion", "string"),
@@ -361,7 +365,9 @@ UNPUBLISHED_FIELDS = {
     "ScriptedModelQuality": ("check_id",),
     "ScriptedCases": ("case_id", "is_reference", "simulation_status", "case_description", "windows_text"),
     "ScriptedCaseMetrics": ("coverage_text",),
-    "ScriptedLineLoadingBars": ("case_name",),
+    # The bars draw the three class values; the maximum and the window end stay the script's own figures.
+    "ScriptedLineLoadingBars": ("case_name", "max_value"),
+    "ScriptedOutageWindows": ("end_hours",),
     "ScriptedCalculationRuns": ("reference_text", "period_text", "provenance_text"),
     "ScriptedTopLinesByCase": ("violation",),
     "ScriptedCaseStatistics": ("new_events", "worsened_events", "preexisting_events", "improved_events", "resolved_events",
@@ -716,22 +722,39 @@ def close_column_buffer():
             pass
 
 
+# The parts of reading a result object, shown below READ_SERVICE in the run summary.
+READ_SERVICE = 'read QDS results (ElmRes)'
+READ_HEADERS = 'column headers and grids (PowerFactory calls)'
+READ_COLUMNS = 'GetColumnValues (PowerFactory calls)'
+READ_CELLS = 'GetValue cell by cell (PowerFactory calls, slow)'
+READ_CONVERT = 'convert values (Python)'
+READ_CHECK = 'check values, gaps and statistics (Python)'
+
+
 def read_column(elmres, column, rows, buffer=None):
     """All `rows` values of one column: one GetColumnValues call into the IntVec, else one GetValue per cell."""
     vector = buffer if buffer is not None else COLUMN_BUFFER
     if vector is not None:
+        started = time.monotonic()
         try:
             code = finite_number(elmres.GetColumnValues(vector, column))
             values = safe_attr(vector, 'V')
         except Exception:
             code, values = None, None
+        RUN_STATS.part(READ_SERVICE, READ_COLUMNS, time.monotonic() - started)
         if code == 0.0 and _is_sequence(values):
             if len(values) != rows:
                 raise RuntimeError('ElmRes column {} returned {} values instead of {}.'.format(column, len(values), rows))
             RUN_STATS.count('columns_bulk')
-            return [finite_number(value) for value in values]
+            started = time.monotonic()
+            converted = [finite_number(value) for value in values]
+            RUN_STATS.part(READ_SERVICE, READ_CONVERT, time.monotonic() - started)
+            return converted
     RUN_STATS.count('values_cellwise', rows)
-    return [result_value(elmres, row, column) for row in range(rows)]
+    started = time.monotonic()
+    found = [result_value(elmres, row, column) for row in range(rows)]
+    RUN_STATS.part(READ_SERVICE, READ_CELLS, time.monotonic() - started, rows)
+    return found
 
 
 
@@ -787,6 +810,7 @@ def collect_series(elmres, counters=None):
     # Without a grid selection every element is assessed, so its grid is not read at all.
     filtered = bool(current_setting('monitoring_grids') or GRID_NAME_FILTER)
     by_class, by_variable = {}, {}
+    scanning = time.monotonic()
     for column in range(columns):
         try:
             obj = elmres.GetObject(column)
@@ -820,6 +844,7 @@ def collect_series(elmres, counters=None):
         priority = VARIABLES[category].index(variable)
         if key not in chosen or priority < chosen[key][0]:
             chosen[key] = (priority, column, obj, variable)
+    RUN_STATS.part(READ_SERVICE, READ_HEADERS, time.monotonic() - scanning, columns)
     if counters is not None:
         counters['columns'], counters['rows'] = columns, rows
         counters['columns_by_class'], counters['columns_by_variable'] = by_class, by_variable
@@ -847,6 +872,9 @@ def collect_series(elmres, counters=None):
     # Rows where at least one line or transformer has a loading value; a row without any means a failed load flow.
     valued = bytearray(rows)
     branches = 0
+    # The Python share of the series loop: its time without the PowerFactory calls and the conversion of read_column.
+    looping = time.monotonic()
+    calls_before = sum(RUN_STATS.part_seconds(READ_SERVICE, name) for name in (READ_COLUMNS, READ_CELLS, READ_CONVERT))
     for (_, _), (_, column, obj, variable) in sorted(chosen.items()):
         values = []
         category = result_category(obj, variable)
@@ -912,6 +940,8 @@ def collect_series(elmres, counters=None):
             'values': array_values,
             'gaps': gaps,
         })
+    RUN_STATS.part(READ_SERVICE, READ_CHECK, time.monotonic() - looping - (
+        sum(RUN_STATS.part_seconds(READ_SERVICE, name) for name in (READ_COLUMNS, READ_CELLS, READ_CONVERT)) - calls_before))
     failed = [row for row in range(rows) if not valued[row]] if branches else []
     if failed:
         raise RuntimeError(
@@ -1232,7 +1262,8 @@ def is_critical(item, stats):
 # under 'settings'; native storage in the PowerFactory project is not verified.
 # ---------------------------------------------------------------------------
 SETTINGS_VERSION = '1.0'
-SOURCE_OUTAGE_ASSESSMENT, SOURCE_POWERFACTORY, SOURCE_USER = 'Outage Assessment', 'PowerFactory', 'user'
+# Origin of a setting: the tool's default, PowerFactory (read only) or the engineer.
+SOURCE_OUTAGE_ASSESSMENT, SOURCE_POWERFACTORY, SOURCE_USER = 'default', 'PowerFactory', 'user'
 CATEGORY_EVALUATION, CATEGORY_CALCULATION = 'A', 'B'
 N1_LIMITS_POWERFACTORY, N1_LIMITS_GLOBAL = 'powerfactory', 'global'
 N1_LIMIT_CHOICES = ((N1_LIMITS_POWERFACTORY, 'use PowerFactory limits'), (N1_LIMITS_GLOBAL, 'global assessment limit'))
@@ -1498,7 +1529,7 @@ def settings_snapshot(overrides=None):
         'sources': {key: setting_source(key, overrides) for key in values},
         'overrides': clean_overrides(dict((key, values[key]) for key in overrides)),
         'calculation_parameters': {setting['key']: NOT_VERIFIED if not setting['editable'] else
-                                       setting_text(setting['key'], values[setting['key']]) + ' (stored, not applied yet)'
+                                       setting_text(setting['key'], values[setting['key']])
                                        for setting in SETTINGS if setting['category'] == CATEGORY_CALCULATION},
         'storage': 'provisional: case configuration file (JSON); native PowerFactory storage not verified yet',
     }
@@ -3363,9 +3394,11 @@ def critical_steps(result):
 def release_values(result):
     """Drop the full-resolution arrays of a compared case; statistics, plot points and critical steps stay."""
     if result.get('id') == REFERENCE_ID and '_qds_statistics' not in result:
-        result['_qds_statistics'] = qds_level_statistics('', result)
+        with RUN_STATS.measure("n-0 statistics of REF for the report"):
+            result['_qds_statistics'] = qds_level_statistics('', result)
     if 'critical_steps' not in result and result.get('item_by_key'):
-        result['critical_steps'] = critical_steps(result)
+        with RUN_STATS.measure("critical time steps of each run for the report"):
+            result['critical_steps'] = critical_steps(result)
     for item in result['item_by_key'].values():
         item.pop('values', None)
 
@@ -3672,7 +3705,14 @@ def _line_bars(payload, results):
             if current is None or stats['max'] > current[1]:
                 best[item['key']] = (item['element_name'], stats['max'], _result_name(result))
     for rank, (name, value, case_name) in enumerate(sorted(best.values(), key=lambda entry: (-entry[1], entry[0].casefold()))[:setting_value('top_n')], 1):
-        payload['ScriptedLineLoadingBars'].append({'rank': rank, 'element_name': name, 'max_value': value, 'case_name': case_name})
+        # The bar is drawn as a stack of three series of which only the one of its loading class carries the
+        # value, so its colour follows the warning threshold and the limit of the settings.
+        warning, limit = loading_warning('line'), loading_limit('line')
+        payload['ScriptedLineLoadingBars'].append({
+            'rank': rank, 'element_name': name, 'max_value': value, 'case_name': case_name,
+            'value_ok': value if value <= warning else 0.0,
+            'value_warning': value if warning < value <= limit else 0.0,
+            'value_over': value if value > limit else 0.0})
 
 
 
@@ -3859,12 +3899,14 @@ def _model_quality(payload, results, request=None):
     n1_quality(payload, results)
 
 
-QDS_TIME_BASE_TEXT = ('Complete ComStatsim period: every run covers the whole simulated period with the ComStatsim time step; '
-                      'Outage Assessment shortens no window, adds no time step and changes no time step.')
+QDS_TIME_BASE_TEXT = ('Every run covers the same QDS period with the ComStatsim time step; Outage Assessment adds no '
+                      'time step and changes no time step.')
 
 
 def qds_mode_text(request=None):
-    return QDS_TIME_BASE_TEXT
+    """How the QDS period of the run was set, for the quality page and the evidence chapter."""
+    period = (request or {}).get('qds_run_period')
+    return '{} {}'.format(period, QDS_TIME_BASE_TEXT) if period else QDS_TIME_BASE_TEXT
 
 
 
@@ -4047,7 +4089,8 @@ def states_text(plan):
         day = stamp[:10]
         label = stamp if day != previous_day else stamp[11:]
         previous_day = day
-        parts.append('{} {}'.format(label, ' + '.join(sorted(names.get(key, key) for key in active)) if active else 'none'))
+        parts.append('{} {}'.format(label, ' + '.join(sorted(names.get(key, key) for key in active)) if active
+                                    else 'no case outage active'))
     return ' | '.join(parts)
 
 
@@ -4456,7 +4499,7 @@ def _statistics_row(order, name, level, critical, new, worsened, events, conting
         'critical_times': times or 0,
         'episodes': 0,
         'events_text': '{} NEW · {} WORSENED'.format(events.get('NEW', 0), events.get('WORSENED', 0)) if events else
-                        'time steps, see the n-0 chapters' if level == LEVEL_N0 else '-',
+                        'n-0: see n-0 Case Comparison' if level == LEVEL_N0 else '-',
         'contingencies_text': '-' if contingencies is None else str(contingencies),
         'times_text': '-' if times is None else str(times),
         'completeness_text': completeness or '-',
@@ -4588,7 +4631,10 @@ def _outage_windows(payload, request):
             'start_text': _time_text(start), 'end_text': _time_text(end),
             'start_hours': (start - origin) / 3600.0 if start is not None and origin is not None else 0.0,
             'end_hours': (end - origin) / 3600.0 if end is not None and origin is not None else 0.0,
-            'gantt_label': '{} · {}'.format(plan['name'], record['name'])})
+            'gantt_label': '{} · {}'.format(plan['name'], record['name']),
+            # The window chart stacks an invisible bar of start_hours and a visible bar of this duration: the
+            # range (Gantt) chart of PowerFactory 2026 SP1 does not draw the end column.
+            'duration_hours': (end - start) / 3600.0 if None not in (start, end) and origin is not None else 0.0})
 
 
 def _element_view(results):
@@ -5233,20 +5279,38 @@ def _n0_time_criticality(payload, results, notes):
     notes['times'] = count
 
 
-def _assessment_settings(payload):
-    """H10/D12: every setting of the run with its value, unit, origin and whether it is applied."""
+def _assessment_settings(payload, request=None):
+    """H10/D12: every setting of the run with its value, unit, origin and whether it is applied.
+
+    Without n-1 in the run the n-1 filters are not used, and the read-only settings of the contingency analysis
+    are one row instead of one row each.
+    """
     snapshot = settings_snapshot(active_overrides())
-    for order, setting in enumerate(SETTINGS, 1):
+    n1 = N1_REFERENCE in ((request or {}).get('assessments') or ())
+    order = 0
+    skipped = False
+    for setting in SETTINGS:
         key = setting['key']
         if key not in snapshot['values']:
+            if not n1:
+                skipped = True
+                continue
             value, origin, status = NOT_VERIFIED, setting['source'], 'not applied (' + NOT_VERIFIED + ')'
         else:
             value, origin = setting_text(key, snapshot['values'][key]), snapshot['sources'][key]
-            status = ('applied' if setting['category'] != CATEGORY_CALCULATION else
-                      snapshot['calculation_parameters'].get(key, NOT_VERIFIED))
+            if not n1 and 'n-0' not in setting['applies']:
+                status = 'not used: n-1 not calculated'
+            else:
+                status = ('applied' if setting['category'] != CATEGORY_CALCULATION else 'applied to the n-1 run')
+        order += 1
         payload['ScriptedAssessmentSettings'].append({
             'row_order': order, 'section': setting['section'], 'setting_key': key, 'label': setting['label'],
             'value_text': value, 'unit': setting.get('unit') or '-', 'origin': origin, 'status': status})
+    if skipped:
+        payload['ScriptedAssessmentSettings'].append({
+            'row_order': order + 1, 'section': 'Contingency analysis', 'setting_key': 'contingency_analysis',
+            'label': 'Settings of the contingency analysis', 'value_text': 'n-1 not calculated in this run', 'unit': '-',
+            'origin': SOURCE_POWERFACTORY, 'status': 'not used'})
 
 
 def _result_provenance(payload, results):
@@ -5295,7 +5359,7 @@ def _reporting_tables(payload, results, request):
     _episodes(payload, results)
     _quality_register(payload, results)
     _time_criticality(payload, results, notes)
-    _assessment_settings(payload)
+    _assessment_settings(payload, request)
     _result_provenance(payload, results)
     # Long registers are cut fairly between the cases, never by case order; the statistics above stay complete.
     def by_case(row):
@@ -5736,7 +5800,7 @@ RUN_CONTEXT = {}
 def reset_run_context():
     RUN_CONTEXT.clear()
     RUN_CONTEXT.update(step='before step 1', case='', warnings=[], restore='not reached: nothing was changed yet',
-                       kept=[], recording_checked=False)
+                       kept=[], recording_checked=False, log_level=LOG_LEVEL)
 
 
 reset_run_context()
@@ -5790,8 +5854,36 @@ def log_failure(logger, exc):
                               "Correct the reported condition, verify the active study case, and run Outage Assessment again.")])
 
 
+LOG_COMPACT, LOG_STANDARD, LOG_DETAILED, LOG_DIAGNOSTIC = LOG_LEVELS = ('compact', 'standard', 'detailed', 'diagnostic')
+LOG_LEVEL_LABELS = {LOG_COMPACT: 'Compact', LOG_STANDARD: 'Standard', LOG_DETAILED: 'Detailed', LOG_DIAGNOSTIC: 'Diagnostic'}
+LOG_LEVEL_HELP = {
+    LOG_COMPACT: 'step headings, warnings and errors, the case results and the completion line',
+    LOG_STANDARD: 'compact plus the settings, planning cases, QDS period, applied outages, outage checks, '
+                  'time-dependent operation, quality findings and the time measurement',
+    LOG_DETAILED: 'standard plus every planned outage with its window, switch states, recorded variables, grids '
+                  'and the publication of each table',
+    LOG_DIAGNOSTIC: 'detailed plus project paths, the complete data of every planned outage and the object interfaces',
+}
+
+
+def normalized_log_level(level):
+    """A known log level; anything else is LOG_LEVEL of the script, and the standard level when that is unknown."""
+    if level in LOG_LEVELS:
+        return level
+    return LOG_LEVEL if LOG_LEVEL in LOG_LEVELS else LOG_STANDARD
+
+
+def set_log_level(level):
+    """The level of every logger of the running run, also the one that reports a failure."""
+    RUN_CONTEXT['log_level'] = normalized_log_level(level)
+
+
 class RunLogger:
     """Structured progress output for the PowerFactory output window.
+
+    Every line has a severity (INFO, WARNING, ERROR) and a verbosity (LOG_LEVELS):
+    a line shows when its verbosity is within the chosen level. Warnings, errors,
+    section and case headings are always shown.
 
     Three levels keep a long run readable:
 
@@ -5804,9 +5896,23 @@ class RunLogger:
 
     WIDTH = 78
 
-    def __init__(self, app):
+    def __init__(self, app, level=None):
         self.app = app
-        self.started = time.monotonic()
+        self._level = None if level is None else normalized_log_level(level)
+
+    @property
+    def level(self):
+        return self._level or normalized_log_level(RUN_CONTEXT.get('log_level', LOG_LEVEL))
+
+    @level.setter
+    def level(self, value):
+        self._level = normalized_log_level(value)
+
+    def shows(self, verbosity):
+        return LOG_LEVELS.index(normalized_log_level(verbosity)) <= LOG_LEVELS.index(self.level)
+
+    def _hidden(self, level, verbosity):
+        return level not in ("WARNING", "ERROR") and not self.shows(verbosity)
 
     def _emit(self, line):
         printer = getattr(self.app, "PrintPlain", None)
@@ -5818,15 +5924,17 @@ class RunLogger:
                 pass
         print(line, flush=True)
 
-    def write(self, stage, message, step=None, level="INFO"):
+    def write(self, stage, message, step=None, level="INFO", verbosity=LOG_STANDARD):
+        if self._hidden(level, verbosity):
+            return
         position = "--/{}".format(TOTAL_STEPS)
         if step is not None:
             position = "{:02d}/{}".format(step, TOTAL_STEPS)
-        elapsed = time.monotonic() - self.started
         if level in ("WARNING", "ERROR") and stage != "FAILED":
             _remember_warning(message)
-        self._emit("[Outage Assessment][{}][{}][{}][{:7.1f}s] {}".format(
-            position, level, stage, elapsed, message))
+        # Clock time, and the run time without the time the case manager window stood open.
+        self._emit("[Outage Assessment][{}][{}][{}][{} +{:.1f}s] {}".format(
+            position, level, stage, datetime.now().strftime("%H:%M:%S"), RUN_STATS.run_time(), message))
 
     def _plain(self, text, level="INFO"):
         self._emit("[Outage Assessment]{} {}".format(
@@ -5841,6 +5949,7 @@ class RunLogger:
     def step(self, number, title):
         RUN_CONTEXT['step'] = "STEP {}/{} \u00b7 {}".format(number, TOTAL_STEPS, title)
         RUN_CONTEXT['case'] = ''
+        RUN_STATS.start_step(number, title)
         self.section(RUN_CONTEXT['step'])
 
     def case(self, title):
@@ -5848,13 +5957,17 @@ class RunLogger:
         head = ".. " + title + " "
         self._plain(head + "." * max(3, self.WIDTH - len(head)))
 
-    def detail(self, message, level="INFO"):
+    def detail(self, message, level="INFO", verbosity=LOG_STANDARD):
+        if self._hidden(level, verbosity):
+            return
         if level == "WARNING":
             _remember_warning(message)
         self._plain("    " + message, level)
 
-    def table(self, header, rows, level="INFO"):
+    def table(self, header, rows, level="INFO", verbosity=LOG_STANDARD):
         """Rows of strings in aligned columns; the last column is not padded."""
+        if self._hidden(level, verbosity):
+            return
         lines = ([tuple(header)] if header else []) + [
             tuple(str(cell) for cell in row) for row in rows]
         if not lines:
@@ -5868,6 +5981,26 @@ class RunLogger:
                 self.detail("  ".join(
                     "-" * widths[i] if i < len(line) - 1 else "-" * min(widths[i], 40)
                     for i in range(len(line))))
+
+
+class WarningGroup:
+    """Warnings of one kind about many objects: one line each from the detailed level on, else one line per kind."""
+
+    def __init__(self, logger, stage, step, noun='planned outage(s)'):
+        self.logger, self.stage, self.step, self.noun = logger, stage, step, noun
+        self.kinds = {}
+
+    def add(self, kind, message, name):
+        if self.logger.shows(LOG_DETAILED):
+            self.logger.write(self.stage, message, self.step, "WARNING")
+        else:
+            self.kinds.setdefault(kind, []).append(name)
+
+    def flush(self):
+        for kind, names in self.kinds.items():
+            self.logger.write(self.stage, "{} {}: {}: {}.".format(
+                len(names), self.noun, kind, clip_text(', '.join(names), 300)), self.step, "WARNING")
+        self.kinds = {}
 
 
 def _remember_warning(message):
@@ -5893,9 +6026,65 @@ class RunStats:
         self.started = time.monotonic()
         self.services = {}
         self.counts = {}
+        # The time the case manager window stood open (the engineer's time) is no run time; services
+        # measured meanwhile (building the window) are kept apart.
+        self.waited = 0.0
+        self._wait_started = None
+        self.wait_services = {}
+        self.steps = []
+        self._step = None
+        self.cases = {}
+        # Parts of a service ({service: {part: [calls, seconds]}}), shown indented below it; they are inside its
+        # time and do not count twice.
+        self.parts = {}
+
+    def run_time(self):
+        """Seconds since the start without the time the case manager window stood open."""
+        now = time.monotonic()
+        waiting = self.waited + (now - self._wait_started if self._wait_started is not None else 0.0)
+        return max(0.0, now - self.started - waiting)
+
+    def wait(self):
+        """with RUN_STATS.wait(): the block (the open case manager window) is not run time."""
+        stats = self
+
+        class _Wait:
+            def __enter__(self):
+                stats._wait_started = time.monotonic()
+                return self
+
+            def __exit__(self, *_unused):
+                stats.waited += time.monotonic() - stats._wait_started
+                stats._wait_started = None
+                return False
+        return _Wait()
+
+    def start_step(self, number, title):
+        self.finish_step()
+        self._step = (number, title, self.run_time())
+
+    def finish_step(self):
+        if self._step is not None:
+            number, title, began = self._step
+            self.steps.append((number, title, self.run_time() - began))
+            self._step = None
+
+    def part(self, service, name, seconds, calls=1):
+        """Time of one part of `service`, e.g. the PowerFactory calls while reading results."""
+        entry = self.parts.setdefault(service, {}).setdefault(name, [0, 0.0])
+        entry[0] += calls
+        entry[1] += max(0.0, seconds)
+
+    def part_seconds(self, service, name):
+        return self.parts.get(service, {}).get(name, [0, 0.0])[1]
+
+    def case_add(self, case_id, phase, seconds):
+        """Time of one phase (calculation, reading, comparison, n-1) of one case."""
+        phases = self.cases.setdefault(case_id, {})
+        phases[phase] = phases.get(phase, 0.0) + max(0.0, seconds)
 
     def add(self, service, seconds, calls=1):
-        entry = self.services.setdefault(service, [0, 0.0])
+        entry = (self.wait_services if self._wait_started is not None else self.services).setdefault(service, [0, 0.0])
         entry[0] += calls
         entry[1] += max(0.0, seconds)
 
@@ -5916,10 +6105,26 @@ class RunStats:
                 return False
         return _Block()
 
+    CASE_PHASES = ('calculation', 'reading', 'comparison', 'n-1')
+
+    def step_rows(self):
+        total = self.run_time()
+        return [("STEP {}/{} \u00b7 {}".format(number, TOTAL_STEPS, title), '{:.1f}'.format(seconds),
+                 '{:.0f} %'.format(100.0 * seconds / total) if total else '-') for number, title, seconds in self.steps]
+
+    def case_rows(self):
+        return [(case_id,) + tuple('{:.1f}'.format(phases[phase]) if phase in phases else '-' for phase in self.CASE_PHASES)
+                + ('{:.1f}'.format(sum(phases.values())),) for case_id, phases in self.cases.items()]
+
     def rows(self):
-        total = time.monotonic() - self.started
-        rows = [(service, str(calls), '{:.1f}'.format(seconds), '{:.0f} %'.format(100.0 * seconds / total) if total else '-')
-                for service, (calls, seconds) in self.services.items()]
+        total = self.run_time()
+        def share(seconds):
+            return '{:.0f} %'.format(100.0 * seconds / total) if total else '-'
+        rows = []
+        for service, (calls, seconds) in self.services.items():
+            rows.append((service, str(calls), '{:.1f}'.format(seconds), share(seconds)))
+            rows += [('  - ' + name, str(part_calls), '{:.1f}'.format(part_seconds), share(part_seconds))
+                     for name, (part_calls, part_seconds) in self.parts.get(service, {}).items()]
         measured = sum(seconds for _, seconds in self.services.values())
         rows.append(('other (logging, checks, waiting)', '-', '{:.1f}'.format(max(0.0, total - measured)), '-'))
         rows.append(('total', '-', '{:.1f}'.format(total), '100 %'))
@@ -5934,10 +6139,31 @@ RUN_STATS = RunStats()
 
 
 def log_run_summary(logger, stats=None):
-    """The time per service and the number of calculations, at the end of every run (also a failed one)."""
+    """The time per step, case and service and the number of calculations, at the end of every run (also a failed
+    one). Run time leaves out the time the case manager window stood open; that time is named apart."""
     stats = stats or RUN_STATS
-    logger.section("RUN SUMMARY · time per service and calculations")
+    stats.finish_step()
+    waited = "case manager window open {:.1f} s, not counted".format(stats.waited) if stats.waited else ""
+    if not logger.shows(LOG_STANDARD):
+        slowest = max(stats.steps, key=lambda entry: entry[2]) if stats.steps else None
+        logger.write("SUMMARY", "Run time {:.1f} s{}{}.".format(
+            stats.run_time(), " ({})".format(waited) if waited else "",
+            "; longest step {} ({:.1f} s)".format(slowest[1], slowest[2]) if slowest else ""), verbosity=LOG_COMPACT)
+        return
+    logger.section("RUN SUMMARY · time measurement and calculations")
+    logger.detail("Run time {:.1f} s{}.".format(stats.run_time(), "; " + waited if waited else ""))
+    if stats.steps:
+        logger.table(("Step", "Time [s]", "Share"), stats.step_rows())
+    if stats.cases:
+        logger.detail("")
+        logger.table(("Case",) + tuple(phase.capitalize() + " [s]" for phase in stats.CASE_PHASES) + ("Total [s]",),
+                     stats.case_rows())
+    logger.detail("")
     logger.table(("Service", "Calls", "Time [s]", "Share"), stats.rows())
+    if stats.wait_services:
+        logger.detail("While the case manager window stood open (not counted): {}.".format(", ".join(
+            "{} {:.1f} s".format(service, seconds) for service, (_calls, seconds) in stats.wait_services.items())),
+            verbosity=LOG_DETAILED)
     counted = stats.count_rows()
     if counted:
         logger.detail("")
@@ -6308,13 +6534,15 @@ def classify_planned_outages(app, logger, period=(None, None)):
     logger.write(
         "OUTAGES", "Found {} planned outage object(s).".format(len(records)), 3)
     candidates = []
+    # One warning line per outage from the detailed level on; below, one line per kind with the names.
+    grouped = WarningGroup(logger, "OUTAGES", 3)
     for index, record in enumerate(records, 1):
         outage = record["_object"]
         prefix = "Outage {}/{} '{}': ".format(index, len(records), record["name"])
         if finite_number(safe_attr(outage, "outserv", 0)) == 1.0:
             record["status"] = OUTAGE_SKIPPED
             record["skip_reason"] = "Outage object is disabled (outserv=1)."
-            logger.write("OUTAGES", prefix + record["skip_reason"], 3, "WARNING")
+            grouped.add("disabled in PowerFactory (outserv=1)", prefix + record["skip_reason"], record["name"])
             continue
         window = outage_window(outage)
         overlap = window_overlaps_period(window, period)
@@ -6326,7 +6554,8 @@ def classify_planned_outages(app, logger, period=(None, None)):
                 "{} to {}.".format(
                     _format_pf_time(window[0]), _format_pf_time(window[1]),
                     _format_pf_time(period[0]), _format_pf_time(period[1])))
-            logger.write("OUTAGES", prefix + record["skip_reason"], 3, "WARNING")
+            grouped.add("window outside the simulated period {} to {}".format(
+                _format_pf_time(period[0]), _format_pf_time(period[1])), prefix + record["skip_reason"], record["name"])
             continue
         record["status"] = OUTAGE_CONSIDERED
         if overlap is True:
@@ -6335,34 +6564,35 @@ def classify_planned_outages(app, logger, period=(None, None)):
                 "OUTAGES",
                 prefix + "window {} to {} overlaps the simulated period; "
                 "PowerFactory will apply it.".format(
-                    _format_pf_time(window[0]), _format_pf_time(window[1])), 3)
+                    _format_pf_time(window[0]), _format_pf_time(window[1])), 3, verbosity=LOG_DETAILED)
         else:
             record["skip_reason"] = (
                 "The outage window could not be compared with the simulated "
                 "period; PowerFactory decides whether it applies.")
-            logger.write("OUTAGES", prefix + record["skip_reason"], 3, "WARNING")
-            logger.write(
-                "DIAGNOSTIC", prefix + describe_object_api(outage), 3, "WARNING")
+            grouped.add("window not comparable with the simulated period, PowerFactory decides whether it applies",
+                        prefix + record["skip_reason"], record["name"])
+            logger.write("DIAGNOSTIC", prefix + describe_object_api(outage), 3, verbosity=LOG_DIAGNOSTIC)
         candidates.append(record)
+    grouped.flush()
     logger.table(
         ("#", "Planned outage", "Class", "Status", "Window", "Equipment"),
         [(number, record["name"], record["source_class"], record["status"],
           period_text(record["start_time"], record["end_time"]) or "unknown",
           clip_text(record["equipment_name"] or "none listed", 60))
-         for number, record in enumerate(records, 1)])
-    logger.detail("Where each outage object is stored (project path):")
+         for number, record in enumerate(records, 1)], verbosity=LOG_DETAILED)
+    logger.detail("Where each outage object is stored (project path):", verbosity=LOG_DIAGNOSTIC)
     logger.table(
         ("#", "Planned outage", "Location"),
         [(number, record["name"], object_key(record["_object"]))
-         for number, record in enumerate(records, 1)])
-    logger.detail("What each outage object holds (its data and the actions below it):")
+         for number, record in enumerate(records, 1)], verbosity=LOG_DIAGNOSTIC)
+    logger.detail("What each outage object holds (its data and the actions below it):", verbosity=LOG_DIAGNOSTIC)
     for number, record in enumerate(records, 1):
-        logger.detail("{} {}: {}".format(number, record["name"], data_attributes_text(record["_object"])))
+        logger.detail("{} {}: {}".format(number, record["name"], data_attributes_text(record["_object"])), verbosity=LOG_DIAGNOSTIC)
         contents = outage_contents_text(record["_object"])
         for line in contents:
-            logger.detail("    below it: " + line)
+            logger.detail("    below it: " + line, verbosity=LOG_DIAGNOSTIC)
         if not contents:
-            logger.detail("    below it: nothing (no own switching actions; PowerFactory isolates the components itself)")
+            logger.detail("    below it: nothing (no own switching actions; PowerFactory isolates the components itself)", verbosity=LOG_DIAGNOSTIC)
     return records, candidates
 
 
@@ -6463,7 +6693,7 @@ def assign_definitions(records):
 def empty_case_config(project_key=''):
     return {'schema': CASE_CONFIG_SCHEMA, 'schema_version': CASE_CONFIG_SCHEMA_VERSION, 'revision': 0,
             'project': project_key, 'saved_at': '', 'saved_by': '', 'assessments': ['n-0'], 'background': [],
-            'cases': [], 'rules': [], 'settings': {}}
+            'cases': [], 'rules': [], 'settings': {}, 'log_level': normalized_log_level(LOG_LEVEL)}
 
 
 def _occurrence_window(record, plan_case):
@@ -6580,6 +6810,8 @@ def validate_case_config(config, max_cases=-1):
         problems.append('the n-0 quasi-dynamic assessment is always calculated: the report is built on it')
     elif N1_PRIME in assessments and N1_REFERENCE not in assessments:
         problems.append("(n-1)' is compared with n-1, so it needs n-1")
+    if config.get('log_level', LOG_STANDARD) not in LOG_LEVELS:
+        problems.append('log_level must be one of {}'.format(', '.join(LOG_LEVELS)))
     if not _is_text_list(config.get('background', [])):
         problems.append('background must be a list of planned outage paths')
     problems += ['settings: ' + problem for _, problem in validate_settings(config.get('settings', {}))]
@@ -6760,6 +6992,7 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
         'disabled': disabled,
         'assessments': list(config.get('assessments') or ['n-0']),
         'settings': dict(config.get('settings') or {}),
+        'log_level': normalized_log_level(config.get('log_level')),
     }
 
 
@@ -7002,6 +7235,9 @@ HELP_TEXTS = {
     'qds': "The time step is taken from PowerFactory. With a QDS time step of two hours, n-1 and (n-1)' are assessed "
            "at the same points in time. Every run covers the complete ComStatsim period; Outage Assessment changes neither "
            "the period nor the time step.",
+    'log': "How much the output window shows during the run; saved with the cases of this project. Warnings and "
+           "errors always show.\n" + "\n".join('{}: {}.'.format(LOG_LEVEL_LABELS[level], LOG_LEVEL_HELP[level])
+                                                for level in LOG_LEVELS),
     'results': "Calculate now: every case is calculated into a new kept result object OA_<stamp>_<case>, then "
                "evaluated.\nRe-evaluate a kept run: nothing is calculated and PowerFactory is not changed; the result "
                "objects of that run are read again and assessed with the current settings (limits, tolerances, grids). "
@@ -7715,6 +7951,16 @@ class CaseEditor:
         return 'every grid' + (' named *{}*'.format(GRID_NAME_FILTER) if GRID_NAME_FILTER else '')
 
     # --- assessment and preview ------------------------------------------------
+    def set_log_level(self, level):
+        """How much the output window shows during the run; saved with the cases. A problem as text, else None."""
+        if level not in LOG_LEVELS:
+            return 'Choose one of the log levels: {}.'.format(', '.join(LOG_LEVEL_LABELS[item] for item in LOG_LEVELS))
+        self.config['log_level'] = level
+        return None
+
+    def log_level(self):
+        return normalized_log_level(self.config.get('log_level'))
+
     def set_assessments(self, n0, n1=False, n1_prime=False):
         """The requested assessments; a problem as text, else None."""
         if not n0 and not n1 and not n1_prime:
@@ -7810,6 +8056,7 @@ class CaseEditor:
         lines = ['Results: ' + (RESULTS_CALCULATE if not self.evaluate_stamp else
                                 'Re-evaluate the kept run of {} (no calculation)'.format(stamp_text(self.evaluate_stamp))),
                  'Assessment: ' + assessments_text(self.config.get('assessments')),
+                 'Log: ' + LOG_LEVEL_LABELS[self.log_level()],
                  'QDS period: ' + self.qds_text,
                  'Reference: ' + (('Rfix' if background else 'R0') if setting_value('run_reference', self.settings_overrides())
                                   else 'off'),
@@ -9323,6 +9570,15 @@ class CaseManagerDialog:
         self.tip(self.results_box, HELP_TEXTS['results'])
         results.addWidget(self.results_box, 1)
         card.addLayout(results)
+        log = widgets.QHBoxLayout()
+        log.addWidget(self.label('Log', 'caption'))
+        self.log_box = widgets.QComboBox()
+        self.log_box.addItems([LOG_LEVEL_LABELS[level] for level in LOG_LEVELS])
+        self.log_box.setCurrentIndex(LOG_LEVELS.index(self.editor.log_level()))
+        self.log_box.currentIndexChanged.connect(lambda *_args: self.safe(self.apply_log_level)())
+        self.tip(self.log_box, HELP_TEXTS['log'])
+        log.addWidget(self.log_box, 1)
+        card.addLayout(log)
         self.preview_button = self.button('Show calculation preview', self.toggle_preview, 'ghost', HELP_TEXTS['preview'])
         card.addWidget(self.preview_button, 0, qt.enum('AlignmentFlag.AlignLeft'))
         card.addStretch(1)
@@ -10206,6 +10462,12 @@ class CaseManagerDialog:
         window.deleteLater()
 
     # --- calculation -----------------------------------------------------------
+    def apply_log_level(self):
+        index = self.log_box.currentIndex()
+        if 0 <= index < len(LOG_LEVELS):
+            self.editor.set_log_level(LOG_LEVELS[index])
+        self.refresh_overview()
+
     def apply_results_choice(self):
         choices = self.editor.result_choices()
         index = self.results_box.currentIndex()
@@ -10471,7 +10733,7 @@ def set_qds_span(guard, qds, plans, logger):
             qds_period_text(qds_period(qds))), details=["Wanted: " + qds_period_text((start, end))])
     logger.write("CALCULATION", "QDS period for every run: {} (calcPeriod 4), from the first planned outage of "
                  "the calculated cases to one QDS step after the last; restored afterwards. As set "
-                 "before: {}.".format(qds_period_text((start, end)), before), 4)
+                 "before: {}.".format(qds_period_text((start, end)), before), 4, verbosity=LOG_COMPACT)
     return {"span": (start, end), "before": before}
 
 
@@ -10479,7 +10741,7 @@ def _restore_qds_span(guard, qds, span, logger):
     errors = guard.restore()
     if span is not None and not errors:
         logger.write("RESTORE", "Restored the QDS period [calcPeriod, startTime, endTime] to {}.".format(
-            span["before"]), 5)
+            span["before"]), 5, verbosity=LOG_DETAILED)
     return errors
 
 
@@ -10489,7 +10751,7 @@ def _restore_planned_outage_option(qds, original, logger):
                 .format(PLANNED_OUTAGE_OPTION, _format_setting_value(original))]
     logger.write(
         "RESTORE", "Restored the 'Planned Outages' option [{}] to {}.".format(
-            PLANNED_OUTAGE_OPTION, _format_setting_value(original)), 5)
+            PLANNED_OUTAGE_OPTION, _format_setting_value(original)), 5, verbosity=LOG_DETAILED)
     return []
 
 
@@ -10639,7 +10901,7 @@ def check_recording(snapshot, produced, qds, case_id, logger):
     """
     counted = recorded_variables(snapshot)
     assessed = {variable: number for variable, number in (counted or {}).items() if variable in ASSESSED_VARIABLES}
-    logger.detail("Recorded in '{}': {}.".format(object_name(snapshot), recorded_text(counted)))
+    logger.detail("Recorded in '{}': {}.".format(object_name(snapshot), recorded_text(counted)), verbosity=LOG_DETAILED)
     release = getattr(snapshot, 'Release', None)
     if callable(release):
         try:
@@ -10686,7 +10948,7 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
         "CALCULATION",
         "Starting {} with the active ComStatsim settings; only the "
         "'Planned Outages' option and the outages' 'Ignored' flags "
-        "differ between the cases.".format(case_id), 4)
+        "differ between the cases.".format(case_id), 4, verbosity=LOG_DETAILED)
     logger.write(
         "CALCULATION",
         "PowerFactory is calculating {}. This blocking API call may take "
@@ -10704,6 +10966,7 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
                 case_id, _friendly_exception(exc), REFUSED_HINT)) from None
     elapsed = time.monotonic() - started
     RUN_STATS.add("QDS calculation (PowerFactory)", elapsed)
+    RUN_STATS.case_add(case_id, "calculation", elapsed)
     RUN_STATS.count("qds_runs")
     code = return_code(returned)
     if code is None or code != 0.0:
@@ -10724,7 +10987,7 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
                 "none" if produced is None else "{} ({})".format(object_name(produced), class_name(produced)))])
     logger.write(
         "CALCULATION", "{} completed successfully in {:.1f}s.".format(
-            case_id, elapsed), 4)
+            case_id, elapsed), 4, verbosity=LOG_COMPACT)
     with RUN_STATS.measure("read switch states"):
         changed = switch_changes_text(switches_before, switch_states(app))
     if changed:
@@ -10732,14 +10995,14 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
                       "Outage Assessment does not change switches.".format(len(changed), clip_text(", ".join(changed), 400)),
                       "WARNING")
     elif switches_before:
-        logger.detail("Switch states after the QDS: all {} switches as before it.".format(len(switches_before)))
+        logger.detail("Switch states after the QDS: all {} switches as before it.".format(len(switches_before)), verbosity=LOG_DETAILED)
     else:
-        logger.detail("Switch states could not be read (no ElmCoup/StaSwitch with on_off).")
+        logger.detail("Switch states could not be read (no ElmCoup/StaSwitch with on_off).", verbosity=LOG_DETAILED)
     with RUN_STATS.measure("keep a copy of each QDS result"):
         snapshot = _case_result_object(study_case, produced, case_id, result_objects.name_for(case_id))
     result_objects.append(snapshot, case_id)
     logger.detail("PowerFactory wrote {} into '{}'; kept as '{}' ({}).".format(
-        case_id, object_name(produced), object_name(snapshot), monitor_text(snapshot)))
+        case_id, object_name(produced), object_name(snapshot), monitor_text(snapshot)), verbosity=LOG_DETAILED)
     mark_result_object(snapshot, case_id, fingerprint)
     if not RUN_CONTEXT.get('recording_checked'):
         RUN_CONTEXT['recording_checked'] = True
@@ -10854,7 +11117,8 @@ def evaluate_qds(run, description, plan, logger):
         counters = {}
         series, labels, plot_times, unit, absolute, origin = collect_series(
             snapshot, counters)
-        RUN_STATS.add("read QDS results (ElmRes)", time.monotonic() - reading)
+        RUN_STATS.add(READ_SERVICE, time.monotonic() - reading)
+        RUN_STATS.case_add(case_id, "reading", time.monotonic() - reading)
         RUN_STATS.count("qds_steps", len(labels))
         RUN_STATS.count("series", len(series))
         RUN_STATS.count("values", len(series) * len(labels))
@@ -10863,18 +11127,18 @@ def evaluate_qds(run, description, plan, logger):
                 "EXTRACTION",
                 "Grid scope ({}): {} series assessed, {} out of scope and "
                 "not read.".format(grid_scope_text(), len(series),
-                                   counters.get('out_of_scope', 0)), 6)
+                                   counters.get('out_of_scope', 0)), 6, verbosity=LOG_DETAILED)
         logger.write(
             "EXTRACTION",
             "Validated {} supported series across {} time point(s); time unit '{}'."
-            .format(len(series), len(labels), unit), 6)
+            .format(len(series), len(labels), unit), 6, verbosity=LOG_DETAILED)
         logger.write(
             "EXTRACTION",
             "Time axis: {} scale, unit '{}'; first {}; last {}; span {}."
             .format("absolute" if absolute else "relative",
                     unit, labels[0], labels[-1],
                     '{:g} h'.format(plot_times[-1] - plot_times[0])), 6)
-        logger.detail(result_object_text(snapshot, counters, labels, plot_times))
+        logger.detail(result_object_text(snapshot, counters, labels, plot_times), verbosity=LOG_DETAILED)
         _log_extraction_detail(logger, series, counters)
         _log_operation_changes(logger, series, labels, counters)
     except Exception as exc:
@@ -11026,7 +11290,8 @@ def _restore_study_time(state, logger, stage="RESTORE", step=5):
         logger.write(
             stage,
             "Restored Study Case time to {}.".format(
-                _format_study_time(state["date"], state["time"])), step)
+                _format_study_time(state["date"], state["time"])), step,
+            verbosity=LOG_STANDARD if stage == "RESTORE" else LOG_DETAILED)
     return errors
 
 
@@ -11057,7 +11322,7 @@ def _log_qds_settings(qds, result, study_time_state, logger):
         "SETTINGS",
         "Calculation options: {}".format(
             ", ".join(options) if options else "<no exposed iopt_* attributes>"),
-        2)
+        2, verbosity=LOG_DETAILED)
     period_start, period_end = qds_period(qds)
     if period_start is not None:
         logger.write(
@@ -11083,7 +11348,7 @@ def _log_qds_settings(qds, result, study_time_state, logger):
     logger.write(
         "SETTINGS",
         "Initial Study Case time: {}".format(_format_study_time(
-            study_time_state["date"], study_time_state["time"])), 2)
+            study_time_state["date"], study_time_state["time"])), 2, verbosity=LOG_DETAILED)
 
 
 # PowerFactory reports why it refused a command only in its output window; Python sees "method call failed".
@@ -11314,6 +11579,7 @@ def evaluate_case(run, reference, logger):
     try:
         result = evaluate_qds(run, info["description"], plan, logger)
         result["run_note"] = run.get("run_note", "")
+        checking = time.monotonic()
         try:
             result["outage_checks"] = outage_effects(result, reference, plan)
         except Exception as exc:
@@ -11324,7 +11590,7 @@ def evaluate_case(run, reference, logger):
                           "WARNING" if status == OUTAGE_NO_EFFECT else "INFO")
         try:
             for line in outage_component_lines(result, reference, plan):
-                logger.detail(line)
+                logger.detail(line, verbosity=LOG_DETAILED)
         except Exception as exc:
             logger.detail("The components of the outages could not be listed: {}.".format(_friendly_exception(exc)),
                           "WARNING")
@@ -11344,12 +11610,14 @@ def evaluate_case(run, reference, logger):
                         "not back in service until the end of the period"), "WARNING")
             else:
                 logger.detail("Outage '{}': back in service right at its window end{}.".format(
-                    name, "" if not total else " ({:g} h later without load again)".format(total)))
+                    name, "" if not total else " ({:g} h later without load again)".format(total)), verbosity=LOG_DETAILED)
+        RUN_STATS.add("check the effect of the outages", time.monotonic() - checking)
         out_of_service = {key for record in plan["members"] for key in record.get("component_keys") or ()}
         started = time.monotonic()
         try:
             with RUN_STATS.measure("compare case with REF"):
                 compare_case(result, reference, [plan["windows"][record["key"]] for record in plan["members"]], out_of_service)
+            RUN_STATS.case_add(plan["id"], "comparison", time.monotonic() - started)
         except Exception as exc:
             # The QDS ran and its ElmRes is kept; only this case's assessment is lost.
             raise OutageAssessmentError("{} was calculated, but its comparison with the reference failed: {}".format(
@@ -12026,6 +12294,15 @@ def qds_period_text(period):
     return '{} - {}'.format(_format_pf_time(start), _format_pf_time(end))
 
 
+def saved_log_level(app):
+    """The log level saved with the cases of the active project, so that steps 1 to 3 already use it."""
+    try:
+        saved = load_case_config(case_config_path(object_key(app.GetActiveProject())))
+    except Exception:
+        saved = None
+    return normalized_log_level((saved or {}).get('log_level'))
+
+
 def obtain_case_request(app, records, candidates, period, logger, qds_info=None, grids=None,
                         contingencies=CONTINGENCIES_NOT_READ, kept=(), elements=()):
     """The planning cases of this run: from the case manager, the saved configuration or one per outage."""
@@ -12068,7 +12345,8 @@ def obtain_case_request(app, records, candidates, period, logger, qds_info=None,
     except OutageAssessmentError:
         latest = None
     unsaved = latest is None or any(latest.get(name) != config.get(name)
-                                    for name in ("cases", "background", "rules", "settings"))
+                                    for name in ("cases", "background", "rules", "settings")) or (
+        normalized_log_level(latest.get("log_level")) != normalized_log_level(config.get("log_level")))
     config = dict(config)
     stamp = config.pop("evaluate_stamp", None)
     request = resolve_request(config, records, period, "gui", "case manager, configuration revision {}{}".format(
@@ -12089,10 +12367,10 @@ def _log_plan(logger, request):
     logger.table(("Case", "Name", "Outages", "States", "Status", "Note"), [
         (plan["id"], plan["name"], len(plan["members"]), len(plan["states"]), plan["status"],
          clip_text(plan["reason"] or "; ".join(plan["warnings"]) or "-", 90))
-        for plan in request["cases"]])
+        for plan in request["cases"]], verbosity=LOG_COMPACT)
     for plan in request["cases"]:
         for left, right, code in plan["relations"]:
-            logger.detail("{}: {} / {} -> {} ({})".format(plan["id"], left, right, code, INTERVAL_RELATIONS[code]))
+            logger.detail("{}: {} / {} -> {} ({})".format(plan["id"], left, right, code, INTERVAL_RELATIONS[code]), verbosity=LOG_DETAILED)
 
 
 def _log_context(app, study_case, qds, original_result, logger):
@@ -12101,14 +12379,14 @@ def _log_context(app, study_case, qds, original_result, logger):
     except Exception:
         project = "unknown"
     logger.detail("Project: {} | Study case: {} | ComStatsim: {}".format(
-        project, object_name(study_case), object_name(qds)))
+        project, object_name(study_case), object_name(qds)), verbosity=LOG_DETAILED)
     logger.detail("Result object: {} ({})".format(
-        object_name(original_result), class_name(original_result) or "ElmRes"))
+        object_name(original_result), class_name(original_result) or "ElmRes"), verbosity=LOG_DETAILED)
     logger.detail("Grid scope of the script: {}".format(
         "grids whose name contains {!r}".format(GRID_NAME_FILTER)
-        if GRID_NAME_FILTER else "every element (a grid selection in Settings takes precedence)"))
+        if GRID_NAME_FILTER else "every element (a grid selection in Settings takes precedence)"), verbosity=LOG_DETAILED)
     logger.detail("Reference case: {} | case source: {} | time base: complete ComStatsim period".format(
-        "on" if setting_value('run_reference') else "off", CASE_SOURCE))
+        "on" if setting_value('run_reference') else "off", CASE_SOURCE), verbosity=LOG_DETAILED)
 
 
 def _series_overview(series):
@@ -12143,12 +12421,12 @@ def _log_extraction_detail(logger, series, counters):
     if grids and not getattr(logger, "grids_shown", False):
         logger.grids_shown = True
         ordered = sorted(grids.items(), key=lambda entry: (-entry[1][0], entry[0]))
-        logger.detail("Grids in the result file (series per grid):")
+        logger.detail("Grids in the result file (series per grid):", verbosity=LOG_DETAILED)
         logger.table(("Grid", "Series", "Scope"),
                      [(name, count, "assessed" if inside else "ignored")
-                      for name, (count, inside) in ordered[:12]])
+                      for name, (count, inside) in ordered[:12]], verbosity=LOG_DETAILED)
         if len(ordered) > 12:
-            logger.detail("... and {} more grid(s).".format(len(ordered) - 12))
+            logger.detail("... and {} more grid(s).".format(len(ordered) - 12), verbosity=LOG_DETAILED)
     skipped = []
     if counters.get("dc_nodes"):
         skipped.append("{} DC node(s)".format(counters["dc_nodes"]))
@@ -12191,7 +12469,7 @@ def _log_results(logger, results, request):
                      "{:.1f}s".format(result["elapsed"]) if result.get("elapsed") is not None
                      and result.get("provenance", "CALCULATED") == "CALCULATED" else "reused" if result.get("provenance", "").startswith("REUSED") else "-",
                      verdict, lines, transformers, nodes))
-    logger.table(("Case", "Name", "Status", "Time", "Assessment", "Lines>100", "Trafos>100", "Nodes out"), rows)
+    logger.table(("Case", "Name", "Status", "Time", "Assessment", "Lines>100", "Trafos>100", "Nodes out"), rows, verbosity=LOG_COMPACT)
     for result in results:
         if result["status"] != CONVERGED:
             logger.detail("{}: {}".format(result["id"], result["message"]), "WARNING")
@@ -12318,7 +12596,7 @@ def calculate_n1(app, study_case, qds, request, records, ready, logger, study_ti
                                          len(equipment), len(excluded), n1_filter_text()), 4)
     if excluded:
         logger.detail("Not analysed for the run: {}.".format(clip_text(", ".join(
-            "{} ({})".format(object_name(outage), filtered[object_key(outage)]) for outage in excluded), 600)))
+            "{} ({})".format(object_name(outage), filtered[object_key(outage)]) for outage in excluded), 600)), verbosity=LOG_DETAILED)
     entries, references, done = {}, {}, {}
     for plan in ready:
         if plan['fingerprint'] in done:
@@ -12342,9 +12620,9 @@ def calculate_n1(app, study_case, qds, request, records, ready, logger, study_ti
             entry['filtered_out'] = dict(filtered)
             for kind, sweep in ((N1_REFERENCE, entry['reference']), (N1_PRIME, entry['scenario'])):
                 if sweep and sweep.get('applied'):
-                    logger.detail("{}: {}".format(kind, sweep['applied']))
-                    logger.detail("{}: time sweep read back before the run: {}".format(kind, sweep.get('settings', '-')))
-                    logger.detail("{}: study times calculated: {}".format(kind, times_text(sweep.get('calculated_times') or ())))
+                    logger.detail("{}: {}".format(kind, sweep['applied']), verbosity=LOG_DETAILED)
+                    logger.detail("{}: time sweep read back before the run: {}".format(kind, sweep.get('settings', '-')), verbosity=LOG_DETAILED)
+                    logger.detail("{}: study times calculated: {}".format(kind, times_text(sweep.get('calculated_times') or ())), verbosity=LOG_DETAILED)
             logger.detail("Calculated at {} study time(s) in {:.1f}s.".format(entry['times'], time.monotonic() - started))
         else:
             logger.detail("n-1 not evaluated: {}".format(entry['reason']), "WARNING")
@@ -12447,7 +12725,7 @@ def kept_runs(study_case, stamp, request, ready, logger, grid=None):
     objects = {object_name(obj): obj for obj in _contents(study_case, '*.ElmRes')}
     prefix = "{}{}_".format(SNAPSHOT_PREFIX, stamp)
     logger.write("CALCULATION", "Re-evaluating the kept results of the run {}: no calculation, PowerFactory is not "
-                 "changed.".format(stamp), 4)
+                 "changed.".format(stamp), 4, verbosity=LOG_COMPACT)
     runs = []
     if setting_value('run_reference'):
         obj = objects.get(prefix + REFERENCE_CASE_ID)
@@ -12578,10 +12856,11 @@ def execute_outage_assessment(app):
     global RUN_STATS
     RUN_STATS = RunStats()
     reset_run_context()
+    set_log_level(saved_log_level(app))
     logger = RunLogger(app)
     logger.step(1, "Startup and context")
     logger.write(
-        "STARTUP", "Outage Assessment publisher {} started.".format(PUBLISHER_VERSION), 1)
+        "STARTUP", "Outage Assessment publisher {} started.".format(PUBLISHER_VERSION), 1, verbosity=LOG_COMPACT)
     script = app.GetCurrentScript()
     study_case = app.GetActiveStudyCase()
     if script is None:
@@ -12645,10 +12924,10 @@ def execute_outage_assessment(app):
         contingencies = read_contingencies(study_case)
         elements = contingency_element_choices(app, contingencies) if CASE_SOURCE == "gui" else []
         kept = kept_stamps(study_case)
-    case_manager = time.monotonic()
-    request = obtain_case_request(app, records, candidates, period, logger, qds_time_info(qds, period), grids,
-                                  contingencies, kept, elements)
-    RUN_STATS.add("case manager (window open, incl. your time)", time.monotonic() - case_manager)
+    with RUN_STATS.wait():
+        request = obtain_case_request(app, records, candidates, period, logger, qds_time_info(qds, period), grids,
+                                      contingencies, kept, elements)
+    set_log_level(request.get("log_level"))
     # The settings are fixed here, after the case manager has closed, and apply to the whole run.
     request["settings_snapshot"] = activate_settings(request.get("settings"))
     logger.write("SETTINGS", "Settings {} with classification rules {}: {}.".format(
@@ -12674,6 +12953,11 @@ def execute_outage_assessment(app):
             runs, n1_runs = kept_runs(study_case, evaluate_stamp, request, ready, logger, span_grid(qds, ready))
         else:
             span = set_qds_span(qds_guard, qds, ready, logger)
+            request["qds_run_period"] = (
+                "QDS period {}, set for the run from the first planned outage of the calculated cases to one QDS "
+                "step after the last (as set in ComStatsim: {}).".format(qds_period_text(span["span"]), span["before"])
+                if span else "QDS period as set in ComStatsim: {} [{}].".format(qds_period_text(qds_period(qds)),
+                                                                                 qds_period_source(qds)))
             if setting_value('run_reference'):
                 runs.append(_calculate_reference(app, study_case, qds, request, records, original_result, logger,
                                                  result_objects, study_time_state))
@@ -12687,7 +12971,7 @@ def execute_outage_assessment(app):
                     "CALCULATION",
                     "Switched the 'Planned Outages' option [{}] on; every planning "
                     "case is calculated with exactly its own planned outages, one "
-                    "after the other.".format(PLANNED_OUTAGE_OPTION), 4)
+                    "after the other.".format(PLANNED_OUTAGE_OPTION), 4, verbosity=LOG_DETAILED)
                 calculated = {}
                 for plan in ready:
                     source = calculated.get(plan["fingerprint"])
@@ -12707,7 +12991,7 @@ def execute_outage_assessment(app):
                     "No planning case can be calculated; the case runs were skipped.", 4, "WARNING")
             if N1_REFERENCE not in (request.get("assessments") or ()):
                 logger.write("CALCULATION", "n-1 is not calculated: it is not ticked in the case manager "
-                             "(Assessments: n-1, (n-1)').", 4)
+                             "(Assessments: n-1, (n-1)').", 4, verbosity=LOG_DETAILED)
             elif not ready:
                 logger.write("CALCULATION", "n-1 is not calculated: no planning case can be calculated.", 4, "WARNING")
             else:
@@ -12720,7 +13004,7 @@ def execute_outage_assessment(app):
     finally:
         logger.step(5, "Restore and clean-up")
         restoring = time.monotonic()
-        logger.write("RESTORE", "Restoring the original PowerFactory state.", 5)
+        logger.write("RESTORE", "Restoring the original PowerFactory state.", 5, verbosity=LOG_DETAILED)
         state_errors.extend(_restore_study_time(study_time_state, logger))
         state_errors.extend(
             _restore_planned_outage_option(qds, original_option, logger))
@@ -12735,7 +13019,7 @@ def execute_outage_assessment(app):
             "Outage Assessment could not fully restore PowerFactory state: {}. Stop and "
             "verify the study case manually before continuing.".format(
                 "; ".join(state_errors)))
-    logger.write("RESTORE", "Original PowerFactory state restored and verified.", 5)
+    logger.write("RESTORE", "Original PowerFactory state restored and verified.", 5, verbosity=LOG_COMPACT)
     logger.step(6, "Evaluation (phase 2): reading and comparing the kept result objects")
     if open_column_buffer(app) is None:
         logger.write("EXTRACTION", "No IntVec could be created in this ComPython, so results are read value by value "
@@ -12748,11 +13032,13 @@ def execute_outage_assessment(app):
         close_column_buffer()
     for result in results:
         release_values(result)
-    check_run_budget(results)
-    apply_reference(results)
-    judge_cases(results)
+    with RUN_STATS.measure("judge the cases"):
+        check_run_budget(results)
+        apply_reference(results)
+        judge_cases(results)
     logger.step(7, "Results and report publication")
-    _log_results(logger, results, request)
+    with RUN_STATS.measure("log the results"):
+        _log_results(logger, results, request)
     try:
         project = app.GetActiveProject()
     except Exception:
@@ -12782,24 +13068,24 @@ def execute_outage_assessment(app):
         logger.write(
             "COMPLETE",
             "Standalone run finished: {} report table(s) built, none published; {} planning case(s), {} calculated "
-            "case(s).".format(len(counts), len(request["cases"]), len(results)), 7)
-        logger.table(("Table", "Rows (built, not published)"), [(name, count) for name, count in counts.items() if count])
+            "case(s).".format(len(counts), len(request["cases"]), len(results)), 7, verbosity=LOG_COMPACT)
+        logger.table(("Table", "Rows (built, not published)"), [(name, count) for name, count in counts.items() if count], verbosity=LOG_DETAILED)
         log_run_summary(logger)
         return counts
     logger.write(
-        "REPORT", "Preparing publication of {} report tables.".format(len(TABLES)), 7)
+        "REPORT", "Preparing publication of {} report tables.".format(len(TABLES)), 7, verbosity=LOG_DETAILED)
     with RUN_STATS.measure("publish report tables"):
         counts = publish_report(report, payload, log=lambda message: logger.write(
-            "REPORT", message, 7))
+            "REPORT", message, 7, verbosity=LOG_STANDARD if message.startswith('Publication finished') else LOG_DETAILED))
     logger.write(
         "COMPLETE",
         "Report published successfully: {} table(s), {} planning case(s), "
         "{} calculated case(s). Generate the report now from the IntReport "
         "'{}' that contains this script.".format(
-            len(counts), len(request["cases"]), len(results), object_name(report)), 7)
+            len(counts), len(request["cases"]), len(results), object_name(report)), 7, verbosity=LOG_COMPACT)
     logger.table(
         ("Table", "Rows"),
-        [(name, count) for name, count in counts.items() if count])
+        [(name, count) for name, count in counts.items() if count], verbosity=LOG_DETAILED)
     log_run_summary(logger)
     return counts
 
@@ -12837,7 +13123,7 @@ def main():
         execute_outage_assessment(app)
         return True
     except OutageAssessmentCancelled as exc:
-        logger.write("CANCELLED", "{} Report generation cancelled.".format(exc), level="INFO")
+        logger.write("CANCELLED", "{} Report generation cancelled.".format(exc), level="INFO", verbosity=LOG_COMPACT)
         # This script can be an IntReport extension. Returning False here is
         # discarded by the top-level main() call and looks like a successful
         # extension to the host, which can then render missing or stale tables.

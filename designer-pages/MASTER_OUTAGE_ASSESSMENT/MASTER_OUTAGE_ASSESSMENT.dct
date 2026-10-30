@@ -174,10 +174,12 @@
     </ScriptedCaseCounts>
     <ScriptedLineLoadingBars Ref="10" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedLineLoadingBars</Alias>
-      <Columns isList="true" count="3">
+      <Columns isList="true" count="5">
         <value>rank,System.Int32</value>
         <value>element_name,System.String</value>
-        <value>max_value,System.Double</value>
+        <value>value_ok,System.Double</value>
+        <value>value_warning,System.Double</value>
+        <value>value_over,System.Double</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
       <Dictionary isRef="0" />
@@ -185,7 +187,7 @@
       <Name>ScriptedLineLoadingBars</Name>
       <NameInSource>SQLite</NameInSource>
       <Parameters isList="true" count="0" />
-      <SqlCommand>SELECT * FROM "ScriptedLineLoadingBars" ORDER BY "rank"</SqlCommand>
+      <SqlCommand>SELECT * FROM "ScriptedLineLoadingBars" ORDER BY "rank" DESC</SqlCommand>
     </ScriptedLineLoadingBars>
     <ScriptedCaseComparison Ref="11" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedCaseComparison</Alias>
@@ -459,8 +461,8 @@
         <value>start_text,System.String</value>
         <value>end_text,System.String</value>
         <value>start_hours,System.Double</value>
-        <value>end_hours,System.Double</value>
         <value>gantt_label,System.String</value>
+        <value>duration_hours,System.Double</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
       <Dictionary isRef="0" />

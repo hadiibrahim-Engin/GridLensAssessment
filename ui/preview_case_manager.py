@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-GridLens Case Manager - GUI test for DIgSILENT PowerFactory 2026 (no calculation).
+Outage Assessment Case Manager - GUI test for DIgSILENT PowerFactory 2026 (no calculation).
 
 A separate, self-contained script: it does not load or import the production
 script outage-assessment/main.py. It contains its own copy of the case
 manager window (the block marked "copy of outage-assessment/main.py"
-below), so it shows exactly the window GridLens shows before a calculation,
+below), so it shows exactly the window Outage Assessment shows before a calculation,
 with the planned outages of the active project:
 
   1. Does tkinter with Tcl/Tk work in this PowerFactory installation?
@@ -17,8 +17,8 @@ with the planned outages of the active project:
 
 Read-only: this script writes no PowerFactory attribute, starts no QDS and
 switches nothing. "Save configuration" and "Load saved configuration" in the
-window work on a temporary copy, so not even the GridLens case configuration in
-~/GridLens/cases changes. After "Start calculation" the configuration and the
+window work on a temporary copy, so not even the Outage Assessment case configuration in
+~/OutageAssessment/cases changes. After "Start calculation" the configuration and the
 preview are printed to the output window; nothing is calculated.
 
 Paste the whole file into a ComPython and run it. Dependencies: Python
@@ -38,7 +38,7 @@ import tempfile
 import time
 import traceback
 
-# Start from the case configuration GridLens saved for this project (read only).
+# Start from the case configuration Outage Assessment saved for this project (read only).
 USE_SAVED_CONFIGURATION = True
 
 PREFIX = "[CASE-MANAGER-TEST] "
@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>
-# GridLens 8.0.1: 176 definitions.
+# Outage Assessment 8.1.0: 185 definitions.
 import hashlib
 import math
 import re
@@ -89,7 +89,7 @@ ENERGIZED_MIN_PU = 0.1
 MAX_N1_TIMES = 2000
 
 
-PUBLISHER_VERSION = '8.0.1'
+PUBLISHER_VERSION = '8.1.0'
 
 
 RUN_REFERENCE_CASE = True
@@ -98,10 +98,16 @@ RUN_REFERENCE_CASE = True
 CASE_CONFIG_DIR = ''
 
 
+LOG_LEVEL = 'standard'
+
+
+CONFIG_FOLDER, PREVIOUS_CONFIG_FOLDER = 'OutageAssessment', 'GridLens'
+
+
 MAX_CASES = 5
 
 
-CASE_CONFIG_SCHEMA = 'gridlens.cases'
+CASE_CONFIG_SCHEMA = 'outage_assessment.cases'
 
 
 CASE_CONFIG_SCHEMA_VERSION = 2
@@ -119,7 +125,7 @@ ALLOW_OUTAGE_TIME_OVERRIDE = False
 GRID_NAME_FILTER = ''
 
 
-SNAPSHOT_PREFIX = 'GridLens_'
+SNAPSHOT_PREFIX = 'OA_'
 
 
 MAX_LABEL_LENGTH = 80
@@ -224,7 +230,7 @@ def format_limit(value):
     return '{:g}'.format(value)
 
 
-SOURCE_GRIDLENS, SOURCE_POWERFACTORY, SOURCE_USER = 'GridLens', 'PowerFactory', 'user'
+SOURCE_OUTAGE_ASSESSMENT, SOURCE_POWERFACTORY, SOURCE_USER = 'default', 'PowerFactory', 'user'
 
 
 CATEGORY_EVALUATION, CATEGORY_CALCULATION = 'A', 'B'
@@ -253,7 +259,7 @@ NOT_VERIFIED = 'not verified yet'
 
 
 CONTINGENCY_SETTINGS_NOTE = (
-    'Read only: set in the contingency analysis (ComSimoutage) of the study case; GridLens reads it '
+    'Read only: set in the contingency analysis (ComSimoutage) of the study case; Outage Assessment reads it '
     'and does not change it.')
 
 
@@ -261,7 +267,7 @@ NUMERIC_TOLERANCE = 1e-9
 
 
 def _setting(key, section, label, unit, default, kind, category=CATEGORY_EVALUATION, editable=True, applies='n-0',
-             source=SOURCE_GRIDLENS, note='', choices=None):
+             source=SOURCE_OUTAGE_ASSESSMENT, note='', choices=None):
     return {'key': key, 'section': section, 'label': label, 'unit': unit, 'default': default, 'kind': kind,
             'category': category, 'editable': editable, 'applies': applies, 'source': source, 'note': note,
             'choices': choices or (N1_LIMIT_CHOICES if kind == 'choice' else None)}
@@ -277,10 +283,10 @@ SETTINGS = (
              applies="n-0, n-1, (n-1)'",
              note='evaluation only, also in a re-evaluation; no grid selected: every grid (or GRID_NAME_FILTER)'),
     _setting('contingency_grids', 'Network scope', 'n-1 filter: grids of the outaged equipment', '', None, 'grids',
-             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_GRIDLENS,
+             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
              note='calculation: the other contingencies are "Not analysed" (outserv) for the run; none: every grid'),
     _setting('contingency_elements', 'Network scope', 'n-1 filter: outaged elements', '', (), 'elements',
-             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_GRIDLENS,
+             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
              note='calculation: only contingencies outaging a selected element are analysed, the others are "Not '
                   'analysed" for the run; none selected: every element'),
     _setting('line_warning', 'Thermal limits', 'Warning threshold, lines', '%', LOADING_WARNING, 'limit'),
@@ -292,9 +298,9 @@ SETTINGS = (
     _setting('n1_limit_global', 'Thermal limits', "Global assessment limit for n-1 and (n-1)'", '%', LOADING_MAX, 'limit',
              applies="n-1, (n-1)'", note='only used with a global assessment limit'),
     _setting('voltage_min_pu', 'Voltage limits', 'Minimum voltage, every voltage level', 'p.u.', VOLTAGE_MIN, 'pu',
-             note='GridLens proposal, to be confirmed by the engineer'),
+             note='Outage Assessment proposal, to be confirmed by the engineer'),
     _setting('voltage_max_pu', 'Voltage limits', 'Maximum voltage, every voltage level', 'p.u.', VOLTAGE_MAX, 'pu',
-             note='GridLens proposal, to be confirmed by the engineer'),
+             note='Outage Assessment proposal, to be confirmed by the engineer'),
     _setting('energized_min_pu', 'Voltage limits', 'De-energised below', 'p.u.', ENERGIZED_MIN_PU, 'pu',
              note='a node below this voltage counts as de-energised at that time step, not as a value'),
     _setting('post_fault_voltage', 'Voltage limits', 'Post-fault voltage limits', '', None, 'text', editable=False,
@@ -330,7 +336,7 @@ SETTINGS = (
              note='off: no comparison with a reference, every violation counts as found in the case'),
     _setting('qds_period', 'Run', 'QDS period', '', QDS_SPAN_OUTAGES, 'choice', applies="n-0, n-1, (n-1)'",
              choices=QDS_SPAN_CHOICES,
-             note='planned outages: one QDS step before the first to one after the last planned outage of the '
+             note='planned outages: from the first to one QDS step after the last planned outage of the '
                   'calculated cases, written to ComStatsim for the run and restored'),
     _setting('max_cases', 'Run', 'Planning cases, at most', 'cases', MAX_CASES, 'count',
              note='every case is one more QDS run over the complete period'),
@@ -361,7 +367,7 @@ _WARNING_PAIRS = (('line_warning', 'line_limit'), ('transformer_warning', 'trans
 
 
 def default_settings():
-    """The editable values as GridLens ships them."""
+    """The editable values as Outage Assessment ships them."""
     return {setting['key']: setting['default'] for setting in SETTINGS if setting['editable']}
 
 
@@ -446,11 +452,11 @@ def validate_settings(overrides):
 
 
 def effective_settings(overrides=None):
-    """Every editable value with the overrides applied; raises GridLensError for invalid overrides."""
+    """Every editable value with the overrides applied; raises OutageAssessmentError for invalid overrides."""
     overrides = overrides or {}
     problems = validate_settings(overrides)
     if problems:
-        raise GridLensError('The settings cannot be used: {}.'.format('; '.join(message for _, message in problems)))
+        raise OutageAssessmentError('The settings cannot be used: {}.'.format('; '.join(message for _, message in problems)))
     values = default_settings()
     for key, value in overrides.items():
         values[key] = parse_setting(key, value)[0]
@@ -458,7 +464,7 @@ def effective_settings(overrides=None):
 
 
 def clean_overrides(values):
-    """Only the values that differ from the GridLens default; equal values are no override."""
+    """Only the values that differ from the Outage Assessment default; equal values are no override."""
     defaults = default_settings()
     return {key: value for key, value in values.items() if key in defaults and value != defaults[key]}
 
@@ -484,10 +490,10 @@ def setting_text(key, value):
 
 
 def overrides_text(overrides):
-    """'line limit 110 % (GridLens 100 %); ...' or 'GridLens defaults'."""
+    """'line limit 110 % (Outage Assessment 100 %); ...' or 'Outage Assessment defaults'."""
     if not overrides:
-        return 'GridLens defaults, no user override'
-    return '; '.join('{} = {} (GridLens default {})'.format(
+        return 'Outage Assessment defaults, no user override'
+    return '; '.join('{} = {} (Outage Assessment default {})'.format(
         SETTINGS_BY_KEY[key]['label'], setting_text(key, value), setting_text(key, SETTINGS_BY_KEY[key]['default']))
         for key, value in sorted(overrides.items()))
 
@@ -496,7 +502,7 @@ _ACTIVE_SETTINGS = None
 
 
 def active_overrides():
-    """The overrides of the active settings; {} with the GridLens defaults."""
+    """The overrides of the active settings; {} with the Outage Assessment defaults."""
     return clean_overrides(_ACTIVE_SETTINGS or {})
 
 
@@ -623,7 +629,7 @@ QDS_CORE_SETTINGS = (
 )
 
 
-class GridLensError(RuntimeError):
+class OutageAssessmentError(RuntimeError):
     """Expected runtime error with an actionable user-facing message.
 
     `details` are the facts behind it (objects, values read back, what was
@@ -640,8 +646,40 @@ class GridLensError(RuntimeError):
 RUN_CONTEXT = {}
 
 
+LOG_COMPACT, LOG_STANDARD, LOG_DETAILED, LOG_DIAGNOSTIC = LOG_LEVELS = ('compact', 'standard', 'detailed', 'diagnostic')
+
+
+LOG_LEVEL_LABELS = {LOG_COMPACT: 'Compact', LOG_STANDARD: 'Standard', LOG_DETAILED: 'Detailed', LOG_DIAGNOSTIC: 'Diagnostic'}
+
+
+LOG_LEVEL_HELP = {
+    LOG_COMPACT: 'step headings, warnings and errors, the case results and the completion line',
+    LOG_STANDARD: 'compact plus the settings, planning cases, QDS period, applied outages, outage checks, '
+                  'time-dependent operation, quality findings and the time measurement',
+    LOG_DETAILED: 'standard plus every planned outage with its window, switch states, recorded variables, grids '
+                  'and the publication of each table',
+    LOG_DIAGNOSTIC: 'detailed plus project paths, the complete data of every planned outage and the object interfaces',
+}
+
+
+def normalized_log_level(level):
+    """A known log level; anything else is LOG_LEVEL of the script, and the standard level when that is unknown."""
+    if level in LOG_LEVELS:
+        return level
+    return LOG_LEVEL if LOG_LEVEL in LOG_LEVELS else LOG_STANDARD
+
+
+def set_log_level(level):
+    """The level of every logger of the running run, also the one that reports a failure."""
+    RUN_CONTEXT['log_level'] = normalized_log_level(level)
+
+
 class RunLogger:
     """Structured progress output for the PowerFactory output window.
+
+    Every line has a severity (INFO, WARNING, ERROR) and a verbosity (LOG_LEVELS):
+    a line shows when its verbosity is within the chosen level. Warnings, errors,
+    section and case headings are always shown.
 
     Three levels keep a long run readable:
 
@@ -654,9 +692,23 @@ class RunLogger:
 
     WIDTH = 78
 
-    def __init__(self, app):
+    def __init__(self, app, level=None):
         self.app = app
-        self.started = time.monotonic()
+        self._level = None if level is None else normalized_log_level(level)
+
+    @property
+    def level(self):
+        return self._level or normalized_log_level(RUN_CONTEXT.get('log_level', LOG_LEVEL))
+
+    @level.setter
+    def level(self, value):
+        self._level = normalized_log_level(value)
+
+    def shows(self, verbosity):
+        return LOG_LEVELS.index(normalized_log_level(verbosity)) <= LOG_LEVELS.index(self.level)
+
+    def _hidden(self, level, verbosity):
+        return level not in ("WARNING", "ERROR") and not self.shows(verbosity)
 
     def _emit(self, line):
         printer = getattr(self.app, "PrintPlain", None)
@@ -668,18 +720,20 @@ class RunLogger:
                 pass
         print(line, flush=True)
 
-    def write(self, stage, message, step=None, level="INFO"):
+    def write(self, stage, message, step=None, level="INFO", verbosity=LOG_STANDARD):
+        if self._hidden(level, verbosity):
+            return
         position = "--/{}".format(TOTAL_STEPS)
         if step is not None:
             position = "{:02d}/{}".format(step, TOTAL_STEPS)
-        elapsed = time.monotonic() - self.started
         if level in ("WARNING", "ERROR") and stage != "FAILED":
             _remember_warning(message)
-        self._emit("[GridLens][{}][{}][{}][{:7.1f}s] {}".format(
-            position, level, stage, elapsed, message))
+        # Clock time, and the run time without the time the case manager window stood open.
+        self._emit("[Outage Assessment][{}][{}][{}][{} +{:.1f}s] {}".format(
+            position, level, stage, datetime.now().strftime("%H:%M:%S"), RUN_STATS.run_time(), message))
 
     def _plain(self, text, level="INFO"):
-        self._emit("[GridLens]{} {}".format(
+        self._emit("[Outage Assessment]{} {}".format(
             "" if level == "INFO" else "[" + level + "]", text))
 
     def section(self, title):
@@ -691,6 +745,7 @@ class RunLogger:
     def step(self, number, title):
         RUN_CONTEXT['step'] = "STEP {}/{} \u00b7 {}".format(number, TOTAL_STEPS, title)
         RUN_CONTEXT['case'] = ''
+        RUN_STATS.start_step(number, title)
         self.section(RUN_CONTEXT['step'])
 
     def case(self, title):
@@ -698,13 +753,17 @@ class RunLogger:
         head = ".. " + title + " "
         self._plain(head + "." * max(3, self.WIDTH - len(head)))
 
-    def detail(self, message, level="INFO"):
+    def detail(self, message, level="INFO", verbosity=LOG_STANDARD):
+        if self._hidden(level, verbosity):
+            return
         if level == "WARNING":
             _remember_warning(message)
         self._plain("    " + message, level)
 
-    def table(self, header, rows, level="INFO"):
+    def table(self, header, rows, level="INFO", verbosity=LOG_STANDARD):
         """Rows of strings in aligned columns; the last column is not padded."""
+        if self._hidden(level, verbosity):
+            return
         lines = ([tuple(header)] if header else []) + [
             tuple(str(cell) for cell in row) for row in rows]
         if not lines:
@@ -718,6 +777,26 @@ class RunLogger:
                 self.detail("  ".join(
                     "-" * widths[i] if i < len(line) - 1 else "-" * min(widths[i], 40)
                     for i in range(len(line))))
+
+
+class WarningGroup:
+    """Warnings of one kind about many objects: one line each from the detailed level on, else one line per kind."""
+
+    def __init__(self, logger, stage, step, noun='planned outage(s)'):
+        self.logger, self.stage, self.step, self.noun = logger, stage, step, noun
+        self.kinds = {}
+
+    def add(self, kind, message, name):
+        if self.logger.shows(LOG_DETAILED):
+            self.logger.write(self.stage, message, self.step, "WARNING")
+        else:
+            self.kinds.setdefault(kind, []).append(name)
+
+    def flush(self):
+        for kind, names in self.kinds.items():
+            self.logger.write(self.stage, "{} {}: {}: {}.".format(
+                len(names), self.noun, kind, clip_text(', '.join(names), 300)), self.step, "WARNING")
+        self.kinds = {}
 
 
 def _remember_warning(message):
@@ -743,9 +822,65 @@ class RunStats:
         self.started = time.monotonic()
         self.services = {}
         self.counts = {}
+        # The time the case manager window stood open (the engineer's time) is no run time; services
+        # measured meanwhile (building the window) are kept apart.
+        self.waited = 0.0
+        self._wait_started = None
+        self.wait_services = {}
+        self.steps = []
+        self._step = None
+        self.cases = {}
+        # Parts of a service ({service: {part: [calls, seconds]}}), shown indented below it; they are inside its
+        # time and do not count twice.
+        self.parts = {}
+
+    def run_time(self):
+        """Seconds since the start without the time the case manager window stood open."""
+        now = time.monotonic()
+        waiting = self.waited + (now - self._wait_started if self._wait_started is not None else 0.0)
+        return max(0.0, now - self.started - waiting)
+
+    def wait(self):
+        """with RUN_STATS.wait(): the block (the open case manager window) is not run time."""
+        stats = self
+
+        class _Wait:
+            def __enter__(self):
+                stats._wait_started = time.monotonic()
+                return self
+
+            def __exit__(self, *_unused):
+                stats.waited += time.monotonic() - stats._wait_started
+                stats._wait_started = None
+                return False
+        return _Wait()
+
+    def start_step(self, number, title):
+        self.finish_step()
+        self._step = (number, title, self.run_time())
+
+    def finish_step(self):
+        if self._step is not None:
+            number, title, began = self._step
+            self.steps.append((number, title, self.run_time() - began))
+            self._step = None
+
+    def part(self, service, name, seconds, calls=1):
+        """Time of one part of `service`, e.g. the PowerFactory calls while reading results."""
+        entry = self.parts.setdefault(service, {}).setdefault(name, [0, 0.0])
+        entry[0] += calls
+        entry[1] += max(0.0, seconds)
+
+    def part_seconds(self, service, name):
+        return self.parts.get(service, {}).get(name, [0, 0.0])[1]
+
+    def case_add(self, case_id, phase, seconds):
+        """Time of one phase (calculation, reading, comparison, n-1) of one case."""
+        phases = self.cases.setdefault(case_id, {})
+        phases[phase] = phases.get(phase, 0.0) + max(0.0, seconds)
 
     def add(self, service, seconds, calls=1):
-        entry = self.services.setdefault(service, [0, 0.0])
+        entry = (self.wait_services if self._wait_started is not None else self.services).setdefault(service, [0, 0.0])
         entry[0] += calls
         entry[1] += max(0.0, seconds)
 
@@ -766,10 +901,26 @@ class RunStats:
                 return False
         return _Block()
 
+    CASE_PHASES = ('calculation', 'reading', 'comparison', 'n-1')
+
+    def step_rows(self):
+        total = self.run_time()
+        return [("STEP {}/{} \u00b7 {}".format(number, TOTAL_STEPS, title), '{:.1f}'.format(seconds),
+                 '{:.0f} %'.format(100.0 * seconds / total) if total else '-') for number, title, seconds in self.steps]
+
+    def case_rows(self):
+        return [(case_id,) + tuple('{:.1f}'.format(phases[phase]) if phase in phases else '-' for phase in self.CASE_PHASES)
+                + ('{:.1f}'.format(sum(phases.values())),) for case_id, phases in self.cases.items()]
+
     def rows(self):
-        total = time.monotonic() - self.started
-        rows = [(service, str(calls), '{:.1f}'.format(seconds), '{:.0f} %'.format(100.0 * seconds / total) if total else '-')
-                for service, (calls, seconds) in self.services.items()]
+        total = self.run_time()
+        def share(seconds):
+            return '{:.0f} %'.format(100.0 * seconds / total) if total else '-'
+        rows = []
+        for service, (calls, seconds) in self.services.items():
+            rows.append((service, str(calls), '{:.1f}'.format(seconds), share(seconds)))
+            rows += [('  - ' + name, str(part_calls), '{:.1f}'.format(part_seconds), share(part_seconds))
+                     for name, (part_calls, part_seconds) in self.parts.get(service, {}).items()]
         measured = sum(seconds for _, seconds in self.services.values())
         rows.append(('other (logging, checks, waiting)', '-', '{:.1f}'.format(max(0.0, total - measured)), '-'))
         rows.append(('total', '-', '{:.1f}'.format(total), '100 %'))
@@ -939,7 +1090,7 @@ def _find_project_outages(app):
         more, more_queries = _outages_below(project)
         found, queries = found + more, queries + more_queries
     if queries == 0:
-        raise GridLensError(
+        raise OutageAssessmentError(
             "Planned-outage discovery could not query the operational library "
             "or active project. No calculation was started.")
     unique = {}
@@ -1060,7 +1211,7 @@ def window_overlaps_period(window, period):
 def classify_planned_outages(app, logger, period=(None, None)):
     """Report which planned outages PowerFactory will apply for this period.
 
-    GridLens never applies an outage itself. PowerFactory does that during the
+    Outage Assessment never applies an outage itself. PowerFactory does that during the
     calculation once PLANNED_OUTAGE_OPTION is set, driven by each outage's own
     time window. This pass only decides what to tell the reader, and whether an
     outage run is worth starting at all.
@@ -1077,13 +1228,15 @@ def classify_planned_outages(app, logger, period=(None, None)):
     logger.write(
         "OUTAGES", "Found {} planned outage object(s).".format(len(records)), 3)
     candidates = []
+    # One warning line per outage from the detailed level on; below, one line per kind with the names.
+    grouped = WarningGroup(logger, "OUTAGES", 3)
     for index, record in enumerate(records, 1):
         outage = record["_object"]
         prefix = "Outage {}/{} '{}': ".format(index, len(records), record["name"])
         if finite_number(safe_attr(outage, "outserv", 0)) == 1.0:
             record["status"] = OUTAGE_SKIPPED
             record["skip_reason"] = "Outage object is disabled (outserv=1)."
-            logger.write("OUTAGES", prefix + record["skip_reason"], 3, "WARNING")
+            grouped.add("disabled in PowerFactory (outserv=1)", prefix + record["skip_reason"], record["name"])
             continue
         window = outage_window(outage)
         overlap = window_overlaps_period(window, period)
@@ -1095,7 +1248,8 @@ def classify_planned_outages(app, logger, period=(None, None)):
                 "{} to {}.".format(
                     _format_pf_time(window[0]), _format_pf_time(window[1]),
                     _format_pf_time(period[0]), _format_pf_time(period[1])))
-            logger.write("OUTAGES", prefix + record["skip_reason"], 3, "WARNING")
+            grouped.add("window outside the simulated period {} to {}".format(
+                _format_pf_time(period[0]), _format_pf_time(period[1])), prefix + record["skip_reason"], record["name"])
             continue
         record["status"] = OUTAGE_CONSIDERED
         if overlap is True:
@@ -1104,34 +1258,35 @@ def classify_planned_outages(app, logger, period=(None, None)):
                 "OUTAGES",
                 prefix + "window {} to {} overlaps the simulated period; "
                 "PowerFactory will apply it.".format(
-                    _format_pf_time(window[0]), _format_pf_time(window[1])), 3)
+                    _format_pf_time(window[0]), _format_pf_time(window[1])), 3, verbosity=LOG_DETAILED)
         else:
             record["skip_reason"] = (
                 "The outage window could not be compared with the simulated "
                 "period; PowerFactory decides whether it applies.")
-            logger.write("OUTAGES", prefix + record["skip_reason"], 3, "WARNING")
-            logger.write(
-                "DIAGNOSTIC", prefix + describe_object_api(outage), 3, "WARNING")
+            grouped.add("window not comparable with the simulated period, PowerFactory decides whether it applies",
+                        prefix + record["skip_reason"], record["name"])
+            logger.write("DIAGNOSTIC", prefix + describe_object_api(outage), 3, verbosity=LOG_DIAGNOSTIC)
         candidates.append(record)
+    grouped.flush()
     logger.table(
         ("#", "Planned outage", "Class", "Status", "Window", "Equipment"),
         [(number, record["name"], record["source_class"], record["status"],
           period_text(record["start_time"], record["end_time"]) or "unknown",
           clip_text(record["equipment_name"] or "none listed", 60))
-         for number, record in enumerate(records, 1)])
-    logger.detail("Where each outage object is stored (project path):")
+         for number, record in enumerate(records, 1)], verbosity=LOG_DETAILED)
+    logger.detail("Where each outage object is stored (project path):", verbosity=LOG_DIAGNOSTIC)
     logger.table(
         ("#", "Planned outage", "Location"),
         [(number, record["name"], object_key(record["_object"]))
-         for number, record in enumerate(records, 1)])
-    logger.detail("What each outage object holds (its data and the actions below it):")
+         for number, record in enumerate(records, 1)], verbosity=LOG_DIAGNOSTIC)
+    logger.detail("What each outage object holds (its data and the actions below it):", verbosity=LOG_DIAGNOSTIC)
     for number, record in enumerate(records, 1):
-        logger.detail("{} {}: {}".format(number, record["name"], data_attributes_text(record["_object"])))
+        logger.detail("{} {}: {}".format(number, record["name"], data_attributes_text(record["_object"])), verbosity=LOG_DIAGNOSTIC)
         contents = outage_contents_text(record["_object"])
         for line in contents:
-            logger.detail("    below it: " + line)
+            logger.detail("    below it: " + line, verbosity=LOG_DIAGNOSTIC)
         if not contents:
-            logger.detail("    below it: nothing (no own switching actions; PowerFactory isolates the components itself)")
+            logger.detail("    below it: nothing (no own switching actions; PowerFactory isolates the components itself)", verbosity=LOG_DIAGNOSTIC)
     return records, candidates
 
 
@@ -1209,7 +1364,7 @@ def assign_definitions(records):
 def empty_case_config(project_key=''):
     return {'schema': CASE_CONFIG_SCHEMA, 'schema_version': CASE_CONFIG_SCHEMA_VERSION, 'revision': 0,
             'project': project_key, 'saved_at': '', 'saved_by': '', 'assessments': ['n-0'], 'background': [],
-            'cases': [], 'rules': [], 'settings': {}}
+            'cases': [], 'rules': [], 'settings': {}, 'log_level': normalized_log_level(LOG_LEVEL)}
 
 
 def _occurrence_window(record, plan_case):
@@ -1236,21 +1391,21 @@ def upgrade_case_config(config):
     for case in cases:
         for field in ('includes', 'requires'):
             if not _is_text_list(case.get(field, [])):
-                raise GridLensError('Cannot upgrade case {!r}: {} must be a list of case ids.'.format(case.get('id'), field))
+                raise OutageAssessmentError('Cannot upgrade case {!r}: {} must be a list of case ids.'.format(case.get('id'), field))
     # Check the ordinary fields before walking the legacy references.
     plain = dict(upgraded, cases=[{key: value for key, value in case.items() if key not in ('includes', 'requires')}
                                  for case in cases])
     plain.pop('exclusive_groups', None)
     problems = validate_case_config(plain, max_cases=None)
     if problems:
-        raise GridLensError('Cannot upgrade case configuration: {}.'.format('; '.join(problems)))
+        raise OutageAssessmentError('Cannot upgrade case configuration: {}.'.format('; '.join(problems)))
     by_id = {case['id']: case for case in cases}
 
     def collect(case_id, trail=()):
         if case_id in trail:
-            raise GridLensError('Cannot upgrade cases that include each other: {}.'.format(' -> '.join(trail + (case_id,))))
+            raise OutageAssessmentError('Cannot upgrade cases that include each other: {}.'.format(' -> '.join(trail + (case_id,))))
         if case_id not in by_id:
-            raise GridLensError('Cannot upgrade: included case {!r} does not exist.'.format(case_id))
+            raise OutageAssessmentError('Cannot upgrade: included case {!r} does not exist.'.format(case_id))
         part = by_id[case_id]
         yield part
         for child in part.get('includes') or ():
@@ -1326,6 +1481,8 @@ def validate_case_config(config, max_cases=-1):
         problems.append('the n-0 quasi-dynamic assessment is always calculated: the report is built on it')
     elif N1_PRIME in assessments and N1_REFERENCE not in assessments:
         problems.append("(n-1)' is compared with n-1, so it needs n-1")
+    if config.get('log_level', LOG_STANDARD) not in LOG_LEVELS:
+        problems.append('log_level must be one of {}'.format(', '.join(LOG_LEVELS)))
     if not _is_text_list(config.get('background', [])):
         problems.append('background must be a list of planned outage paths')
     problems += ['settings: ' + problem for _, problem in validate_settings(config.get('settings', {}))]
@@ -1386,7 +1543,7 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
     """
     problems = validate_case_config(config, None if source == 'per_outage' else case_limit(config))
     if problems:
-        raise GridLensError('The case configuration cannot be used: {}.'.format('; '.join(problems)))
+        raise OutageAssessmentError('The case configuration cannot be used: {}.'.format('; '.join(problems)))
     if follows_outages(config.get('settings') or {}):
         # The run sets the QDS period from the planned outages of its cases: none of them lies outside it.
         period = (None, None)
@@ -1402,7 +1559,7 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
         elif record not in background:
             background.append(record)
             if record.get('originally_ignored'):
-                request_warnings.append('fixed outage {} is set to Ignored in PowerFactory; GridLens applies it in the reference and every case'.format(record['name']))
+                request_warnings.append('fixed outage {} is set to Ignored in PowerFactory; Outage Assessment applies it in the reference and every case'.format(record['name']))
     background_keys = {record['key'] for record in background}
     plans = []
     # An excluded case is neither calculated nor reported.
@@ -1474,7 +1631,7 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
             if record['key'] in background_keys:
                 plan['warnings'].append('{} is a fixed outage of the reference too; it adds nothing to this case'.format(record['name']))
             if record.get('originally_ignored'):
-                plan['warnings'].append('{} is set to Ignored in PowerFactory; GridLens applies it for this case only'.format(record['name']))
+                plan['warnings'].append('{} is set to Ignored in PowerFactory; Outage Assessment applies it for this case only'.format(record['name']))
             if None in window:
                 plan['warnings'].append('the window of {} is not readable; the complete period is assessed'.format(record['name']))
         known = [window for window in windows.values() if None not in window]
@@ -1506,12 +1663,13 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
         'disabled': disabled,
         'assessments': list(config.get('assessments') or ['n-0']),
         'settings': dict(config.get('settings') or {}),
+        'log_level': normalized_log_level(config.get('log_level')),
     }
 
 
 def legacy_case_config_path(project_key):
-    """Where GridLens 8.0 (schema 1) keeps the cases of a project; this version only reads that file."""
-    folder = CASE_CONFIG_DIR or os.path.join(os.path.expanduser('~'), 'GridLens', 'cases')
+    """Where Outage Assessment 8.0 (schema 1) keeps the cases of a project; this version only reads that file."""
+    folder = CASE_CONFIG_DIR or os.path.join(os.path.expanduser('~'), CONFIG_FOLDER, 'cases')
     stem = re.sub(r'[^A-Za-z0-9_.-]+', '_', project_key.rsplit('\\', 1)[-1])[:40] or 'project'
     digest = hashlib.sha256(project_key.encode('utf-8')).hexdigest()[:8]
     return os.path.join(folder, '{}_{}.json'.format(stem, digest))
@@ -1530,32 +1688,42 @@ def _legacy_sibling(path):
     return path[:-len(marker)] + '.json' if path.endswith(marker) else None
 
 
+def _previous_folder_paths(path):
+    """The same file (and its schema-1 sibling) in the folder of the former name; none with CASE_CONFIG_DIR."""
+    if CASE_CONFIG_DIR:
+        return []
+    earlier = os.path.join(os.path.expanduser('~'), PREVIOUS_CONFIG_FOLDER, 'cases', os.path.basename(path))
+    return [earlier, _legacy_sibling(earlier)]
+
+
 def load_case_config(path):
     """The saved configuration, or None when there is none; a damaged file raises.
 
     Only the structure is checked here, not the number of cases: a file with
-    more cases than MAX_CASES (e.g. saved by GridLens 8.0) must still open in
+    more cases than MAX_CASES (e.g. saved by Outage Assessment 8.0) must still open in
     the case manager, where cases can be deleted. Calculating and saving it is
     refused with the reason (resolve_request, save_case_config).
     """
     if not os.path.isfile(path):
-        # Not saved by this version yet: start from the GridLens 8.0 file, read only.
-        legacy = _legacy_sibling(path)
-        if legacy is None or not os.path.isfile(legacy):
+        # Not saved by this version yet: start from an earlier file, read only (schema 1, or the folder of the
+        # former name); the next save writes here.
+        earlier = [candidate for candidate in [_legacy_sibling(path)] + _previous_folder_paths(path)
+                   if candidate and os.path.isfile(candidate)]
+        if not earlier:
             return None
-        path = legacy
+        path = earlier[0]
     try:
         with open(path, 'r', encoding='utf-8') as handle:
             config = json.load(handle)
     except (OSError, ValueError) as exc:
-        raise GridLensError('The saved case configuration {} cannot be read: {}'.format(path, exc)) from None
+        raise OutageAssessmentError('The saved case configuration {} cannot be read: {}'.format(path, exc)) from None
     try:
         config = upgrade_case_config(config)
-    except GridLensError as exc:
-        raise GridLensError('The saved case configuration {} cannot be upgraded: {}'.format(path, exc)) from None
+    except OutageAssessmentError as exc:
+        raise OutageAssessmentError('The saved case configuration {} cannot be upgraded: {}'.format(path, exc)) from None
     problems = validate_case_config(config, max_cases=None)
     if problems:
-        raise GridLensError('The saved case configuration {} is invalid: {}'.format(path, '; '.join(problems)))
+        raise OutageAssessmentError('The saved case configuration {} is invalid: {}'.format(path, '; '.join(problems)))
     return config
 
 
@@ -1564,7 +1732,7 @@ def save_case_config(path, config, user=''):
     path = os.fspath(path)
     problems = validate_case_config(config)
     if problems:
-        raise GridLensError('The case configuration was not saved: {}'.format('; '.join(problems)))
+        raise OutageAssessmentError('The case configuration was not saved: {}'.format('; '.join(problems)))
     stored = dict(config, revision=int(config.get('revision') or 0) + 1,
                   saved_at=datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %z'), saved_by=user)
     # The upgrade note is a one-time hint; once saved, the cases are the reviewed ones.
@@ -1583,7 +1751,7 @@ def save_case_config(path, config, user=''):
             os.fsync(handle.fileno())
         os.replace(temporary, path)
     except (OSError, TypeError, ValueError) as exc:
-        raise GridLensError('The case configuration {} was not saved: {}'.format(path, exc)) from exc
+        raise OutageAssessmentError('The case configuration {} was not saved: {}'.format(path, exc)) from exc
     finally:
         if temporary is not None and os.path.exists(temporary):
             os.remove(temporary)
@@ -1592,7 +1760,7 @@ def save_case_config(path, config, user=''):
     return stored
 
 
-class CaseManagerUnavailable(GridLensError):
+class CaseManagerUnavailable(OutageAssessmentError):
     """tkinter or Tcl/Tk cannot open a window in this PowerFactory installation."""
 
 
@@ -1624,17 +1792,17 @@ HELP_TEXTS = {
                    "applies, Escape cancels.",
     'enabled': "Run flag: include this case in the calculation\n"
                "Ticked: the case is calculated and reported, in its own QDS run with the result object "
-               "GridLens_<stamp>_<case>. A case with exactly the same outages and windows as another is calculated "
+               "OA_<stamp>_<case>. A case with exactly the same outages and windows as another is calculated "
                "once and reported as REUSED.\n"
                "Unticked: status 'excluded'. The case stays in the configuration but is neither calculated nor "
                "reported. Other cases stay unchanged.",
-    'case_limit': "At most the number of planning cases set in Settings -> Report and run (GridLens default {}). Each "
+    'case_limit': "At most the number of planning cases set in Settings -> Report and run (Outage Assessment default {}). Each "
                   "case is one more QDS run over the complete period.".format(MAX_CASES),
     'New': "Creates the next case (C1, C2, ...) with the name 'Case n'. Double-click it to rename it. Key: Ctrl+N.",
     'Copy': "New independent case with the same planned outages and own dates. Changes affect only the copy.",
     'Delete': "Removes only the selected case after confirmation. Other cases and the planned outages in PowerFactory "
               "stay unchanged. Key: Delete in the case list.",
-    'one_per_outage': "Replaces all cases by one case per planned outage in the simulated period (GridLens 7 "
+    'one_per_outage': "Replaces all cases by one case per planned outage in the simulated period (Outage Assessment 7 "
                       "behaviour), up to the case limit of the Settings. Ignored and fixed outages get none. Asks "
                       "before replacing.",
     'add': "Assigns all selected planned outages to the selected case at once. Same as Enter. For one outage, "
@@ -1665,9 +1833,12 @@ HELP_TEXTS = {
     'planned_outages': "Planned outages from the PowerFactory Outage Management library. Their validity in time and "
                        "their switching effect are taken into account in the assigned scenarios.",
     'qds': "The time step is taken from PowerFactory. With a QDS time step of two hours, n-1 and (n-1)' are assessed "
-           "at the same points in time. Every run covers the complete ComStatsim period; GridLens changes neither "
+           "at the same points in time. Every run covers the complete ComStatsim period; Outage Assessment changes neither "
            "the period nor the time step.",
-    'results': "Calculate now: every case is calculated into a new kept result object GridLens_<stamp>_<case>, then "
+    'log': "How much the output window shows during the run; saved with the cases of this project. Warnings and "
+           "errors always show.\n" + "\n".join('{}: {}.'.format(LOG_LEVEL_LABELS[level], LOG_LEVEL_HELP[level])
+                                                for level in LOG_LEVELS),
+    'results': "Calculate now: every case is calculated into a new kept result object OA_<stamp>_<case>, then "
                "evaluated.\nRe-evaluate a kept run: nothing is calculated and PowerFactory is not changed; the result "
                "objects of that run are read again and assessed with the current settings (limits, tolerances, grids). "
                "A case whose outages or windows changed since that run is reported as NOT EVALUATED.",
@@ -1679,21 +1850,21 @@ HELP_TEXTS = {
     'load': "Reads the saved configuration file again; unsaved changes in the window are replaced. Key: Ctrl+O.",
     'start': "Checks the configuration and the settings, closes the window and runs the selected PowerFactory "
              "calculations: the reference and one QDS run per case. The results stay in PowerFactory as result objects "
-             "and are published to the GridLens report tables; the PDF report is created in PowerFactory as a separate "
+             "and are published to the Outage Assessment report tables; the PDF report is created in PowerFactory as a separate "
              "step. Key: Ctrl+Enter.",
     'cancel': "Closes the window: nothing is calculated, saved or changed in the project. Key: Escape.",
 }
 
 
 SETTING_HELP = {
-    'line_warning': "From this loading GridLens marks a line as conspicuous (pie chart class, appendix). The warning "
+    'line_warning': "From this loading Outage Assessment marks a line as conspicuous (pie chart class, appendix). The warning "
                     "threshold does not change the physical capability of the equipment.",
-    'transformer_warning': "From this loading GridLens marks a transformer as conspicuous (pie chart class, appendix). "
+    'transformer_warning': "From this loading Outage Assessment marks a transformer as conspicuous (pie chart class, appendix). "
                            "The warning threshold does not change the physical capability of the equipment.",
     'line_limit': "Maximum n-0 loading of lines: limit for assessing the undisturbed base network. The default comes "
-                  "from the existing GridLens configuration (100 %). Loading above it is a violation; exactly on it is none.",
+                  "from the existing Outage Assessment configuration (100 %). Loading above it is a violation; exactly on it is none.",
     'transformer_limit': "Maximum n-0 loading of transformers: limit for assessing the undisturbed base network. The "
-                         "default comes from the existing GridLens configuration (100 %).",
+                         "default comes from the existing Outage Assessment configuration (100 %).",
     'n1_limit_mode': "Maximum n-1 loading: limit for assessing equipment after an additional unplanned outage. n-1 and "
                      "(n-1)' must use a comparable limit definition. 'use PowerFactory limits' keeps the equipment "
                      "ratings modelled in PowerFactory; a global assessment limit only changes the assessment, never a "
@@ -1701,9 +1872,9 @@ SETTING_HELP = {
     'n1_limit_global': "Assessment limit for n-1 and (n-1)' when 'global assessment limit' is chosen. It is an "
                        "assessment limit only: ratings and thermal data in PowerFactory stay unchanged.",
     'voltage_min_pu': "Lower permitted voltage in p.u. of the nominal voltage, the same for every voltage level. "
-                      "Voltages below it are assessed as a limit violation. GridLens proposal, to be confirmed.",
+                      "Voltages below it are assessed as a limit violation. Outage Assessment proposal, to be confirmed.",
     'voltage_max_pu': "Upper permitted voltage in p.u. of the nominal voltage, the same for every voltage level. "
-                      "Voltages above it are assessed as a limit violation. GridLens proposal, to be confirmed.",
+                      "Voltages above it are assessed as a limit violation. Outage Assessment proposal, to be confirmed.",
     'energized_min_pu': "Below this voltage a node counts as de-energised at that time step: it is no measured value "
                         "and the node is reported as DE-ENERGISED, not as a voltage violation.",
     'loading_appendix_delta': "The appendix lists every line and transformer from the warning threshold on, and "
@@ -1713,9 +1884,9 @@ SETTING_HELP = {
     'top_n': "Number of rows of the Top-N lists (most loaded lines, strongly loaded lines by case).",
     'max_plot_points': "Time plots draw every time step up to this number; longer series are drawn on an even grid "
                        "that is the same for REF and every case. The assessment always uses every time step.",
-    'run_reference': "On: GridLens calculates the reference REF (R0 or Rfix) and compares every case with it. Off: "
+    'run_reference': "On: Outage Assessment calculates the reference REF (R0 or Rfix) and compares every case with it. Off: "
                      "no reference; violations cannot be split into new and pre-existing.",
-    'qds_period': "First to last planned outage: GridLens sets the QDS period for the run from one QDS step before "
+    'qds_period': "First to last planned outage: Outage Assessment sets the QDS period for the run from the start of "
                   "the first planned outage of the calculated cases to one step after the last (ComStatsim calcPeriod, "
                   "startTime, endTime) and restores it afterwards, so REF and every case cover the same time. As set "
                   "in ComStatsim: the period of the QDS is used unchanged; outages outside it are not calculated.",
@@ -1742,7 +1913,7 @@ SETTING_HELP = {
     'contingency_set': "Defines which additional unplanned equipment outages are analysed in PowerFactory.",
     'contingency_categories': "Equipment categories for which PowerFactory creates contingencies.",
     'monitored_scope': "Equipment and network areas whose results the contingency analysis monitors.",
-    'calculation_method': "AC or DC load flow of the contingency analysis. GridLens prefers an AC load flow for the "
+    'calculation_method': "AC or DC load flow of the contingency analysis. Outage Assessment prefers an AC load flow for the "
                           "final security assessment.",
     'islanding': "Takes into account whether an additional outage splits the network into electrically separate parts.",
     'unsupplied_load': "Takes into account supply interruptions, i.e. the load that can no longer be supplied after a "
@@ -1750,12 +1921,12 @@ SETTING_HELP = {
     'load_shedding': "How load shedding after a contingency is treated.",
     'post_fault_phases': "The post-fault time phases defined in PowerFactory.",
     'remedial_actions': "The remedial actions defined in PowerFactory. They can change the calculated result.",
-    'limits': "Defines from when GridLens assesses a calculated state as critical. Changing assessment limits does not "
+    'limits': "Defines from when Outage Assessment assesses a calculated state as critical. Changing assessment limits does not "
               "change the physical network model.",
     'classification': "Compares n-1 and (n-1)' at the same point in time, for the same contingency and the same "
                       "monitored equipment. Rules version " + CLASSIFICATION_VERSION + ".",
     'calculation_parameters': "Category B: these parameters can change what PowerFactory calculates. " + CONTINGENCY_SETTINGS_NOTE,
-    'restore_defaults': "Removes the user overrides and loads the valid default values of GridLens (and of PowerFactory, "
+    'restore_defaults': "Removes the user overrides and loads the valid default values of Outage Assessment (and of PowerFactory, "
                         "once those are read).",
     'apply_settings': "Checks the entries and uses the settings for the next selected calculations.",
     'save_settings': "Checks the entries and saves the settings for later use. Provisional: they are written into the "
@@ -1772,14 +1943,14 @@ SETTING_HELP = {
                          "contingencies out of the evaluation; it cannot add ones that were not calculated.",
     'contingency_elements': "n-1 filter for the calculation. Choose the elements that are outaged in n-1 and (n-1)': "
                             "only contingencies that outage at least one selected element are analysed, every other is "
-                            "set to 'Not analysed' for the n-1 run (or not created when GridLens defines the "
+                            "set to 'Not analysed' for the n-1 run (or not created when Outage Assessment defines the "
                             "contingencies). None selected: every element is outaged. The loading of every element is "
                             "still assessed under the analysed contingencies. In a re-evaluation it leaves the other "
                             "contingencies out of the evaluation.",
     'contingency_preview': "How many contingencies of the study case's contingency analysis the selection would keep. "
                            "Their equipment is read with ComOutage.GetObject; nothing is changed.",
     'grid_buttons': "Selects every grid, or clears the selection so that every grid is assessed. Takes effect at once.",
-    'source': "Origin of the value: GridLens (GridLens default), PowerFactory (read from the model or the calculation "
+    'source': "Origin of the value: Outage Assessment (Outage Assessment default), PowerFactory (read from the model or the calculation "
               "configuration) or user (changed by you). 'edited, not applied' means the entry differs from the applied "
               "value until you apply or save the settings.",
 }
@@ -1815,7 +1986,7 @@ COLUMN_HELP = {
             "cannot be ticked.",
     'outage_status': "in simulated period: the window lies in the ComStatsim period.\n"
                      "outside simulated period: has no effect in this run.\n"
-                     "Ignored in PowerFactory: set to Ignored there; GridLens applies it only for a case that "
+                     "Ignored in PowerFactory: set to Ignored there; Outage Assessment applies it only for a case that "
                      "contains it.",
     'prio': "Priority of the planned outage in PowerFactory.",
 }
@@ -2252,8 +2423,8 @@ class CaseEditor:
         if windows and not any(None in window for window in windows):
             span = '{} - {}'.format(_format_pf_time(min(window[0] for window in windows)),
                                     _format_pf_time(max(window[1] for window in windows)))
-            return 'planned outages {}, plus one QDS step before and after (ComStatsim: {})'.format(span, self._qds_text)
-        return 'from the first to the last planned outage of the calculated cases, plus one QDS step before and after ' \
+            return 'planned outages {}, plus one QDS step after (ComStatsim: {})'.format(span, self._qds_text)
+        return 'from the first to the last planned outage of the calculated cases, plus one QDS step after ' \
                '(ComStatsim: {})'.format(self._qds_text)
 
     def settings_rows(self):
@@ -2271,7 +2442,7 @@ class CaseEditor:
         parsed, problems = {}, []
         try:
             current = effective_settings(self.settings_overrides())
-        except GridLensError:
+        except OutageAssessmentError:
             current = default_settings()
         for key, value in values.items():
             number, problem = parse_setting(key, value)
@@ -2288,7 +2459,7 @@ class CaseEditor:
         return problems
 
     def restore_default_settings(self):
-        """Remove every user override; the GridLens defaults apply again."""
+        """Remove every user override; the Outage Assessment defaults apply again."""
         self.config['settings'] = {}
 
     # --- network scope ---------------------------------------------------------------
@@ -2315,7 +2486,7 @@ class CaseEditor:
             return problem
         try:
             current = effective_settings(self.settings_overrides())
-        except GridLensError:
+        except OutageAssessmentError:
             current = default_settings()
         current['contingency_elements'] = value
         self.config['settings'] = clean_overrides(current)
@@ -2333,7 +2504,7 @@ class CaseEditor:
             return problem
         try:
             current = effective_settings(self.settings_overrides())
-        except GridLensError:
+        except OutageAssessmentError:
             current = default_settings()
         current[key] = value
         self.config['settings'] = clean_overrides(current)
@@ -2381,6 +2552,16 @@ class CaseEditor:
         return 'every grid' + (' named *{}*'.format(GRID_NAME_FILTER) if GRID_NAME_FILTER else '')
 
     # --- assessment and preview ------------------------------------------------
+    def set_log_level(self, level):
+        """How much the output window shows during the run; saved with the cases. A problem as text, else None."""
+        if level not in LOG_LEVELS:
+            return 'Choose one of the log levels: {}.'.format(', '.join(LOG_LEVEL_LABELS[item] for item in LOG_LEVELS))
+        self.config['log_level'] = level
+        return None
+
+    def log_level(self):
+        return normalized_log_level(self.config.get('log_level'))
+
     def set_assessments(self, n0, n1=False, n1_prime=False):
         """The requested assessments; a problem as text, else None."""
         if not n0 and not n1 and not n1_prime:
@@ -2476,6 +2657,7 @@ class CaseEditor:
         lines = ['Results: ' + (RESULTS_CALCULATE if not self.evaluate_stamp else
                                 'Re-evaluate the kept run of {} (no calculation)'.format(stamp_text(self.evaluate_stamp))),
                  'Assessment: ' + assessments_text(self.config.get('assessments')),
+                 'Log: ' + LOG_LEVEL_LABELS[self.log_level()],
                  'QDS period: ' + self.qds_text,
                  'Reference: ' + (('Rfix' if background else 'R0') if setting_value('run_reference', self.settings_overrides())
                                   else 'off'),
@@ -2924,7 +3106,7 @@ class CaseManagerDialog:
     def _build(self):
         ttk, root = self.ttk, self.root
         self._style()
-        root.title('GridLens {} - Case Manager'.format(PUBLISHER_VERSION))
+        root.title('Outage Assessment - Case Manager')
         root.geometry(window_geometry(root.winfo_screenwidth(), root.winfo_screenheight(), share=0.82, largest=(1200, 760)))
         root.minsize(*minimum_window_size(root.winfo_screenwidth(), root.winfo_screenheight()))
         root.configure(background=self.BACKGROUND)
@@ -2933,8 +3115,7 @@ class CaseManagerDialog:
         masthead = ttk.Frame(root, style='Masthead.TFrame', padding=(24, 16))
         masthead.grid(row=0, column=0, sticky='ew')
         masthead.columnconfigure(1, weight=1)
-        ttk.Label(masthead, text='GridLens', style='Brand.TLabel').grid(row=0, column=0, sticky='w', padx=(0, 32))
-        ttk.Label(masthead, text= PUBLISHER_VERSION, style='MastheadHint.TLabel').grid(row=1, column=0, sticky='w')
+        ttk.Label(masthead, text='Outage Assessment', style='Brand.TLabel').grid(row=0, column=0, sticky='w', padx=(0, 32))
         self.page_title = ttk.Label(masthead, text='Planning case manager', style='MastheadTitle.TLabel', wraplength=300)
         self.page_title.grid(row=0, column=1, sticky='w')
         self.page_hint = ttk.Label(masthead, text='Build independent cases. Check the settings. Start the calculation.',
@@ -3045,7 +3226,7 @@ class CaseManagerDialog:
         # Tk swallows exceptions of button callbacks; show them instead, the
         # window stays open and nothing has been calculated.
         try:
-            self.messagebox.showerror('GridLens Case Manager', '{}: {}'.format(kind.__name__, value), parent=self.root)
+            self.messagebox.showerror('Outage Assessment Case Manager', '{}: {}'.format(kind.__name__, value), parent=self.root)
         except Exception:
             pass
 
@@ -3483,6 +3664,13 @@ class CaseManagerDialog:
         self.results_box.grid(row=0, column=1, sticky='ew')
         self.results_box.bind('<<ComboboxSelected>>', lambda _event: self.apply_results_choice())
         self.tip(self.results_box, HELP_TEXTS['results'])
+        ttk.Label(results, text='Log:').grid(row=1, column=0, sticky='w', padx=(0, 6), pady=(6, 0))
+        self.log_var = tk.StringVar(value=LOG_LEVEL_LABELS[self.editor.log_level()])
+        self.log_box = ttk.Combobox(results, textvariable=self.log_var, state='readonly', width=20,
+                                    values=[LOG_LEVEL_LABELS[level] for level in LOG_LEVELS])
+        self.log_box.grid(row=1, column=1, sticky='ew', pady=(6, 0))
+        self.log_box.bind('<<ComboboxSelected>>', lambda _event: self.apply_log_level())
+        self.tip(self.log_box, HELP_TEXTS['log'])
         footer = ttk.Frame(options, style='Card.TFrame')
         footer.grid(row=5, column=0, sticky='ew', pady=(6, 0))
         footer.columnconfigure(0, weight=1)
@@ -3990,7 +4178,7 @@ class CaseManagerDialog:
         invalid = [key for key in self.setting_vars if self.setting_messages[key].cget('text')]
         pending = self.pending_settings()
         overrides = self.editor.settings_overrides()
-        parts = ['{} user override(s)'.format(len(overrides)) if overrides else 'GridLens defaults']
+        parts = ['{} user override(s)'.format(len(overrides)) if overrides else 'Outage Assessment defaults']
         if pending:
             parts.append('{} edited, not applied'.format(len(pending)))
         if invalid:
@@ -4476,6 +4664,12 @@ class CaseManagerDialog:
         self.editor.set_evaluate_stamp(dict(self.editor.result_choices()).get(self.results_var.get()))
         self.refresh_overview()
 
+    def apply_log_level(self):
+        chosen = {label: level for level, label in LOG_LEVEL_LABELS.items()}.get(self.log_var.get())
+        if chosen is not None:
+            self.editor.set_log_level(chosen)
+        self.refresh_overview()
+
     def apply_assessments(self):
         if self.n1_prime_var.get() and not self.n1_var.get():
             # (n-1)' is compared with n-1: ticking (n-1)' ticks n-1, unticking n-1 unticks (n-1)'.
@@ -4508,7 +4702,7 @@ class CaseManagerDialog:
             return
         try:
             stored = save_case_config(self.config_path, self.editor.config, self.user)
-        except (OSError, GridLensError) as exc:
+        except (OSError, OutageAssessmentError) as exc:
             self.messagebox.showerror('Save configuration', str(exc), parent=self.root)
             return
         self.messagebox.showinfo('Save configuration', 'Saved revision {} to\n{}'.format(stored['revision'], self.config_path), parent=self.root)
@@ -4516,7 +4710,7 @@ class CaseManagerDialog:
     def load_saved(self):
         try:
             saved = load_case_config(self.config_path)
-        except GridLensError as exc:
+        except OutageAssessmentError as exc:
             self.messagebox.showerror('Load saved configuration', str(exc), parent=self.root)
             return
         if saved is None:
@@ -4537,7 +4731,7 @@ class CaseManagerDialog:
         self.refresh_all(ids[0] if ids else None)
 
     def start(self):
-        """Check the configuration and hand it to GridLens; the calculation starts after the window closes."""
+        """Check the configuration and hand it to Outage Assessment; the calculation starts after the window closes."""
         self.finish_editing()
         if not self._settings_ready('Start calculation'):
             return
@@ -4595,7 +4789,7 @@ def run_case_manager(records, config, period, config_path, user='', qds_text='',
     try:
         root.mainloop()
     except Exception as exc:
-        raise GridLensError('The case manager stopped with an error: {}. Nothing was calculated.'.format(
+        raise OutageAssessmentError('The case manager stopped with an error: {}. Nothing was calculated.'.format(
             _friendly_exception(exc))) from None
     finally:
         try:
@@ -4646,7 +4840,7 @@ def qds_period_source(qds):
         return "startTime .. endTime"
     if kind == QDS_PERIOD_USER_DEFINED:
         return "startTime .. endTime (calcPeriod 4)"
-    return ("calcPeriod {:g}, a kind of time period GridLens does not read; set the QDS time period to "
+    return ("calcPeriod {:g}, a kind of time period Outage Assessment does not read; set the QDS time period to "
             "user-defined to compare the planned outages with it".format(kind))
 
 
@@ -4861,7 +5055,7 @@ KEPT_STAMP = re.compile(r'^' + re.escape(SNAPSHOT_PREFIX) + r'(\d{6}-\d{6})_')
 
 
 def kept_stamps(study_case):
-    """The stamps of earlier GridLens runs whose result objects are kept in the study case, newest first."""
+    """The stamps of earlier Outage Assessment runs whose result objects are kept in the study case, newest first."""
     stamps = set()
     for obj in _contents(study_case, '*.ElmRes'):
         match = KEPT_STAMP.match(object_name(obj))
@@ -4941,13 +5135,13 @@ def starting_configuration(app, scratch):
     if USE_SAVED_CONFIGURATION and app is not None:
         real = case_config_path(project_key)
         if not os.path.isfile(real):
-            real = legacy_case_config_path(project_key)  # the GridLens 8.0 file, read only
+            real = legacy_case_config_path(project_key)  # the Outage Assessment 8.0 file, read only
         if os.path.isfile(real):
             shutil.copyfile(real, copy)
             try:
                 return load_case_config(copy), copy, "saved configuration " + real
-            except GridLensError as exc:
-                # A damaged file must not stop the GUI test; GridLens itself would report it.
+            except OutageAssessmentError as exc:
+                # A damaged file must not stop the GUI test; Outage Assessment itself would report it.
                 os.remove(copy)
                 return empty_case_config(project_key), copy, "empty configuration ({})".format(exc)
     return empty_case_config(project_key), copy, "empty configuration"
@@ -4963,17 +5157,17 @@ def run(app):
         import tkinter as tk
         log(app, "tkinter imported: Tcl {}, Tk {}.".format(tk.TclVersion, tk.TkVersion))
     except Exception as exc:
-        log(app, "FAIL: tkinter cannot be imported: {!r}. This Python has no Tcl/Tk; GridLens would fall back to the saved "
+        log(app, "FAIL: tkinter cannot be imported: {!r}. This Python has no Tcl/Tk; Outage Assessment would fall back to the saved "
                  "configuration or one case per planned outage.".format(exc))
         return False
-    log(app, "Case manager copied from GridLens {} (standalone, main.py is not used).".format(PUBLISHER_VERSION))
+    log(app, "Case manager copied from Outage Assessment {} (standalone, main.py is not used).".format(PUBLISHER_VERSION))
     records, period, source, reason, qds = read_project(app)
     if source == "DEMO":
         records, period = demo_records()
         log(app, "DEMO DATA: {}; {} demo planned outages are shown.".format(reason, len(records)))
     else:
         log(app, "{} planned outages read from PowerFactory (read only).".format(len(records)))
-    scratch = tempfile.mkdtemp(prefix="gridlens_case_manager_test_")
+    scratch = tempfile.mkdtemp(prefix="outage_assessment_case_manager_test_")
     try:
         config, config_copy, origin = starting_configuration(app, scratch)
         log(app, "Starting from the {}; save and load in the window use the copy {}.".format(origin, config_copy))
@@ -4988,10 +5182,10 @@ def run(app):
             log(app, "FAIL: the case manager stopped with an error:\n" + traceback.format_exc())
             return False
         if outcome is None:
-            log(app, "Cancel: no configuration handed over; GridLens would stop here without any change.")
+            log(app, "Cancel: no configuration handed over; Outage Assessment would stop here without any change.")
             return True
         lines, problems = CaseEditor(records, outcome, period).summary()
-        log(app, "Start calculation: the configuration was handed back. GridLens would now calculate:")
+        log(app, "Start calculation: the configuration was handed back. Outage Assessment would now calculate:")
         for label, value in lines:
             log(app, "  {:<26} {}".format(label, value))
         for problem in problems:
