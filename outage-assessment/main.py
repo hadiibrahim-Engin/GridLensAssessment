@@ -1307,10 +1307,6 @@ SETTINGS = (
     _setting('contingency_grids', 'Network scope', 'n-1 filter: grids of the outaged equipment', '', None, 'grids',
              CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
              note='calculation: one contingency per branch element in these grids; none: every grid'),
-    _setting('contingency_elements', 'Network scope', 'n-1 filter: outaged elements', '', (), 'elements',
-             CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
-             note='calculation: only contingencies outaging a selected element are analysed, the others are "Not '
-                  'analysed" for the run; none selected: every element'),
     _setting('line_warning', 'Thermal limits', 'Warning threshold, lines', '%', LOADING_WARNING, 'limit'),
     _setting('transformer_warning', 'Thermal limits', 'Warning threshold, transformers', '%', LOADING_WARNING, 'limit'),
     _setting('line_limit', 'Thermal limits', 'Maximum loading for n-0, lines', '%', LOADING_MAX, 'limit'),
@@ -1445,6 +1441,11 @@ def parse_grids(key, value):
     return tuple(sorted(names, key=str.casefold)), None
 
 
+# Settings of earlier versions that no longer exist; a saved value is ignored, not an error. The n-1 element
+# filter went on 16 Nov 2026: n-1 has only the grid filter and defines a contingency for every element there.
+RETIRED_SETTINGS = ('contingency_elements',)
+
+
 def validate_settings(overrides):
     """(key, message) for every problem of a set of overrides; [] when they can be used."""
     if not isinstance(overrides, dict):
@@ -1452,6 +1453,8 @@ def validate_settings(overrides):
     problems = []
     values = default_settings()
     for key, value in overrides.items():
+        if key in RETIRED_SETTINGS:
+            continue
         parsed, problem = parse_setting(key, value)
         if problem:
             problems.append((key, problem))
@@ -1480,7 +1483,8 @@ def effective_settings(overrides=None):
         raise OutageAssessmentError('The settings cannot be used: {}.'.format('; '.join(message for _, message in problems)))
     values = default_settings()
     for key, value in overrides.items():
-        values[key] = parse_setting(key, value)[0]
+        if key not in RETIRED_SETTINGS:
+            values[key] = parse_setting(key, value)[0]
     return values
 
 
@@ -7387,12 +7391,6 @@ SETTING_HELP = {
                          "contingency analysis already in the study case is not used. 'Every grid' defines one for "
                          "every such element of the whole model, independent of the report filter. In a re-evaluation it leaves "
                          "contingencies out of the evaluation; it cannot add ones that were not calculated.",
-    'contingency_elements': "n-1 filter for the calculation. Choose the elements that are outaged in n-1 and (n-1)': "
-                            "only contingencies that outage at least one selected element are analysed, every other is "
-                            "not created: Outage Assessment defines contingencies only for them. None selected: every "
-                            "element of the n-1 grids is outaged. The loading of every element is "
-                            "still assessed under the analysed contingencies. In a re-evaluation it leaves the other "
-                            "contingencies out of the evaluation.",
     'contingency_preview': "How many contingencies Outage Assessment defines for the n-1 grids: one per line, branch, "
                            "transformer, reactor, compensation and FACTS element. Read only; nothing is created here.",
     'grid_buttons': "Selects every grid, or clears the selection so that every grid is assessed. Takes effect at once.",
@@ -7521,8 +7519,6 @@ class CaseEditor:
     def __init__(self, records, config, period, qds_text='', qds_info=None, grids=None, contingencies=CONTINGENCIES_NOT_READ,
                  kept=(), elements=()):
         self.records = list(records)
-        # [(key, name, class, grid)] the n-1 element filter offers (contingency_element_choices).
-        self.element_choices = [tuple(item) for item in elements or ()]
         # Stamps of earlier runs whose result objects are kept in the study case (kept_stamps), newest first,
         # and the one chosen for a re-evaluation without calculation (None: calculate now).
         self.kept_stamps = list(kept or ())
@@ -7914,30 +7910,6 @@ class CaseEditor:
         value = self.settings_overrides().get(key, SETTINGS_BY_KEY[key]['default'])
         return None if value is None else tuple(value)
 
-    def selected_elements(self):
-        """The element keys of the n-1 element filter."""
-        return tuple(self.settings_overrides().get('contingency_elements', ()))
-
-    def element_text(self, key):
-        """'name (class, grid)' of an element key, from the choices; the short name when it is no longer offered."""
-        for item in self.element_choices:
-            if item[0] == key:
-                return '{} ({}{})'.format(item[1], item[2], ', ' + item[3] if item[3] else '')
-        return element_label(key) + ' (no longer in a contingency)'
-
-    def set_elements(self, keys):
-        """Select the elements outaged in n-1 at once (no Apply needed; none: every element). A problem or None."""
-        value, problem = parse_elements('contingency_elements', list(keys))
-        if problem:
-            return problem
-        try:
-            current = effective_settings(self.settings_overrides())
-        except OutageAssessmentError:
-            current = default_settings()
-        current['contingency_elements'] = value
-        self.config['settings'] = clean_overrides(current)
-        return None
-
     def grid_choices(self):
         """The grids to choose from: every grid of the model, plus selected ones the project no longer has."""
         chosen = set(self.selected_grids('monitoring_grids')) | set(self.selected_grids('contingency_grids') or ())
@@ -7977,9 +7949,6 @@ class CaseEditor:
             return 'contingencies not read in this window'
         text = contingency_scope_text(self.contingencies, self.selected_grids('contingency_grids'),
                                       self.selected_grids('monitoring_grids'))
-        elements = self.selected_elements()
-        if elements:
-            text += ' Outaged elements only: {}.'.format(', '.join(self.element_text(key) for key in elements))
         return text
 
     def filter_note(self):
@@ -9382,77 +9351,7 @@ class CaseManagerDialog:
         self._grid_listbox(right, 'contingency_grids', row=4)
         self.contingency_note = self._wrapped_label(right, '', row=5, column=0, columnspan=2, pady=(10, 0))
         self.tip(self.contingency_note, SETTING_HELP['contingency_preview'])
-        self._build_element_filter(right, first_row=7)
         self.refresh_scope()
-
-    def _build_element_filter(self, card, first_row):
-        """The n-1 element filter below the grid filter of the same card: a searchable list of the elements the
-        contingencies outage. Its list shares the flexible height with the grid list, so the page still fits."""
-        tk, ttk = self.tk, self.ttk
-        row = lambda offset: first_row + offset
-        card.rowconfigure(row(4), weight=1)
-        title = ttk.Label(card, text='n-1 filter: outaged elements', style='Title.TLabel')
-        title.grid(row=row(0), column=0, columnspan=2, sticky='w', pady=(16, 0))
-        self.tip(title, setting_help('contingency_elements'))
-        self._wrapped_label(card, 'Select the elements that are outaged in n-1 and (n-1)\'. Only contingencies that '
-                            'outage a selected element are calculated. None selected: every element.', row=row(1),
-                            column=0, columnspan=2, pady=(6, 10))
-        self.element_search = tk.StringVar()
-        ttk.Label(card, text='Search elements', style='Muted.TLabel').grid(row=row(2), column=0, sticky='w', pady=(0, 4))
-        entry = ttk.Entry(card, textvariable=self.element_search, width=12)
-        entry.grid(row=row(3), column=0, columnspan=2, sticky='ew', pady=(0, 6))
-        self.element_search.trace_add('write', lambda *_args: self.refresh_elements())
-        self.tip(entry, 'Filter the visible elements by name, class or grid. Selected elements remain selected when '
-                        'hidden by the search.')
-        box = tk.Listbox(card, selectmode='multiple', exportselection=False, height=4, width=12, activestyle='dotbox',
-                         background=self.CARD, foreground=self.TEXT, selectbackground=self.SELECTED,
-                         selectforeground=self.TEXT, highlightthickness=1, highlightcolor=self.ACCENT,
-                         highlightbackground=self.BORDER, relief='flat', font=self.body_font, borderwidth=0)
-        box.grid(row=row(4), column=0, sticky='nsew')
-        scroll = ttk.Scrollbar(card, orient='vertical', command=box.yview)
-        scroll.grid(row=row(4), column=1, sticky='ns')
-        box.configure(yscrollcommand=lambda first, last: self._scrollbar(scroll, first, last))
-        box.bind('<<ListboxSelect>>', lambda _event: self.on_element_select(), add='+')
-        self.tip(box, setting_help('contingency_elements'))
-        self.element_list, self.element_visible = box, []
-        self.element_note = self._wrapped_label(card, '', row=row(5), column=0, columnspan=2, pady=(10, 0))
-        button = ttk.Button(card, text='Clear selection', command=lambda: self.select_elements([]))
-        button.grid(row=row(6), column=0, sticky='w', pady=(10, 0))
-        self.tip(button, 'No element selected: every element is outaged in n-1 again. Takes effect at once.')
-
-    def refresh_elements(self):
-        """Render the element list without changing the selection."""
-        box = getattr(self, 'element_list', None)
-        if box is None:
-            return
-        query = self.element_search.get().strip().casefold()
-        selected = set(self.editor.selected_elements())
-        choices = [item[0] for item in self.editor.element_choices]
-        visible = [key for key in choices + sorted(selected - set(choices)) if query in self.editor.element_text(key).casefold()]
-        self.element_visible = visible
-        scroll = box.yview()
-        box.delete(0, 'end')
-        for key in visible:
-            box.insert('end', self.editor.element_text(key))
-            if key in selected:
-                box.selection_set('end')
-        if scroll:
-            box.yview_moveto(scroll[0])
-        count = len(selected)
-        self.element_note.configure(text='Only {} selected element(s) are outaged. {}'.format(count, self.editor.filter_note())
-                                    if count else 'No selection: every element is outaged. ' + self.editor.filter_note())
-
-    def on_element_select(self):
-        visible = self.element_visible
-        selected = [key for key in self.editor.selected_elements() if key not in visible]
-        selected += [visible[index] for index in self.element_list.curselection()]
-        self.select_elements(selected)
-
-    def select_elements(self, keys):
-        problem = self.editor.set_elements(keys)
-        if problem:
-            self.messagebox.showerror('Network scope', problem, parent=self.root)
-        self.after_scope_change()
 
     def _grid_search_field(self, parent, key, row):
         self.grid_search[key] = self.tk.StringVar()
@@ -9524,7 +9423,6 @@ class CaseManagerDialog:
             self.monitoring_note.configure(text='Assessed: ' + self.editor.monitoring_text() +
                                            '. No grid selected: every grid is assessed.')
         self.contingency_note.configure(text=self.editor.contingency_preview())
-        self.refresh_elements()
 
 
     def on_grid_select(self, key):
@@ -11308,10 +11206,12 @@ def contingency_equipment(command):
     return found
 
 
-# Equipment Outage Assessment defines contingencies for when the study case has no contingency analysis: branches,
-# transformers, reactors, compensation and FACTS. Not: generators, loads, busbars and terminals.
+# Equipment Outage Assessment defines one contingency each for, in the n-1 grids: branches, transformers,
+# reactors, compensation, FACTS, generators and loads (Hadi, 16 Nov 2026: everything in the grid). Not: busbars
+# and terminals, whose outage would take everything connected with it.
 N1_CONTINGENCY_CLASSES = ('ElmLne', 'ElmBranch', 'ElmZpu', 'ElmTr2', 'ElmTr3', 'ElmTr4', 'ElmSind', 'ElmScap',
-                          'ElmShnt', 'ElmSvs', 'ElmVsc', 'ElmVscmono')
+                          'ElmShnt', 'ElmSvs', 'ElmVsc', 'ElmVscmono', 'ElmSym', 'ElmAsm', 'ElmGenstat', 'ElmPvsys',
+                          'ElmLod')
 N1_SWEEP_OPTION = 'iEnableTS'
 
 
@@ -11342,20 +11242,15 @@ def contingency_candidates(app, grids):
     return found
 
 
-def contingency_targets(app, grids=None, chosen=None):
-    """The elements Outage Assessment defines one contingency each for, in the order found.
-
-    Every candidate (contingency_candidates) in the n-1 grids (none selected:
-    every grid); with elements selected in the n-1 element filter, only those.
-    """
+def contingency_targets(app, grids=None):
+    """The elements Outage Assessment defines one contingency each for, in the order found: every candidate
+    (contingency_candidates) in the n-1 grids, none selected: every grid."""
     grids = contingency_grid_selection() if grids is None else tuple(grids)
-    chosen = set(current_setting('contingency_elements') if chosen is None else chosen)
-    elements = [element for element in contingency_candidates(app, grids) if not chosen or object_key(element) in chosen]
+    elements = list(contingency_candidates(app, grids))
     if not elements:
-        raise OutageAssessmentError("no branch, transformer, reactor, compensation or FACTS element is calculation relevant in "
-                            "{}{}, so no contingency can be defined".format(
-                                ', '.join(grids) if grids else 'the network',
-                                ' among the selected elements' if chosen else ''))
+        raise OutageAssessmentError("no line, branch, transformer, reactor, compensation, FACTS element, generator or "
+                            "load is calculation relevant in {}, so no contingency can be defined".format(
+                                ', '.join(grids) if grids else 'the network'))
     return elements
 
 
@@ -11377,7 +11272,8 @@ def defined_elements(command):
     return keys or None
 
 
-DEFINED_CONTINGENCIES = 'one contingency per branch, transformer, reactor, compensation and FACTS element'
+DEFINED_CONTINGENCIES = ('one contingency per line, branch, transformer, reactor, compensation, FACTS element, '
+                         'generator and load')
 
 
 def defined_contingencies(app):
@@ -11890,21 +11786,6 @@ def read_contingencies(study_case):
     return {'command': object_name(command), 'contingencies': found}
 
 
-def contingency_element_choices(app, info):
-    """[(key, name, class, grid)] the n-1 element filter offers: the equipment of the contingencies of the study
-    case, else the elements Outage Assessment would define contingencies for; sorted by name."""
-    found = {}
-    if isinstance(info, dict):
-        for contingency in info.get('contingencies') or ():
-            for item in contingency.get('element_items') or ():
-                found.setdefault(item[0], tuple(item))
-    elif app is not None:
-        for element in contingency_candidates(app, ()):
-            found.setdefault(object_key(element), (object_key(element), object_name(element), class_name(element),
-                                                  element_grid_name(element)))
-    return sorted(found.values(), key=lambda item: (item[1].casefold(), item[0]))
-
-
 def contingency_scope(info, contingency_grids, monitoring_grids=()):
     """Which contingencies the grid selection keeps. None or empty for the contingency grids means every grid.
 
@@ -12183,40 +12064,32 @@ def element_label(key):
     return key.split('\\')[-1].rsplit('.', 1)[0] if key else key
 
 
-def excluded_contingencies(equipment, grids=None, elements=None):
-    """{contingency key: reason} of the contingencies the n-1 filters leave out.
+def excluded_contingencies(equipment, grids=None):
+    """{contingency key: reason} of the contingencies the n-1 grid filter leaves out.
 
     `equipment` is [(ComOutage, [element])]. A contingency is left out when
     none of its equipment lies in the selected grids (no grid selected: every
-    grid) or, with elements selected, when it outages none of them.
-    Contingencies without readable equipment stay in.
+    grid). Contingencies without readable equipment stay in.
     """
     grids = contingency_grid_selection() if grids is None else tuple(grids)
-    elements = set(current_setting('contingency_elements') if elements is None else elements)
     found = {}
     for outage, items in equipment:
-        if not items:
-            continue
-        if elements and not any(object_key(item) in elements for item in items):
-            found[object_key(outage)] = 'outages no selected element'
-        elif grids and not any(element_grid_name(item) in grids for item in items):
+        if items and grids and not any(element_grid_name(item) in grids for item in items):
             found[object_key(outage)] = 'outside the n-1 grids'
     return found
 
 
 def n1_filter_text():
     """The n-1 filters of the current settings, for log, report and the kept result objects."""
-    grids, elements = contingency_grid_selection(), current_setting('contingency_elements')
-    return "n-1 filter: grids {}; outaged elements: {}".format(
-        ', '.join(grids) if grids else 'every grid', ', '.join(element_label(key) for key in elements) or 'every element')
+    grids = contingency_grid_selection()
+    return "n-1 filter: grids {}".format(', '.join(grids) if grids else 'every grid')
 
 
 def _n1_command(app, study_case, grid, logger):
     """(contingency analysis, reason): always one with the contingencies of the n-1 filter, defined by Outage Assessment.
 
-    One contingency per branch, transformer, reactor, compensation and FACTS
-    element in the n-1 grids (and only the selected elements, when some are
-    selected). A contingency analysis already in the study case is not used:
+    One contingency per line, branch, transformer, reactor, compensation, FACTS
+    element, generator and load in the n-1 grids. A contingency analysis already in the study case is not used:
     PowerFactory creates one, often empty, as soon as its dialog is opened, and
     its contingencies need not match the grids. A kept analysis of an earlier
     run with exactly these contingencies is used again; otherwise a new one is
@@ -12245,8 +12118,8 @@ def _n1_command(app, study_case, grid, logger):
     except OutageAssessmentError as exc:
         return None, str(exc)
     RUN_STATS.count("n1_created")
-    logger.write("CALCULATION", "Outage Assessment created '{}' with {} contingencies ({} in {}; no generators, loads or "
-                 "busbars){}. It stays in the study case.{}".format(
+    logger.write("CALCULATION", "Outage Assessment created '{}' with {} contingencies ({} in {}; no busbars){}. It "
+                 "stays in the study case.{}".format(
                      name, made, DEFINED_CONTINGENCIES, scope,
                      '; {} element(s) refused'.format(refused) if refused else '',
                      " The contingency analysis {} of the study case is not used; its contingencies are left as they "
@@ -12627,7 +12500,7 @@ def execute_outage_assessment(app):
         grids = project_grids(app)
         # n-1 always defines its own contingencies from the n-1 filter (_n1_command); the preview shows those.
         contingencies = defined_contingencies(app)
-        elements = contingency_element_choices(app, contingencies) if CASE_SOURCE == "gui" else []
+        elements = []
         kept = kept_stamps(study_case)
     with RUN_STATS.wait():
         request = obtain_case_request(app, records, candidates, period, logger, qds_time_info(qds, period), grids,
