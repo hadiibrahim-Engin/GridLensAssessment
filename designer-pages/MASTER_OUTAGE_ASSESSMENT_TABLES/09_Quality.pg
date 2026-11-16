@@ -617,7 +617,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Name>quality_Subtitle</Name>
           <Page isRef="0" />
           <Parent isRef="6" />
-          <Text>Model and run checks. Settings, limits and calculation figures are on their own pages.</Text>
+          <Text>Model and run checks; the calculation figures are on the evidence page.</Text>
           <TextBrush>[90:90:90]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>

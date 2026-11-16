@@ -46,14 +46,11 @@ MAX_VOLTAGE_ROWS = 30
 # through loading_limit(), voltage_band(), setting_value() and the other
 # helpers, never these names directly (a constant is the default of its setting).
 LOADING_MAX = 100.0
-# Loading classes and the appendix start here.
+# Loading classes start here.
 LOADING_WARNING = 80.0
 # Smaller changes count as unchanged: %-points for loading, p.u. for voltage.
 LOADING_DELTA_TOLERANCE = 0.1
 VOLTAGE_DELTA_TOLERANCE = 0.001
-# The appendix also lists elements that change at least this much.
-LOADING_APPENDIX_DELTA = 1.0
-VOLTAGE_APPENDIX_DELTA = 0.005
 # Permitted voltage band in p.u. of the nominal voltage, the same for every voltage level.
 VOLTAGE_MIN = 0.95
 VOLTAGE_MAX = 1.05
@@ -65,10 +62,10 @@ MAX_N1_TIMES = 2000
 # outages are sampled every N1_STEP_MINUTES; with n-0 the n-1 study times are the QDS steps instead.
 N1_STEP_MINUTES = 60
 TIME_UNIT_FALLBACK = 'h'
-PUBLISHER_VERSION = '8.2.0'
+PUBLISHER_VERSION = '8.3.0'
 TEMPLATE_NAME = 'MASTER_OUTAGE_ASSESSMENT'
-TEMPLATE_VERSION = '7.2.0'
-DATA_CONTRACT_VERSION = '7.2'
+TEMPLATE_VERSION = '7.3.0'
+DATA_CONTRACT_VERSION = '7.3'
 RUN_REFERENCE_CASE = True
 # Where the planning cases come from:
 #   'gui'        open the case manager; without PyQt use the saved
@@ -185,8 +182,9 @@ MATRIX_FIELDS = (
     (("block", "integer"), ("row_order", "integer"), ("element_name", "string"), ("ref_text", "string"))
     + _slot_fields(case_text_field, "string") + _slot_fields(case_name_field, "string")
     + (("col_count", "integer"), ("violation", "integer")))
-# The appendix matrices of contract 7.2 name where each element is, so that equal names are told apart.
-APPENDIX_FIELDS = MATRIX_FIELDS + (("location_text", "string"),)
+# The appendix matrices name where each element is (contract 7.2), so that equal names are told apart, and rank
+# the elements by their worst value (contract 7.3).
+APPENDIX_FIELDS = MATRIX_FIELDS + (("location_text", "string"), ("rank", "integer"))
 # Charts that draw REF and up to CASE_SLOTS cases: one fixed series per slot.
 SERIES_NAME_FIELDS = _slot_fields(series_name_field, "string", 0)
 SERIES_VALUE_FIELDS = _slot_fields(series_value_field, "number", 0)
@@ -329,6 +327,10 @@ TABLES = (
         ("start_text", "string"), ("end_text", "string"), ("duration_text", "string"), ("peak_text", "string"),
         ("peak_time", "string"), ("reference_text", "string"), ("delta_text", "string"), ("status", "string"),
         ("violation", "integer"))),
+    # Contract 7.3: lines and transformers over their limit per case, counted by the share of the period over it.
+    ("ScriptedTimeShare", (
+        ("case_order", "integer"), ("case_name", "string"), ("share_low", "integer"), ("share_mid", "integer"),
+        ("share_high", "integer"), ("share_top", "integer"))),
 )
 REQUIRED_FIELDS = {
     "ScriptedReportMeta": (
@@ -378,6 +380,7 @@ REQUIRED_FIELDS = {
     "ScriptedCaseSummary": ("case_order", "case_id", "case_name", "assessment", "violation"),
     # A case row carries only its case name, an episode row no case name.
     "ScriptedEpisodes": ("case_order", "row_order", "row_kind", "violation"),
+    "ScriptedTimeShare": ("case_order", "case_name", "share_low", "share_mid", "share_high", "share_top"),
 }
 
 # Fields the builders compute for the script itself (summaries, log, checks) that no template shows: they are not
@@ -743,6 +746,13 @@ def is_dc_terminal(obj):
     return class_name(obj) == 'ElmTerm' and finite_number(safe_attr(obj, 'systype')) == 1.0
 
 
+def is_internal_node(obj):
+    """ElmTerm.iUsage 2 marks an internal node: a connection point inside a station (an imported connectivity node,
+    a point between breaker and disconnector). It carries the voltage of its busbar, so it is not assessed on its own
+    and would only repeat the busbar's values."""
+    return class_name(obj) == 'ElmTerm' and finite_number(safe_attr(obj, 'iUsage')) == 2.0
+
+
 # An IntVec that ElmRes.GetColumnValues(vector, column) fills with a whole column in one call; without it
 # every value is one GetValue call. Created in the running ComPython for the run and deleted afterwards.
 COLUMN_BUFFER = None
@@ -855,6 +865,7 @@ def collect_series(elmres, counters=None):
     out_of_scope = 0
     grids = {}
     dc_nodes = set()
+    internal_nodes = set()
     recorded = {}  # what the result object records that Outage Assessment does not assess, for the error message
     # Without a grid selection every element is assessed, so its grid is not read at all.
     filtered = bool(current_setting('monitoring_grids') or GRID_NAME_FILTER)
@@ -889,6 +900,9 @@ def collect_series(elmres, counters=None):
         if category == 'voltage' and is_dc_terminal(obj):
             dc_nodes.add(identity)
             continue
+        if category == 'voltage' and is_internal_node(obj):
+            internal_nodes.add(identity)
+            continue
         key = (category, identity)
         priority = VARIABLES[category].index(variable)
         if key not in chosen or priority < chosen[key][0]:
@@ -900,6 +914,7 @@ def collect_series(elmres, counters=None):
         counters['out_of_scope'] = out_of_scope
         counters['grids'] = {name: tuple(value) for name, value in grids.items()}
         counters['dc_nodes'] = len(dc_nodes)
+        counters['internal_nodes'] = len(internal_nodes)
         counters['deenergized_nodes'] = 0
         counters['deenergized_steps'] = 0
         counters['dark_keys'] = set()
@@ -1392,10 +1407,6 @@ SETTINGS = (
              VOLTAGE_DELTA_TOLERANCE, 'tolerance', applies="n-1, (n-1)'"),
     _setting('margin_warning_loading', 'Classification', 'Reduced margin warning from, loading', '%', LOADING_WARNING,
              'limit', applies="n-1, (n-1)'"),
-    _setting('loading_appendix_delta', 'Report', 'Appendix: also list a loading change from', '%-points',
-             LOADING_APPENDIX_DELTA, 'tolerance', note='lines and transformers below the warning threshold'),
-    _setting('voltage_appendix_delta', 'Report', 'Appendix: also list a voltage change from', 'p.u.',
-             VOLTAGE_APPENDIX_DELTA, 'tolerance', note='nodes without a violation'),
     _setting('top_n', 'Report', 'Rows of the Top-N lists', 'rows', TOP_N, 'count'),
     _setting('max_plot_points', 'Report', 'Points per time plot, at most', 'points', MAX_PLOT_POINTS, 'count',
              note='longer series are drawn on an even grid that is the same for every case'),
@@ -1492,7 +1503,8 @@ def parse_grids(key, value):
 
 # Settings of earlier versions that no longer exist; a saved value is ignored, not an error. The n-1 element
 # filter went on 16 Nov 2026: n-1 has only the grid filter and defines a contingency for every element there.
-RETIRED_SETTINGS = ('contingency_elements',)
+# The appendix thresholds went the same day: the element tables list exactly the elements over their limit.
+RETIRED_SETTINGS = ('contingency_elements', 'loading_appendix_delta', 'voltage_appendix_delta')
 
 
 def validate_settings(overrides):
@@ -1620,8 +1632,6 @@ _SETTING_CONSTANTS = {
     'top_n': 'TOP_N',
     'max_plot_points': 'MAX_PLOT_POINTS',
     'energized_min_pu': 'ENERGIZED_MIN_PU',
-    'loading_appendix_delta': 'LOADING_APPENDIX_DELTA',
-    'voltage_appendix_delta': 'VOLTAGE_APPENDIX_DELTA',
     'run_reference': 'RUN_REFERENCE_CASE',
     'max_cases': 'MAX_CASES',
     'max_n1_times': 'MAX_N1_TIMES',
@@ -2982,12 +2992,37 @@ CASE_FAILED = 'FAILED'
 DELTA_KEYS = (('ref_min', 'delta_min', 'min'), ('ref_max', 'delta_max', 'max'), ('ref_mean', 'delta_mean', 'mean'))
 
 
+def hours_beyond_limit(item, stats, steps):
+    """Hours of the period in which an element lies strictly beyond its limit; a step without a value counts as none.
+
+    Only an element whose extremes violate the limit is scanned, so the rest costs nothing.
+    """
+    values = item.get('values')
+    if stats is None or values is None or not is_critical(item, stats):
+        return 0.0
+    if item['category'] in LOADING_CATEGORIES:
+        limit = loading_limit(item['category'])
+        return sum(step for value, step in zip(values, steps) if value != MISSING and value > limit)
+    lower, upper = voltage_limits(item)
+    return sum(step for value, step in zip(values, steps) if value != MISSING and (value < lower or value > upper))
+
+
+
+def period_hours(result):
+    """Length of the calculated period in hours: the sum of the steps every row stands for."""
+    return sum(row_steps(result['hours'])) if result.get('hours') else 0.0
+
+
+
 def case_result(case, series, labels, plot_times, time_unit):
     by_category = {category: [] for category in VARIABLES}
     stats_by_key = {}
     item_by_key = {}
+    steps = row_steps(list(case.get('hours') or plot_times)) if (case.get('hours') or plot_times) else []
     for item in series:
         stats = dict(item.get('statistics') or statistics(item))
+        if 'hours_over' not in stats:
+            stats['hours_over'] = hours_beyond_limit(item, stats, steps)
         for reference_key, delta_key, _ in DELTA_KEYS:
             stats[reference_key] = None
             stats[delta_key] = None
@@ -3672,6 +3707,7 @@ def _matrix_tables(payload, results, table, entries):
             }
             if len(entry) > 4:
                 row['location_text'] = entry[4]
+                row['rank'] = order
             for slot, case in enumerate(block, 1):
                 row[case_name_field(slot)] = case['name']
                 row[case_text_field(slot)] = texts.get(case['id'], 'n/a')
@@ -3694,54 +3730,97 @@ def _violation_flag(item, ref_stats, case_stats_list):
 
 
 
-def _loading_appendix(payload, results, category, table):
+# A case cell of an element the case switches off itself (one of its planned outages): no value, no finding.
+SWITCHED_OFF_TEXT = 'switched off'
+
+
+def switched_off_keys(result, category):
+    """Keys of the elements a case switches off itself; empty for REF."""
+    return {record['item']['key'] for record in (result.get('comparison') or {}).get(category, ())
+            if record.get('out_of_service')}
+
+
+
+def share_text(stats, result):
+    """' · 18 %': the share of the calculated period beyond the limit; '' when the element never violates it."""
+    period = period_hours(result)
+    hours = (stats or {}).get('hours_over') or 0.0
+    if not period or hours <= 0:
+        return ''
+    share = min(1.0, hours / period)
+    return ' \u00b7 {} %'.format('<1' if share < 0.005 else '{:.0f}'.format(100 * share))
+
+
+
+def _element_rows(results, category):
+    """[(key, item, {result id: stats})] of every element over its limit in REF or in a case, without the cases'
+    own switched-off equipment, and {case id: switched-off keys}."""
     by_result = _stats_by_result(results, category)
-    reference = by_result.get(REFERENCE_ID, {})
-    cases = outage_cases(results)
-    keys = {key for entries in by_result.values() for key in entries}
-    listed = []
-    for key in keys:
-        found = [(case_id, entries[key]) for case_id, entries in by_result.items() if key in entries]
-        item = found[0][1][0]
-        ref_stats = reference.get(key, (None, None))[1]
-        peaks = [stats['max'] for _, (_, stats) in found]
-        deltas = [stats['max'] - ref_stats['max'] for case_id, (_, stats) in found if ref_stats is not None and case_id != REFERENCE_ID]
-        if max(peaks) < loading_warning(category) and not any(abs(delta) >= setting_value('loading_appendix_delta') for delta in deltas):
+    off = {result['id']: switched_off_keys(result, category) for result in converged(results)}
+    rows = []
+    for key in {key for entries in by_result.values() for key in entries}:
+        found = {result_id: entries[key][1] for result_id, entries in by_result.items()
+                 if key in entries and key not in off.get(result_id, ())}
+        if not found:
             continue
-        case_stats = [by_result[case['id']][key][1] for case in cases if key in by_result[case['id']]]
-        texts = {case['id']: loading_text(by_result[case['id']][key][1]['max']) if key in by_result[case['id']] else 'n/a' for case in cases}
-        listed.append((-max(peaks), item['element_name'].casefold(), item['element_name'], loading_text(ref_stats['max'] if ref_stats else None), texts, _violation_flag(item, ref_stats, case_stats), item.get('location') or '-'))
+        item = next(entries[key][0] for entries in by_result.values() if key in entries)
+        if any(is_critical(item, stats) for stats in found.values()):
+            rows.append((key, item, found))
+    return rows, off
+
+
+
+def _matrix_cells(results, key, found, off, text):
+    """REF text and {case id: text} of one element; 'switched off' in the case that switches it off."""
+    reference = find_reference(results)
+    ref_text = text(found[REFERENCE_ID], reference) if REFERENCE_ID in found else 'n/a'
+    texts = {}
+    for case in outage_cases(results):
+        if key in off.get(case['id'], ()):
+            texts[case['id']] = SWITCHED_OFF_TEXT
+        else:
+            texts[case['id']] = text(found[case['id']], case) if case['id'] in found else 'n/a'
+    return ref_text, texts
+
+
+
+def _loading_appendix(payload, results, category, table):
+    """Every line or transformer over its limit in REF or a case, ranked by its highest loading: per case the
+    maximum over the calculated period and the share of the period over the limit."""
+    rows, off = _element_rows(results, category)
+    cell = lambda stats, result: loading_text(stats['max']) + share_text(stats, result)
+    listed = []
+    for key, item, found in rows:
+        ref_text, texts = _matrix_cells(results, key, found, off, cell)
+        case_stats = [stats for result_id, stats in found.items() if result_id != REFERENCE_ID]
+        peak = max(stats['max'] for stats in found.values())
+        listed.append((-peak, item['element_name'].casefold(), item['element_name'], ref_text, texts,
+                       _violation_flag(item, found.get(REFERENCE_ID), case_stats), item.get('location') or '-'))
     _matrix_tables(payload, results, table, [entry[2:] for entry in sorted(listed, key=lambda entry: entry[:2])])
 
 
 
+def worst_voltage(item, stats):
+    """The extreme of a node that lies furthest from its band (outside it, or nearest to a limit inside it)."""
+    lower, upper = voltage_limits(item)
+    return stats['min'] if lower - stats['min'] >= stats['max'] - upper else stats['max']
+
+
+
 def _voltage_appendix(payload, results):
-    by_result = _stats_by_result(results, 'voltage')
-    reference = by_result.get(REFERENCE_ID, {})
-    cases = outage_cases(results)
-    keys = {key for entries in by_result.values() for key in entries}
+    """Every node outside its band in REF or a case, ranked by how far: per case its worst voltage over the
+    calculated period and the share of the period outside the band."""
+    rows, off = _element_rows(results, 'voltage')
     listed = []
-    for key in keys:
-        found = [entries[key] for entries in by_result.values() if key in entries]
-        item = found[0][0]
-        ref_stats = reference.get(key, (None, None))[1]
-        case_stats = [by_result[case['id']][key][1] for case in cases if key in by_result[case['id']]]
-        statuses = [limit_status({'item': item, 'ref': ref_stats, 'outage': stats}) for stats in case_stats] or [limit_status({'item': item, 'ref': ref_stats, 'outage': None})]
-        change = max([abs(stats['min'] - ref_stats['min']) for stats in case_stats] or [0.0]) if ref_stats is not None else 0.0
-        if all(status == STATUS_OK for status in statuses) and change < setting_value('voltage_appendix_delta'):
-            continue
-        lower, upper = voltage_limits(item)
-        excess = max(max(lower - stats['min'], stats['max'] - upper) for _, stats in found)
-        # Minimum and maximum: a node can leave the band on either side.
-        texts = {case['id']: _voltage_extremes_text(by_result[case['id']][key][1]) if key in by_result[case['id']] else 'n/a' for case in cases}
-        listed.append((-excess, item['element_name'].casefold(), item['element_name'], _voltage_extremes_text(ref_stats), texts, _violation_flag(item, ref_stats, case_stats), item.get('location') or '-'))
+    for key, item, found in rows:
+        cell = lambda stats, result, item=item: voltage_text(worst_voltage(item, stats)) + share_text(stats, result)
+        ref_text, texts = _matrix_cells(results, key, found, off, cell)
+        case_stats = [stats for result_id, stats in found.items() if result_id != REFERENCE_ID]
+        excess = max(_voltage_excess({'item': item, 'ref': None, 'outage': stats}) for stats in found.values())
+        listed.append((-excess, item['element_name'].casefold(), item['element_name'], ref_text, texts,
+                       _violation_flag(item, found.get(REFERENCE_ID), case_stats), item.get('location') or '-'))
     _matrix_tables(payload, results, 'ScriptedAppendixVoltage', [entry[2:] for entry in sorted(listed, key=lambda entry: entry[:2])])
 
-
-
-def _voltage_extremes_text(stats):
-    """'0.931 / 1.010': minimum and maximum of a node over the period; 'n/a' without a value."""
-    return 'n/a' if stats is None else '{} / {}'.format(voltage_text(stats.get('min')), voltage_text(stats.get('max')))
 
 
 def _top_lines_by_case(payload, results):
@@ -3763,10 +3842,35 @@ def _top_lines_by_case(payload, results):
 
 
 def _violation_counts(result):
-    lines = sum(1 for item, stats in result['by_category']['line'] if is_critical(item, stats))
-    transformers = sum(1 for item, stats in result['by_category']['transformer'] if is_critical(item, stats))
-    nodes = sum(1 for item, stats in result['by_category']['voltage'] if is_critical(item, stats))
-    return lines, transformers, nodes
+    """Lines, transformers and nodes over their limit in the calculated period; a case's own switched-off
+    equipment is no finding of it."""
+    return tuple(sum(1 for item, stats in result['by_category'][category]
+                     if is_critical(item, stats) and item['key'] not in switched_off_keys(result, category))
+                 for category in ('line', 'transformer', 'voltage'))
+
+
+
+# Bands of the share of the calculated period a line or transformer is over its limit (upper bound inclusive).
+SHARE_BANDS = (('share_low', 0.10), ('share_mid', 0.25), ('share_high', 0.50), ('share_top', None))
+
+
+def _time_share(payload, results):
+    """Per result: lines and transformers over their limit, counted by the share of the period they are over it."""
+    reference = find_reference(results)
+    ordered = ([reference] if reference else []) + outage_cases(results)
+    for order, result in enumerate(ordered):
+        row = {'case_order': order, 'case_name': _result_name(result)}
+        row.update({field: 0 for field, _ in SHARE_BANDS})
+        period = period_hours(result)
+        for category in LOADING_CATEGORIES:
+            off = switched_off_keys(result, category)
+            for item, stats in result['by_category'][category]:
+                if item['key'] in off or not is_critical(item, stats):
+                    continue
+                share = (stats.get('hours_over') or 0.0) / period if period else 0.0
+                field = next(field for field, upper in SHARE_BANDS if upper is None or share <= upper)
+                row[field] += 1
+        payload['ScriptedTimeShare'].append(row)
 
 
 
@@ -3937,10 +4041,13 @@ def _model_quality(payload, results, request=None):
         _quality(payload, 'series_' + category, label, 'PASS' if evaluated else 'WARNING', message,
                  _counted(exceeded, singular, plural) if exceeded else '-')
     counters = _primary_counters(results)
-    if counters.get('dc_nodes') or counters.get('deenergized_nodes') or counters.get('deenergized_steps'):
+    if (counters.get('dc_nodes') or counters.get('internal_nodes') or counters.get('deenergized_nodes')
+            or counters.get('deenergized_steps')):
         _quality(payload, 'voltage_data', 'Voltage data', 'INFO',
-                 'Reference: {} and {} left out; {} below {} p.u. count as de-energised, not as a voltage value.'.format(
+                 'Reference: {}, {} and {} left out; {} below {} p.u. count as de-energised, not as a voltage '
+                 'value.'.format(
                      _counted(counters.get('dc_nodes', 0), 'DC node', 'DC nodes'),
+                     _counted(counters.get('internal_nodes', 0), 'internal station node', 'internal station nodes'),
                      _counted(counters.get('deenergized_nodes', 0), 'node without voltage', 'nodes without voltage'),
                      _counted(counters.get('deenergized_steps', 0), 'time step', 'time steps'), format_limit(setting_value('energized_min_pu'))))
     if counters.get('partial_series') or counters.get('unvalued_branches'):
@@ -5878,6 +5985,7 @@ def build_cases_payload(study_case, results, project_name, result_name, request,
     _case_metrics(payload, results)
     _pies(payload, results)
     _case_counts(payload, results)
+    _time_share(payload, results)
     _line_bars(payload, results)
     _case_comparison(payload, results)
     _calculation_runs(payload, results, request)
@@ -7643,10 +7751,6 @@ SETTING_HELP = {
                       "Voltages above it are assessed as a limit violation. Outage Assessment proposal, to be confirmed.",
     'energized_min_pu': "Below this voltage a node counts as de-energised at that time step: it is no measured value "
                         "and the node is reported as DE-ENERGISED, not as a voltage violation.",
-    'loading_appendix_delta': "The appendix lists every line and transformer from the warning threshold on, and "
-                              "below it every element whose loading changes by at least this much against REF.",
-    'voltage_appendix_delta': "The appendix lists every node with a violation, and every node whose voltage changes "
-                              "by at least this much against REF.",
     'top_n': "Number of rows of the Top-N lists (most loaded lines, strongly loaded lines by case).",
     'max_plot_points': "Time plots draw every time step up to this number; longer series are drawn on an even grid "
                        "that is the same for REF and every case. The assessment always uses every time step.",
@@ -12750,6 +12854,9 @@ def _log_extraction_detail(logger, series, counters):
     skipped = []
     if counters.get("dc_nodes"):
         skipped.append("{} DC node(s)".format(counters["dc_nodes"]))
+    if counters.get("internal_nodes"):
+        skipped.append("{} internal station node(s) (ElmTerm usage 'internal node'; they carry their busbar's "
+                       "voltage)".format(counters["internal_nodes"]))
     if counters.get("deenergized_nodes"):
         skipped.append("{} node(s) without voltage".format(counters["deenergized_nodes"]))
     if counters.get("unvalued_branches"):
@@ -13499,11 +13606,7 @@ def main():
         return True
     except OutageAssessmentCancelled as exc:
         logger.write("CANCELLED", "{} Report generation cancelled.".format(exc), level="INFO", verbosity=LOG_COMPACT)
-        # This script can be an IntReport extension. Returning False here is
-        # discarded by the top-level main() call and looks like a successful
-        # extension to the host, which can then render missing or stale tables.
-        # Let the cancellation reach the caller before it continues the report.
-        raise
+        return False
     except KeyboardInterrupt:
         logger.write(
             "ABORTED",

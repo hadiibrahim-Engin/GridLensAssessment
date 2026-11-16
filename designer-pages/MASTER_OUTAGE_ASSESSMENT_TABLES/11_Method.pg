@@ -745,7 +745,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Name>MethodMatrices_Text</Name>
           <Page isRef="0" />
           <Parent isRef="16" />
-          <Text>Lines, transformers and node voltages. One row per element whose highest value reaches the warning threshold or changes against Reference: the maximum loading, or the minimum and maximum voltage, over the whole simulated period for Reference and every case side by side.</Text>
+          <Text>Lines, transformers and node voltages. One row per element over its limit in Reference or in a case, ranked by its worst value. Each cell: the maximum loading, or the voltage furthest from the band, over the whole calculated period, and the share of that period over the limit. A case does not count the equipment it switches off itself ("switched off"). Internal station nodes carry their busbar's voltage and are not assessed on their own.</Text>
           <TextBrush>[55:55:55]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>

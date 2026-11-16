@@ -2,12 +2,12 @@
 <StiSerializer version="1.02" type="Net" application="StiPage">
   <Border>None;Black;2;Solid;False;4;Black</Border>
   <Brush>Transparent</Brush>
-  <Components isList="true" count="6">
-    <BandPageHeader_Settings Ref="1" type="PageHeaderBand" isKey="true">
+  <Components isList="true" count="7">
+    <BandPageHeader_Histograms Ref="1" type="PageHeaderBand" isKey="true">
       <Brush>Transparent</Brush>
       <ClientRectangle>0,0.4,27,1</ClientRectangle>
       <Components isList="true" count="4">
-        <DigSilentLogo_Settings Ref="2" type="Image" isKey="true">
+        <DigSilentLogo_Histograms Ref="2" type="Image" isKey="true">
           <AspectRatio>True</AspectRatio>
           <Brush>Transparent</Brush>
           <ClientRectangle>0,0.05,0.68,0.68</ClientRectangle>
@@ -507,12 +507,12 @@ IECAQEECAlZB8MoSIECAAAEC6QoIWOnOVmcECBAgQIBAQQICVkHwyhIgQIAAAQLpCghY6c5WZwQI
 ECBAgEBBAgJWQfDKEiBAgAABAukKCFjpzlZnBAgQIECAQEECAlZB8MoSIECAAAEC6QoIWOnOVmcE
 CBAgQIBAQQICVkHwyhIgQIAAAQLpCghY6c5WZwQIECBAgEBBAgJWQfDKEiBAgAABAukKCFjpzlZn
 BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
-          <Name>DigSilentLogo_Settings</Name>
+          <Name>DigSilentLogo_Histograms</Name>
           <Page isRef="0" />
           <Parent isRef="1" />
           <Stretch>True</Stretch>
-        </DigSilentLogo_Settings>
-        <HeaderLeft_Settings Ref="3" type="Text" isKey="true">
+        </DigSilentLogo_Histograms>
+        <HeaderLeft_Histograms Ref="3" type="Text" isKey="true">
           <Border>None;Transparent;0;None;False;4;Black</Border>
           <Brush>Transparent</Brush>
           <ClientRectangle>0.82,0,14,0.85</ClientRectangle>
@@ -520,15 +520,15 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5,Bold</Font>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>HeaderLeft_Settings</Name>
+          <Name>HeaderLeft_Histograms</Name>
           <Page isRef="0" />
           <Parent isRef="1" />
           <Text>NETWORK STATE AND PLANNED OUTAGE ANALYSIS</Text>
           <TextBrush>[55:55:55]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </HeaderLeft_Settings>
-        <HeaderRight_Settings Ref="4" type="Text" isKey="true">
+        </HeaderLeft_Histograms>
+        <HeaderRight_Histograms Ref="4" type="Text" isKey="true">
           <Border>None;Transparent;0;None;False;4;Black</Border>
           <Brush>Transparent</Brush>
           <ClientRectangle>14.7,0,12,0.85</ClientRectangle>
@@ -537,15 +537,15 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Font>Segoe UI,8</Font>
           <HorAlignment>Right</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>HeaderRight_Settings</Name>
+          <Name>HeaderRight_Histograms</Name>
           <Page isRef="0" />
           <Parent isRef="1" />
           <Text>Study: {ScriptedReportMeta.study_name}  |  Model: {ScriptedReportMeta.model_name}  |  Run: {ScriptedReportMeta.run_id}</Text>
           <TextBrush>[90:90:90]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </HeaderRight_Settings>
-        <HeaderRule_Settings Ref="5" type="Text" isKey="true">
+        </HeaderRight_Histograms>
+        <HeaderRule_Histograms Ref="5" type="Text" isKey="true">
           <Border>Bottom;[155:155:155];0.5;Solid;False;4;Black</Border>
           <Brush>Transparent</Brush>
           <ClientRectangle>0,0.85,26.7,0.15</ClientRectangle>
@@ -553,26 +553,26 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,9</Font>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>HeaderRule_Settings</Name>
+          <Name>HeaderRule_Histograms</Name>
           <Page isRef="0" />
           <Parent isRef="1" />
           <TextBrush>[55:55:55]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </HeaderRule_Settings>
+        </HeaderRule_Histograms>
       </Components>
       <Conditions isList="true" count="0" />
       <Expressions isList="true" count="0" />
-      <Name>BandPageHeader_Settings</Name>
+      <Name>BandPageHeader_Histograms</Name>
       <Page isRef="0" />
       <Parent isRef="0" />
-    </BandPageHeader_Settings>
-    <settings_TitleBand Ref="6" type="DataBand" isKey="true">
+    </BandPageHeader_Histograms>
+    <histograms_TitleBand Ref="6" type="DataBand" isKey="true">
       <Brush>Transparent</Brush>
       <BusinessObjectGuid isNull="true" />
       <ClientRectangle>0,2.2,27,2.25</ClientRectangle>
       <Components isList="true" count="3">
-        <settings_Accent Ref="7" type="Text" isKey="true">
+        <histograms_Accent Ref="7" type="Text" isKey="true">
           <Border>None;Transparent;0;None;False;4;Black</Border>
           <Brush>[181:18:62]</Brush>
           <ClientRectangle>0,0.35,0.28,1.05</ClientRectangle>
@@ -580,15 +580,15 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,9</Font>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>settings_Accent</Name>
+          <Name>histograms_Accent</Name>
           <Page isRef="0" />
           <Parent isRef="6" />
           <TextBrush>[55:55:55]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </settings_Accent>
-        <settings_Title Ref="8" type="Text" isKey="true">
-          <Bookmark>section-settings</Bookmark>
+        </histograms_Accent>
+        <histograms_Title Ref="8" type="Text" isKey="true">
+          <Bookmark>section-histograms</Bookmark>
           <Border>None;Transparent;0;None;False;4;Black</Border>
           <Brush>Transparent</Brush>
           <ClientRectangle>0.55,0.3,26.15,1.15</ClientRectangle>
@@ -596,16 +596,16 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,20,Bold</Font>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>settings_Title</Name>
+          <Name>histograms_Title</Name>
           <Page isRef="0" />
           <Parent isRef="6" />
-          <Pointer>section-settings</Pointer>
-          <Text>Settings and Limits</Text>
+          <Pointer>section-histograms</Pointer>
+          <Text>Overloads per Scenario</Text>
           <TextBrush>[55:55:55]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </settings_Title>
-        <settings_Subtitle Ref="9" type="Text" isKey="true">
+        </histograms_Title>
+        <histograms_Subtitle Ref="9" type="Text" isKey="true">
           <Border>None;Transparent;0;None;False;4;Black</Border>
           <Brush>Transparent</Brush>
           <CanGrow>True</CanGrow>
@@ -614,277 +614,258 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,9</Font>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>settings_Subtitle</Name>
+          <Name>histograms_Subtitle</Name>
           <Page isRef="0" />
           <Parent isRef="6" />
-          <Text>Every setting and limit this report was assessed with.</Text>
+          <Text>How many elements each scenario puts over their limit, and for how much of the calculated period; the elements themselves are on the following pages.</Text>
           <TextBrush>[90:90:90]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </settings_Subtitle>
+        </histograms_Subtitle>
       </Components>
       <Conditions isList="true" count="0" />
       <DataSourceName>ScriptedReportMeta</DataSourceName>
       <Expressions isList="true" count="0" />
       <Filters isList="true" count="0" />
-      <Name>settings_TitleBand</Name>
+      <Name>histograms_TitleBand</Name>
       <Page isRef="0" />
       <Parent isRef="0" />
       <Sort isList="true" count="0" />
-    </settings_TitleBand>
-    <Settings_HeaderBand Ref="10" type="HeaderBand" isKey="true">
-      <Brush>Transparent</Brush>
-      <ClientRectangle>0,5.25,27,0.62</ClientRectangle>
-      <Components isList="true" count="6">
-        <Settings_H0 Ref="11" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>[120:120:120]</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>0,0,4,0.62</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5,Bold</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_H0</Name>
-          <Page isRef="0" />
-          <Parent isRef="10" />
-          <Text>Section</Text>
-          <TextBrush>White</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_H0>
-        <Settings_H1 Ref="12" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>[120:120:120]</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>4,0,8,0.62</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5,Bold</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_H1</Name>
-          <Page isRef="0" />
-          <Parent isRef="10" />
-          <Text>Setting</Text>
-          <TextBrush>White</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_H1>
-        <Settings_H2 Ref="13" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>[120:120:120]</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>12,0,5,0.62</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5,Bold</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <HorAlignment>Center</HorAlignment>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_H2</Name>
-          <Page isRef="0" />
-          <Parent isRef="10" />
-          <Text>Value</Text>
-          <TextBrush>White</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_H2>
-        <Settings_H3 Ref="14" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>[120:120:120]</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>17,0,2,0.62</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5,Bold</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <HorAlignment>Center</HorAlignment>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_H3</Name>
-          <Page isRef="0" />
-          <Parent isRef="10" />
-          <Text>Unit</Text>
-          <TextBrush>White</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_H3>
-        <Settings_H4 Ref="15" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>[120:120:120]</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>19,0,3.7,0.62</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5,Bold</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_H4</Name>
-          <Page isRef="0" />
-          <Parent isRef="10" />
-          <Text>Origin</Text>
-          <TextBrush>White</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_H4>
-        <Settings_H5 Ref="16" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>[120:120:120]</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>22.7,0,4,0.62</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5,Bold</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_H5</Name>
-          <Page isRef="0" />
-          <Parent isRef="10" />
-          <Text>Status</Text>
-          <TextBrush>White</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_H5>
-      </Components>
-      <Conditions isList="true" count="0" />
-      <Expressions isList="true" count="0" />
-      <Name>Settings_HeaderBand</Name>
-      <Page isRef="0" />
-      <Parent isRef="0" />
-    </Settings_HeaderBand>
-    <Settings_DataBand Ref="17" type="DataBand" isKey="true">
+    </histograms_TitleBand>
+    <OverloadCountsChart_Band Ref="10" type="DataBand" isKey="true">
       <Brush>Transparent</Brush>
       <BusinessObjectGuid isNull="true" />
-      <CanBreak>True</CanBreak>
-      <ClientRectangle>0,6.27,27,0.55</ClientRectangle>
-      <Components isList="true" count="6">
-        <Settings_C0 Ref="18" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
+      <ClientRectangle>0,5.25,27,7</ClientRectangle>
+      <Components isList="true" count="2">
+        <OverloadCountsChart_Title Ref="11" type="Text" isKey="true">
+          <Border>None;Transparent;0;None;False;4;Black</Border>
           <Brush>Transparent</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>0,0,4,0.55</ClientRectangle>
+          <ClientRectangle>0,0.1,26.7,0.6</ClientRectangle>
           <Conditions isList="true" count="0" />
           <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5</Font>
-          <GrowToHeight>True</GrowToHeight>
+          <Font>Segoe UI,10,Bold</Font>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_C0</Name>
+          <Name>OverloadCountsChart_Title</Name>
           <Page isRef="0" />
-          <Parent isRef="17" />
-          <Text>{ScriptedAssessmentSettings.section}</Text>
+          <Parent isRef="10" />
+          <Text>Elements over their limit per scenario (lines and transformers over 100 %, nodes outside the voltage band)</Text>
           <TextBrush>[55:55:55]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </Settings_C0>
-        <Settings_C1 Ref="19" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>Transparent</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>4,0,8,0.55</ClientRectangle>
+        </OverloadCountsChart_Title>
+        <OverloadCountsColumns Ref="12" type="Stimulsoft.Report.Chart.StiChart" isKey="true">
+          <Area Ref="13" type="Stimulsoft.Report.Chart.StiClusteredColumnArea" isKey="true">
+            <BorderColor>Transparent</BorderColor>
+            <BorderThickness>1</BorderThickness>
+            <Brush>[255:255:255]</Brush>
+            <Chart isRef="12" />
+            <GridLinesHor Ref="14" type="Stimulsoft.Report.Chart.StiGridLinesHor" isKey="true">
+              <Area isRef="13" />
+              <Color>50, 105, 105, 105</Color>
+              <MinorColor>50, 105, 105, 105</MinorColor>
+            </GridLinesHor>
+            <GridLinesHorRight Ref="15" type="Stimulsoft.Report.Chart.StiGridLinesHor" isKey="true">
+              <Area isRef="13" />
+              <Color>Silver</Color>
+              <MinorColor>Gainsboro</MinorColor>
+              <Visible>False</Visible>
+            </GridLinesHorRight>
+            <GridLinesVert Ref="16" type="Stimulsoft.Report.Chart.StiGridLinesVert" isKey="true">
+              <Area isRef="13" />
+              <Color>50, 105, 105, 105</Color>
+              <MinorColor>50, 105, 105, 105</MinorColor>
+            </GridLinesVert>
+            <InterlacingHor Ref="17" type="Stimulsoft.Report.Chart.StiInterlacingHor" isKey="true">
+              <Area isRef="13" />
+              <InterlacedBrush>[10:155:155:155]</InterlacedBrush>
+            </InterlacingHor>
+            <InterlacingVert Ref="18" type="Stimulsoft.Report.Chart.StiInterlacingVert" isKey="true">
+              <Area isRef="13" />
+              <InterlacedBrush>[10:155:155:155]</InterlacedBrush>
+            </InterlacingVert>
+            <XAxis Ref="19" type="Stimulsoft.Report.Chart.StiXBottomAxis" isKey="true">
+              <Area isRef="13" />
+              <Labels Ref="20" type="Stimulsoft.Report.Chart.StiAxisLabels" isKey="true">
+                <Axis isRef="19" />
+                <Color>140, 140, 140</Color>
+                <Font>Segoe UI,8</Font>
+              </Labels>
+              <LineColor>140, 140, 140</LineColor>
+              <Title Ref="21" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
+                <Color>140, 140, 140</Color>
+                <Font>Segoe UI,9,Bold</Font>
+              </Title>
+            </XAxis>
+            <XTopAxis Ref="22" type="Stimulsoft.Report.Chart.StiXTopAxis" isKey="true">
+              <Area isRef="13" />
+              <Labels Ref="23" type="Stimulsoft.Report.Chart.StiAxisLabels" isKey="true">
+                <Axis isRef="22" />
+                <Color>140, 140, 140</Color>
+                <Font>Tahoma,8</Font>
+              </Labels>
+              <LineColor>140, 140, 140</LineColor>
+            </XTopAxis>
+            <YAxis Ref="24" type="Stimulsoft.Report.Chart.StiYLeftAxis" isKey="true">
+              <Area isRef="13" />
+              <Labels Ref="25" type="Stimulsoft.Report.Chart.StiAxisLabels" isKey="true">
+                <Axis isRef="24" />
+                <Color>140, 140, 140</Color>
+                <Font>Segoe UI,8</Font>
+                <Placement>None</Placement>
+              </Labels>
+              <LineColor>140, 140, 140</LineColor>
+              <Title Ref="26" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
+                <Color>140, 140, 140</Color>
+                <Direction>BottomToTop</Direction>
+                <Font>Segoe UI,9,Bold</Font>
+              </Title>
+            </YAxis>
+            <YRightAxis Ref="27" type="Stimulsoft.Report.Chart.StiYRightAxis" isKey="true">
+              <Area isRef="13" />
+              <Labels Ref="28" type="Stimulsoft.Report.Chart.StiAxisLabels" isKey="true">
+                <Axis isRef="27" />
+                <Color>140, 140, 140</Color>
+                <Font>Tahoma,8</Font>
+                <TextAlignment>Left</TextAlignment>
+              </Labels>
+              <LineColor>140, 140, 140</LineColor>
+              <Title Ref="29" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
+                <Color>140, 140, 140</Color>
+                <Direction>TopToBottom</Direction>
+                <Font>Tahoma,12,Bold</Font>
+              </Title>
+            </YRightAxis>
+          </Area>
+          <Border>None;Transparent;0;None;False;4;Black</Border>
+          <Brush>[255:255:255]</Brush>
+          <ClientRectangle>0,0.8,26.7,6</ClientRectangle>
           <Conditions isList="true" count="0" />
+          <ConstantLines isList="true" count="0" />
+          <CustomStyleName />
+          <DataSourceName>ScriptedCaseCounts</DataSourceName>
           <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_C1</Name>
+          <Filters isList="true" count="0" />
+          <Legend Ref="30" type="Stimulsoft.Report.Chart.StiLegend" isKey="true">
+            <BorderColor>Transparent</BorderColor>
+            <Brush>[255:255:255]</Brush>
+            <Chart isRef="12" />
+            <Direction>LeftToRight</Direction>
+            <Font>Arial,8</Font>
+            <HorAlignment>Right</HorAlignment>
+            <LabelsColor>140, 140, 140</LabelsColor>
+            <MarkerSize>10, 10</MarkerSize>
+            <ShowShadow>False</ShowShadow>
+            <TitleColor>105, 105, 105</TitleColor>
+            <TitleFont>Arial,14,Bold</TitleFont>
+            <VertAlignment>TopOutside</VertAlignment>
+          </Legend>
+          <Name>OverloadCountsColumns</Name>
           <Page isRef="0" />
-          <Parent isRef="17" />
-          <Text>{ScriptedAssessmentSettings.label}</Text>
-          <TextBrush>[55:55:55]</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_C1>
-        <Settings_C2 Ref="20" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>Transparent</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>12,0,5,0.55</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <HorAlignment>Center</HorAlignment>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_C2</Name>
-          <Page isRef="0" />
-          <Parent isRef="17" />
-          <Text>{ScriptedAssessmentSettings.value_text}</Text>
-          <TextBrush>[55:55:55]</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_C2>
-        <Settings_C3 Ref="21" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>Transparent</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>17,0,2,0.55</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <HorAlignment>Center</HorAlignment>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_C3</Name>
-          <Page isRef="0" />
-          <Parent isRef="17" />
-          <Text>{ScriptedAssessmentSettings.unit}</Text>
-          <TextBrush>[55:55:55]</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_C3>
-        <Settings_C4 Ref="22" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>Transparent</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>19,0,3.7,0.55</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_C4</Name>
-          <Page isRef="0" />
-          <Parent isRef="17" />
-          <Text>{ScriptedAssessmentSettings.origin}</Text>
-          <TextBrush>[55:55:55]</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_C4>
-        <Settings_C5 Ref="23" type="Text" isKey="true">
-          <Border>All;[155:155:155];0.5;Solid;False;4;Black</Border>
-          <Brush>Transparent</Brush>
-          <CanGrow>True</CanGrow>
-          <ClientRectangle>22.7,0,4,0.55</ClientRectangle>
-          <Conditions isList="true" count="0" />
-          <Expressions isList="true" count="0" />
-          <Font>Segoe UI,8.5</Font>
-          <GrowToHeight>True</GrowToHeight>
-          <Margins>0.12,0.12,0,0</Margins>
-          <Name>Settings_C5</Name>
-          <Page isRef="0" />
-          <Parent isRef="17" />
-          <Text>{ScriptedAssessmentSettings.status}</Text>
-          <TextBrush>[55:55:55]</TextBrush>
-          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
-          <VertAlignment>Center</VertAlignment>
-        </Settings_C5>
+          <Parent isRef="10" />
+          <Series isList="true" count="3">
+            <ItemOverloadCounts0 Ref="31" type="Stimulsoft.Report.Chart.StiClusteredColumnSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedCaseCounts.case_name</ArgumentDataColumn>
+              <BorderColor>31, 119, 180</BorderColor>
+              <Brush>[31:119:180]</Brush>
+              <BrushNegative>Firebrick</BrushNegative>
+              <Chart isRef="12" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="32" type="Stimulsoft.Report.Chart.StiCenterAxisLabels" isKey="true">
+                <BorderColor>Transparent</BorderColor>
+                <Brush>[119:255:255:255]</Brush>
+                <Chart isRef="12" />
+                <Font>Segoe UI,8</Font>
+                <LabelColor>50, 58, 69</LabelColor>
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <Title>Lines</Title>
+              <ValueDataColumn>ScriptedCaseCounts.line_count</ValueDataColumn>
+            </ItemOverloadCounts0>
+            <ItemOverloadCounts1 Ref="33" type="Stimulsoft.Report.Chart.StiClusteredColumnSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedCaseCounts.case_name</ArgumentDataColumn>
+              <BorderColor>217, 140, 31</BorderColor>
+              <Brush>[217:140:31]</Brush>
+              <BrushNegative>Firebrick</BrushNegative>
+              <Chart isRef="12" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="34" type="Stimulsoft.Report.Chart.StiCenterAxisLabels" isKey="true">
+                <BorderColor>Transparent</BorderColor>
+                <Brush>[119:255:255:255]</Brush>
+                <Chart isRef="12" />
+                <Font>Segoe UI,8</Font>
+                <LabelColor>50, 58, 69</LabelColor>
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <Title>Transformers</Title>
+              <ValueDataColumn>ScriptedCaseCounts.transformer_count</ValueDataColumn>
+            </ItemOverloadCounts1>
+            <ItemOverloadCounts2 Ref="35" type="Stimulsoft.Report.Chart.StiClusteredColumnSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedCaseCounts.case_name</ArgumentDataColumn>
+              <BorderColor>120, 120, 120</BorderColor>
+              <Brush>[120:120:120]</Brush>
+              <BrushNegative>Firebrick</BrushNegative>
+              <Chart isRef="12" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="36" type="Stimulsoft.Report.Chart.StiCenterAxisLabels" isKey="true">
+                <BorderColor>Transparent</BorderColor>
+                <Brush>[119:255:255:255]</Brush>
+                <Chart isRef="12" />
+                <Font>Segoe UI,8</Font>
+                <LabelColor>50, 58, 69</LabelColor>
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <Title>Nodes</Title>
+              <ValueDataColumn>ScriptedCaseCounts.node_count</ValueDataColumn>
+            </ItemOverloadCounts2>
+          </Series>
+          <SeriesLabels Ref="37" type="Stimulsoft.Report.Chart.StiCenterAxisLabels" isKey="true">
+            <BorderColor>Transparent</BorderColor>
+            <Brush>[119:255:255:255]</Brush>
+            <Chart isRef="12" />
+            <Font>Arial,10</Font>
+            <LabelColor>50, 58, 69</LabelColor>
+            <MarkerSize>8, 6</MarkerSize>
+            <ValueTypeSeparator>-</ValueTypeSeparator>
+            <Width>0</Width>
+          </SeriesLabels>
+          <SeriesLabelsConditions isList="true" count="0" />
+          <Sort isList="true" count="0" />
+          <Strips isList="true" count="0" />
+          <Style Ref="38" type="Stimulsoft.Report.Chart.StiStyle29" isKey="true">
+            <Conditions isList="true" count="0" />
+            <Name />
+          </Style>
+        </OverloadCountsColumns>
       </Components>
       <Conditions isList="true" count="0" />
-      <DataSourceName>ScriptedAssessmentSettings</DataSourceName>
+      <DataSourceName>ScriptedReportMeta</DataSourceName>
       <Expressions isList="true" count="0" />
-      <Filters isList="true" count="0" />
-      <Name>Settings_DataBand</Name>
+      <Filters isList="true" count="1">
+        <value>_x0021_ScriptedReportMeta.empty_tables.Contains_x0028__x0022__x002C_ScriptedCaseCounts_x002C__x0022__x0029_</value>
+      </Filters>
+      <Name>OverloadCountsChart_Band</Name>
       <Page isRef="0" />
       <Parent isRef="0" />
       <Sort isList="true" count="0" />
-    </Settings_DataBand>
-    <SettingsNone_Band Ref="24" type="DataBand" isKey="true">
+    </OverloadCountsChart_Band>
+    <OverloadCountsNone_Band Ref="39" type="DataBand" isKey="true">
       <Brush>Transparent</Brush>
       <BusinessObjectGuid isNull="true" />
-      <ClientRectangle>0,7.22,27,1</ClientRectangle>
+      <ClientRectangle>0,12.65,27,1</ClientRectangle>
       <Components isList="true" count="1">
-        <SettingsNone_Text Ref="25" type="Text" isKey="true">
+        <OverloadCountsNone_Text Ref="40" type="Text" isKey="true">
           <Border>All;[190:195:205];0.5;Solid;False;4;Black</Border>
           <Brush>[247:248:250]</Brush>
           <CanGrow>True</CanGrow>
@@ -893,31 +874,315 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5</Font>
           <Margins>0.3,0.3,0.1,0.1</Margins>
-          <Name>SettingsNone_Text</Name>
+          <Name>OverloadCountsNone_Text</Name>
           <Page isRef="0" />
-          <Parent isRef="24" />
-          <Text>No setting was recorded.</Text>
+          <Parent isRef="39" />
+          <Text>No scenario was calculated.</Text>
           <TextBrush>[55:55:55]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </SettingsNone_Text>
+        </OverloadCountsNone_Text>
       </Components>
       <Conditions isList="true" count="0" />
       <DataSourceName>ScriptedReportMeta</DataSourceName>
       <Expressions isList="true" count="0" />
       <Filters isList="true" count="1">
-        <value>ScriptedReportMeta.empty_tables.Contains_x0028__x0022__x002C_ScriptedAssessmentSettings_x002C__x0022__x0029_</value>
+        <value>ScriptedReportMeta.empty_tables.Contains_x0028__x0022__x002C_ScriptedCaseCounts_x002C__x0022__x0029_</value>
       </Filters>
-      <Name>SettingsNone_Band</Name>
+      <Name>OverloadCountsNone_Band</Name>
       <Page isRef="0" />
       <Parent isRef="0" />
       <Sort isList="true" count="0" />
-    </SettingsNone_Band>
-    <BandPageFooter_Settings Ref="26" type="PageFooterBand" isKey="true">
+    </OverloadCountsNone_Band>
+    <TimeShareChart_Band Ref="41" type="DataBand" isKey="true">
+      <Brush>Transparent</Brush>
+      <BusinessObjectGuid isNull="true" />
+      <ClientRectangle>0,14.05,27,7</ClientRectangle>
+      <Components isList="true" count="2">
+        <TimeShareChart_Title Ref="42" type="Text" isKey="true">
+          <Border>None;Transparent;0;None;False;4;Black</Border>
+          <Brush>Transparent</Brush>
+          <ClientRectangle>0,0.1,26.7,0.6</ClientRectangle>
+          <Conditions isList="true" count="0" />
+          <Expressions isList="true" count="0" />
+          <Font>Segoe UI,10,Bold</Font>
+          <Margins>0.12,0.12,0,0</Margins>
+          <Name>TimeShareChart_Title</Name>
+          <Page isRef="0" />
+          <Parent isRef="41" />
+          <Text>Lines and transformers over 100 % per scenario, by the share of the calculated period they are over it</Text>
+          <TextBrush>[55:55:55]</TextBrush>
+          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
+          <VertAlignment>Center</VertAlignment>
+        </TimeShareChart_Title>
+        <TimeShareColumns Ref="43" type="Stimulsoft.Report.Chart.StiChart" isKey="true">
+          <Area Ref="44" type="Stimulsoft.Report.Chart.StiStackedColumnArea" isKey="true">
+            <BorderColor>Transparent</BorderColor>
+            <BorderThickness>1</BorderThickness>
+            <Brush>[255:255:255]</Brush>
+            <Chart isRef="43" />
+            <GridLinesHor Ref="45" type="Stimulsoft.Report.Chart.StiGridLinesHor" isKey="true">
+              <Area isRef="44" />
+              <Color>50, 105, 105, 105</Color>
+              <MinorColor>50, 105, 105, 105</MinorColor>
+            </GridLinesHor>
+            <GridLinesHorRight Ref="46" type="Stimulsoft.Report.Chart.StiGridLinesHor" isKey="true">
+              <Area isRef="44" />
+              <Color>Silver</Color>
+              <MinorColor>Gainsboro</MinorColor>
+              <Visible>False</Visible>
+            </GridLinesHorRight>
+            <GridLinesVert Ref="47" type="Stimulsoft.Report.Chart.StiGridLinesVert" isKey="true">
+              <Area isRef="44" />
+              <Color>50, 105, 105, 105</Color>
+              <MinorColor>50, 105, 105, 105</MinorColor>
+            </GridLinesVert>
+            <InterlacingHor Ref="48" type="Stimulsoft.Report.Chart.StiInterlacingHor" isKey="true">
+              <Area isRef="44" />
+              <InterlacedBrush>[10:155:155:155]</InterlacedBrush>
+            </InterlacingHor>
+            <InterlacingVert Ref="49" type="Stimulsoft.Report.Chart.StiInterlacingVert" isKey="true">
+              <Area isRef="44" />
+              <InterlacedBrush>[10:155:155:155]</InterlacedBrush>
+            </InterlacingVert>
+            <XAxis Ref="50" type="Stimulsoft.Report.Chart.StiXBottomAxis" isKey="true">
+              <Area isRef="44" />
+              <Labels Ref="51" type="Stimulsoft.Report.Chart.StiAxisLabels" isKey="true">
+                <Axis isRef="50" />
+                <Color>140, 140, 140</Color>
+                <Font>Segoe UI,8</Font>
+              </Labels>
+              <LineColor>140, 140, 140</LineColor>
+              <Title Ref="52" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
+                <Color>140, 140, 140</Color>
+                <Font>Segoe UI,9,Bold</Font>
+              </Title>
+            </XAxis>
+            <XTopAxis Ref="53" type="Stimulsoft.Report.Chart.StiXTopAxis" isKey="true">
+              <Area isRef="44" />
+              <Labels Ref="54" type="Stimulsoft.Report.Chart.StiAxisLabels" isKey="true">
+                <Axis isRef="53" />
+                <Color>140, 140, 140</Color>
+                <Font>Tahoma,8</Font>
+              </Labels>
+              <LineColor>140, 140, 140</LineColor>
+            </XTopAxis>
+            <YAxis Ref="55" type="Stimulsoft.Report.Chart.StiYLeftAxis" isKey="true">
+              <Area isRef="44" />
+              <Labels Ref="56" type="Stimulsoft.Report.Chart.StiAxisLabels" isKey="true">
+                <Axis isRef="55" />
+                <Color>140, 140, 140</Color>
+                <Font>Segoe UI,8</Font>
+                <Placement>None</Placement>
+              </Labels>
+              <LineColor>140, 140, 140</LineColor>
+              <Title Ref="57" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
+                <Color>140, 140, 140</Color>
+                <Direction>BottomToTop</Direction>
+                <Font>Segoe UI,9,Bold</Font>
+              </Title>
+            </YAxis>
+            <YRightAxis Ref="58" type="Stimulsoft.Report.Chart.StiYRightAxis" isKey="true">
+              <Area isRef="44" />
+              <Labels Ref="59" type="Stimulsoft.Report.Chart.StiAxisLabels" isKey="true">
+                <Axis isRef="58" />
+                <Color>140, 140, 140</Color>
+                <Font>Tahoma,8</Font>
+                <TextAlignment>Left</TextAlignment>
+              </Labels>
+              <LineColor>140, 140, 140</LineColor>
+              <Title Ref="60" type="Stimulsoft.Report.Chart.StiAxisTitle" isKey="true">
+                <Color>140, 140, 140</Color>
+                <Direction>TopToBottom</Direction>
+                <Font>Tahoma,12,Bold</Font>
+              </Title>
+            </YRightAxis>
+          </Area>
+          <Border>None;Transparent;0;None;False;4;Black</Border>
+          <Brush>[255:255:255]</Brush>
+          <ClientRectangle>0,0.8,26.7,6</ClientRectangle>
+          <Conditions isList="true" count="0" />
+          <ConstantLines isList="true" count="0" />
+          <CustomStyleName />
+          <DataSourceName>ScriptedTimeShare</DataSourceName>
+          <Expressions isList="true" count="0" />
+          <Filters isList="true" count="0" />
+          <Legend Ref="61" type="Stimulsoft.Report.Chart.StiLegend" isKey="true">
+            <BorderColor>Transparent</BorderColor>
+            <Brush>[255:255:255]</Brush>
+            <Chart isRef="43" />
+            <Direction>LeftToRight</Direction>
+            <Font>Arial,8</Font>
+            <HorAlignment>Right</HorAlignment>
+            <LabelsColor>140, 140, 140</LabelsColor>
+            <MarkerSize>10, 10</MarkerSize>
+            <ShowShadow>False</ShowShadow>
+            <TitleColor>105, 105, 105</TitleColor>
+            <TitleFont>Arial,14,Bold</TitleFont>
+            <VertAlignment>TopOutside</VertAlignment>
+          </Legend>
+          <Name>TimeShareColumns</Name>
+          <Page isRef="0" />
+          <Parent isRef="41" />
+          <Series isList="true" count="4">
+            <ItemTimeShare0 Ref="62" type="Stimulsoft.Report.Chart.StiStackedColumnSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedTimeShare.case_name</ArgumentDataColumn>
+              <BorderColor>255, 205, 86</BorderColor>
+              <Brush>[255:205:86]</Brush>
+              <BrushNegative>Firebrick</BrushNegative>
+              <Chart isRef="43" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="63" type="Stimulsoft.Report.Chart.StiCenterAxisLabels" isKey="true">
+                <BorderColor>Transparent</BorderColor>
+                <Brush>[119:255:255:255]</Brush>
+                <Chart isRef="43" />
+                <Font>Segoe UI,8</Font>
+                <LabelColor>50, 58, 69</LabelColor>
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <Title>up to 10 %</Title>
+              <ValueDataColumn>ScriptedTimeShare.share_low</ValueDataColumn>
+            </ItemTimeShare0>
+            <ItemTimeShare1 Ref="64" type="Stimulsoft.Report.Chart.StiStackedColumnSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedTimeShare.case_name</ArgumentDataColumn>
+              <BorderColor>217, 140, 31</BorderColor>
+              <Brush>[217:140:31]</Brush>
+              <BrushNegative>Firebrick</BrushNegative>
+              <Chart isRef="43" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="65" type="Stimulsoft.Report.Chart.StiCenterAxisLabels" isKey="true">
+                <BorderColor>Transparent</BorderColor>
+                <Brush>[119:255:255:255]</Brush>
+                <Chart isRef="43" />
+                <Font>Segoe UI,8</Font>
+                <LabelColor>50, 58, 69</LabelColor>
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <Title>10 to 25 %</Title>
+              <ValueDataColumn>ScriptedTimeShare.share_mid</ValueDataColumn>
+            </ItemTimeShare1>
+            <ItemTimeShare2 Ref="66" type="Stimulsoft.Report.Chart.StiStackedColumnSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedTimeShare.case_name</ArgumentDataColumn>
+              <BorderColor>214, 69, 65</BorderColor>
+              <Brush>[214:69:65]</Brush>
+              <BrushNegative>Firebrick</BrushNegative>
+              <Chart isRef="43" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="67" type="Stimulsoft.Report.Chart.StiCenterAxisLabels" isKey="true">
+                <BorderColor>Transparent</BorderColor>
+                <Brush>[119:255:255:255]</Brush>
+                <Chart isRef="43" />
+                <Font>Segoe UI,8</Font>
+                <LabelColor>50, 58, 69</LabelColor>
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <Title>25 to 50 %</Title>
+              <ValueDataColumn>ScriptedTimeShare.share_high</ValueDataColumn>
+            </ItemTimeShare2>
+            <ItemTimeShare3 Ref="68" type="Stimulsoft.Report.Chart.StiStackedColumnSeries" isKey="true">
+              <AllowApplyStyle>False</AllowApplyStyle>
+              <ArgumentDataColumn>ScriptedTimeShare.case_name</ArgumentDataColumn>
+              <BorderColor>145, 13, 48</BorderColor>
+              <Brush>[145:13:48]</Brush>
+              <BrushNegative>Firebrick</BrushNegative>
+              <Chart isRef="43" />
+              <Conditions isList="true" count="0" />
+              <Filters isList="true" count="0" />
+              <SeriesLabels Ref="69" type="Stimulsoft.Report.Chart.StiCenterAxisLabels" isKey="true">
+                <BorderColor>Transparent</BorderColor>
+                <Brush>[119:255:255:255]</Brush>
+                <Chart isRef="43" />
+                <Font>Segoe UI,8</Font>
+                <LabelColor>50, 58, 69</LabelColor>
+                <MarkerSize>8, 6</MarkerSize>
+                <ValueTypeSeparator>-</ValueTypeSeparator>
+                <Width>0</Width>
+              </SeriesLabels>
+              <Title>over 50 %</Title>
+              <ValueDataColumn>ScriptedTimeShare.share_top</ValueDataColumn>
+            </ItemTimeShare3>
+          </Series>
+          <SeriesLabels Ref="70" type="Stimulsoft.Report.Chart.StiCenterAxisLabels" isKey="true">
+            <BorderColor>Transparent</BorderColor>
+            <Brush>[119:255:255:255]</Brush>
+            <Chart isRef="43" />
+            <Font>Arial,10</Font>
+            <LabelColor>50, 58, 69</LabelColor>
+            <MarkerSize>8, 6</MarkerSize>
+            <ValueTypeSeparator>-</ValueTypeSeparator>
+            <Width>0</Width>
+          </SeriesLabels>
+          <SeriesLabelsConditions isList="true" count="0" />
+          <Sort isList="true" count="0" />
+          <Strips isList="true" count="0" />
+          <Style Ref="71" type="Stimulsoft.Report.Chart.StiStyle29" isKey="true">
+            <Conditions isList="true" count="0" />
+            <Name />
+          </Style>
+        </TimeShareColumns>
+      </Components>
+      <Conditions isList="true" count="0" />
+      <DataSourceName>ScriptedReportMeta</DataSourceName>
+      <Expressions isList="true" count="0" />
+      <Filters isList="true" count="1">
+        <value>_x0021_ScriptedReportMeta.empty_tables.Contains_x0028__x0022__x002C_ScriptedTimeShare_x002C__x0022__x0029_</value>
+      </Filters>
+      <Name>TimeShareChart_Band</Name>
+      <Page isRef="0" />
+      <Parent isRef="0" />
+      <Sort isList="true" count="0" />
+    </TimeShareChart_Band>
+    <TimeShareNone_Band Ref="72" type="DataBand" isKey="true">
+      <Brush>Transparent</Brush>
+      <BusinessObjectGuid isNull="true" />
+      <ClientRectangle>0,21.45,27,1</ClientRectangle>
+      <Components isList="true" count="1">
+        <TimeShareNone_Text Ref="73" type="Text" isKey="true">
+          <Border>All;[190:195:205];0.5;Solid;False;4;Black</Border>
+          <Brush>[247:248:250]</Brush>
+          <CanGrow>True</CanGrow>
+          <ClientRectangle>0.2,0.1,26.3,0.8</ClientRectangle>
+          <Conditions isList="true" count="0" />
+          <Expressions isList="true" count="0" />
+          <Font>Segoe UI,8.5</Font>
+          <Margins>0.3,0.3,0.1,0.1</Margins>
+          <Name>TimeShareNone_Text</Name>
+          <Page isRef="0" />
+          <Parent isRef="72" />
+          <Text>No scenario was calculated.</Text>
+          <TextBrush>[55:55:55]</TextBrush>
+          <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
+          <VertAlignment>Center</VertAlignment>
+        </TimeShareNone_Text>
+      </Components>
+      <Conditions isList="true" count="0" />
+      <DataSourceName>ScriptedReportMeta</DataSourceName>
+      <Expressions isList="true" count="0" />
+      <Filters isList="true" count="1">
+        <value>ScriptedReportMeta.empty_tables.Contains_x0028__x0022__x002C_ScriptedTimeShare_x002C__x0022__x0029_</value>
+      </Filters>
+      <Name>TimeShareNone_Band</Name>
+      <Page isRef="0" />
+      <Parent isRef="0" />
+      <Sort isList="true" count="0" />
+    </TimeShareNone_Band>
+    <BandPageFooter_Histograms Ref="74" type="PageFooterBand" isKey="true">
       <Brush>Transparent</Brush>
       <ClientRectangle>0,17.4,27,0.9</ClientRectangle>
       <Components isList="true" count="3">
-        <FooterRule_Settings Ref="27" type="Text" isKey="true">
+        <FooterRule_Histograms Ref="75" type="Text" isKey="true">
           <Border>Top;[155:155:155];0.5;Solid;False;4;Black</Border>
           <Brush>Transparent</Brush>
           <ClientRectangle>0,0,26.7,0.15</ClientRectangle>
@@ -925,14 +1190,14 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,9</Font>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>FooterRule_Settings</Name>
+          <Name>FooterRule_Histograms</Name>
           <Page isRef="0" />
-          <Parent isRef="26" />
+          <Parent isRef="74" />
           <TextBrush>[55:55:55]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </FooterRule_Settings>
-        <FooterLeft_Settings Ref="28" type="Text" isKey="true">
+        </FooterRule_Histograms>
+        <FooterLeft_Histograms Ref="76" type="Text" isKey="true">
           <Border>None;Transparent;0;None;False;4;Black</Border>
           <Brush>Transparent</Brush>
           <ClientRectangle>0,0.15,16,0.75</ClientRectangle>
@@ -940,15 +1205,15 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,7.5</Font>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>FooterLeft_Settings</Name>
+          <Name>FooterLeft_Histograms</Name>
           <Page isRef="0" />
-          <Parent isRef="26" />
+          <Parent isRef="74" />
           <Text>PRE-ASSESSMENT | NOT FOR OPERATIONAL USE</Text>
           <TextBrush>[90:90:90]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </FooterLeft_Settings>
-        <FooterRight_Settings Ref="29" type="Text" isKey="true">
+        </FooterLeft_Histograms>
+        <FooterRight_Histograms Ref="77" type="Text" isKey="true">
           <Border>None;Transparent;0;None;False;4;Black</Border>
           <Brush>Transparent</Brush>
           <ClientRectangle>20.7,0.15,6,0.75</ClientRectangle>
@@ -957,27 +1222,27 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Font>Segoe UI,7.5</Font>
           <HorAlignment>Right</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
-          <Name>FooterRight_Settings</Name>
+          <Name>FooterRight_Histograms</Name>
           <Page isRef="0" />
-          <Parent isRef="26" />
+          <Parent isRef="74" />
           <Text>Page {PageNumber}</Text>
           <TextBrush>[90:90:90]</TextBrush>
           <TextOptions>,,,,WordWrap=True,A=0</TextOptions>
           <VertAlignment>Center</VertAlignment>
-        </FooterRight_Settings>
+        </FooterRight_Histograms>
       </Components>
       <Conditions isList="true" count="0" />
       <Expressions isList="true" count="0" />
-      <Name>BandPageFooter_Settings</Name>
+      <Name>BandPageFooter_Histograms</Name>
       <Page isRef="0" />
       <Parent isRef="0" />
-    </BandPageFooter_Settings>
+    </BandPageFooter_Histograms>
   </Components>
   <Conditions isList="true" count="0" />
   <Expressions isList="true" count="0" />
-  <Guid>be4fcf292973c0f98ee74e9e46e51336</Guid>
+  <Guid>f3360ec6b2d630916bea994e5b0253fd</Guid>
   <Margins>1.5,1.2,1.5,1.2</Margins>
-  <Name>PageSettings:Unit:Stimulsoft.Report.Units.StiCentimetersUnit</Name>
+  <Name>PageHistograms:Unit:Stimulsoft.Report.Units.StiCentimetersUnit</Name>
   <Orientation>Landscape</Orientation>
   <PageHeight>21</PageHeight>
   <PageWidth>29.7</PageWidth>

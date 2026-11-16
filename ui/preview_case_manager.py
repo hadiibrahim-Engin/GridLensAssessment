@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>
-# Outage Assessment 8.2.0: 188 definitions.
+# Outage Assessment 8.3.0: 186 definitions.
 import hashlib
 import math
 import re
@@ -71,12 +71,6 @@ LOADING_DELTA_TOLERANCE = 0.1
 VOLTAGE_DELTA_TOLERANCE = 0.001
 
 
-LOADING_APPENDIX_DELTA = 1.0
-
-
-VOLTAGE_APPENDIX_DELTA = 0.005
-
-
 VOLTAGE_MIN = 0.95
 
 
@@ -92,7 +86,7 @@ MAX_N1_TIMES = 2000
 N1_STEP_MINUTES = 60
 
 
-PUBLISHER_VERSION = '8.2.0'
+PUBLISHER_VERSION = '8.3.0'
 
 
 RUN_REFERENCE_CASE = True
@@ -324,10 +318,6 @@ SETTINGS = (
              VOLTAGE_DELTA_TOLERANCE, 'tolerance', applies="n-1, (n-1)'"),
     _setting('margin_warning_loading', 'Classification', 'Reduced margin warning from, loading', '%', LOADING_WARNING,
              'limit', applies="n-1, (n-1)'"),
-    _setting('loading_appendix_delta', 'Report', 'Appendix: also list a loading change from', '%-points',
-             LOADING_APPENDIX_DELTA, 'tolerance', note='lines and transformers below the warning threshold'),
-    _setting('voltage_appendix_delta', 'Report', 'Appendix: also list a voltage change from', 'p.u.',
-             VOLTAGE_APPENDIX_DELTA, 'tolerance', note='nodes without a violation'),
     _setting('top_n', 'Report', 'Rows of the Top-N lists', 'rows', TOP_N, 'count'),
     _setting('max_plot_points', 'Report', 'Points per time plot, at most', 'points', MAX_PLOT_POINTS, 'count',
              note='longer series are drawn on an even grid that is the same for every case'),
@@ -427,7 +417,7 @@ def parse_grids(key, value):
     return tuple(sorted(names, key=str.casefold)), None
 
 
-RETIRED_SETTINGS = ('contingency_elements',)
+RETIRED_SETTINGS = ('contingency_elements', 'loading_appendix_delta', 'voltage_appendix_delta')
 
 
 def validate_settings(overrides):
@@ -519,8 +509,6 @@ _SETTING_CONSTANTS = {
     'top_n': 'TOP_N',
     'max_plot_points': 'MAX_PLOT_POINTS',
     'energized_min_pu': 'ENERGIZED_MIN_PU',
-    'loading_appendix_delta': 'LOADING_APPENDIX_DELTA',
-    'voltage_appendix_delta': 'VOLTAGE_APPENDIX_DELTA',
     'run_reference': 'RUN_REFERENCE_CASE',
     'max_cases': 'MAX_CASES',
     'max_n1_times': 'MAX_N1_TIMES',
@@ -1889,10 +1877,6 @@ SETTING_HELP = {
                       "Voltages above it are assessed as a limit violation. Outage Assessment proposal, to be confirmed.",
     'energized_min_pu': "Below this voltage a node counts as de-energised at that time step: it is no measured value "
                         "and the node is reported as DE-ENERGISED, not as a voltage violation.",
-    'loading_appendix_delta': "The appendix lists every line and transformer from the warning threshold on, and "
-                              "below it every element whose loading changes by at least this much against REF.",
-    'voltage_appendix_delta': "The appendix lists every node with a violation, and every node whose voltage changes "
-                              "by at least this much against REF.",
     'top_n': "Number of rows of the Top-N lists (most loaded lines, strongly loaded lines by case).",
     'max_plot_points': "Time plots draw every time step up to this number; longer series are drawn on an even grid "
                        "that is the same for REF and every case. The assessment always uses every time step.",

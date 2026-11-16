@@ -4,6 +4,12 @@ __pycache__/
 .venv/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+dist/
 
 # Local workstation files and configuration
 .DS_Store
@@ -59,3 +65,26 @@ tmp/pdfs/gridlens-page-16.png
 tmp/pdfs/gridlens-page-17.png
 tmp/pdfs/gridlens-page-18.png
 tmp/pdfs/gridlens-page-19.png
+demo/empty/MASTER_GRIDLENS_DETAIL.pdf
+demo/empty/MASTER_GRIDLENS.pdf
+demo/errors/MASTER_GRIDLENS_DETAIL.pdf
+demo/errors/MASTER_GRIDLENS.pdf
+demo/many/MASTER_GRIDLENS_DETAIL.pdf
+demo/many/MASTER_GRIDLENS.pdf
+demo/partial/MASTER_GRIDLENS_DETAIL.pdf
+demo/partial/MASTER_GRIDLENS.pdf
+demo/qds/MASTER_GRIDLENS_DETAIL.pdf
+demo/qds/MASTER_GRIDLENS.pdf
+demo/standard/MASTER_GRIDLENS_DETAIL.pdf
+demo/standard/MASTER_GRIDLENS.pdf
+demo/stress/MASTER_GRIDLENS_DETAIL.pdf
+demo/stress/MASTER_GRIDLENS.pdf
+ui/stimulsoft_harness/.gitignore
+ui/stimulsoft_harness/harness.csproj
+ui/stimulsoft_harness/Program.cs
+.gitignore
+ui/render_demo.py
+docs/RELEASE_CHECKLIST.md
+docs/CI_SECURITY.md
+docs/CI_SECURITY.md
+docs/DATA_FLOW_REVIEW.md
