@@ -170,9 +170,9 @@ def test_a_missing_tkinter_is_reported_as_failure(monkeypatch, capsys):
     assert "FAIL: tkinter cannot be imported" in capsys.readouterr().out
 
 
-def test_the_tool_is_a_separate_script_that_never_loads_gridlens_report(monkeypatch, tmp_path, capsys):
+def test_the_tool_is_a_separate_script_that_never_loads_outage_assessment_report(monkeypatch, tmp_path, capsys):
     source = TOOL.read_text(encoding="utf-8")
-    assert "importlib" not in source and "GRIDLENS_SCRIPT" not in source
+    assert "importlib" not in source and "OUTAGE ASSESSMENT_SCRIPT" not in source
     copied = tmp_path / "preview_case_manager.py"
     copied.write_text(source, encoding="utf-8")  # alone in a folder without main.py
     spec = importlib.util.spec_from_file_location("lonely_tool", copied)
@@ -184,7 +184,7 @@ def test_the_tool_is_a_separate_script_that_never_loads_gridlens_report(monkeypa
     assert "standalone" in capsys.readouterr().out
 
 
-def test_the_copied_case_manager_matches_gridlens_report():
+def test_the_copied_case_manager_matches_outage_assessment_report():
     assert sync.current_block() == sync.copied_block(), \
         "the case manager in main.py changed: run python3 ui/sync_case_manager_copy.py"
     for name in ("CaseManagerDialog", "CaseEditor", "FilterTable", "Tooltip", "HELP_TEXTS", "resolve_request"):

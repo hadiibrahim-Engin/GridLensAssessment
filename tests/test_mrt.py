@@ -9,9 +9,9 @@ import pytest
 
 from _paths import delivered, report_files, report_folder, report_text, report_tree
 # The two reports as the repository keeps them: a .dct dictionary and one .pg file per page each.
-TEMPLATES = {"main": "MASTER_GRIDLENS", "detail": "MASTER_GRIDLENS_DETAIL"}
+TEMPLATES = {"main": "MASTER_OUTAGE_ASSESSMENT", "detail": "MASTER_OUTAGE_ASSESSMENT_DETAIL"}
 SCRIPT = delivered("main.py")
-SPEC = importlib.util.spec_from_file_location("gridlens_report_mrt", SCRIPT)
+SPEC = importlib.util.spec_from_file_location("outage_assessment_report_mrt", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(gl)
@@ -326,12 +326,18 @@ def test_reference_pies_have_fixed_colours_and_name_their_classes():
         assert labels.findtext("Visible") != "False"
 
 
-def test_top_lines_chart_is_a_single_series_bar_with_the_100_percent_line():
+def test_top_lines_chart_stacks_one_bar_per_loading_class_with_the_100_percent_line():
+    """Only the series of a line's loading class carries its value, so the colour follows the settings."""
     chart = _root().find(".//TopLinesBarChart")
-    (series,) = list(chart.find("Series"))
-    assert series.findtext("ArgumentDataColumn") == "ScriptedLineLoadingBars.element_name"
-    assert series.findtext("ValueDataColumn") == "ScriptedLineLoadingBars.max_value"
-    assert series.findtext("SortBy") in (None, "None"), "default (None) is left out of a page file"
+    assert chart.find("Area").get("type").endswith("StiStackedBarArea")
+    series = list(chart.find("Series"))
+    assert [item.findtext("ValueDataColumn") for item in series] == [
+        "ScriptedLineLoadingBars.value_ok", "ScriptedLineLoadingBars.value_warning", "ScriptedLineLoadingBars.value_over"]
+    assert [item.findtext("Brush") for item in series] == ["[140:150:160]", "[217:140:31]", "[181:18:62]"], "as the pies"
+    assert all(item.findtext("ArgumentDataColumn") == "ScriptedLineLoadingBars.element_name" for item in series)
+    assert all(item.findtext("SortBy") in (None, "None") for item in series), "default (None) is left out of a page file"
+    axis = chart.find("Area/YAxis")
+    assert axis.findtext("StartFromZero") == "True", "no bar cut in half, every name shown"
     (limit,) = list(chart.find("ConstantLines"))
     assert limit.findtext("AxisValue") == "100"
 
@@ -521,11 +527,15 @@ def test_empty_tables_show_a_note_instead_of_an_orphaned_header(report):
 
 def test_new_main_charts_draw_the_planning_statistics():
     root = _root()
+    # The range (Gantt) chart of PowerFactory 2026 SP1 ignores the end column: an invisible bar up to the start,
+    # then a visible bar of the duration.
     gantt = root.find(".//OutageGanttChart")
-    (series,) = list(gantt.find("Series"))
-    assert gantt.find("Area").get("type").endswith("StiGanttArea") and series.get("type").endswith("StiGanttSeries")
-    assert (series.findtext("ValueDataColumn"), series.findtext("ValueDataColumnEnd")) == (
-        "ScriptedOutageWindows.start_hours", "ScriptedOutageWindows.end_hours")
+    offset, window = list(gantt.find("Series"))
+    assert gantt.find("Area").get("type").endswith("StiStackedBarArea")
+    assert [item.get("type").rsplit(".", 1)[-1] for item in (offset, window)] == ["StiStackedBarSeries"] * 2
+    assert (offset.findtext("ValueDataColumn"), window.findtext("ValueDataColumn")) == (
+        "ScriptedOutageWindows.start_hours", "ScriptedOutageWindows.duration_hours")
+    assert offset.findtext("Brush") == "[0:255:255:255]" and offset.findtext("ShowInLegend") == "False"
     counts = root.find(".//ScenarioCountsColumns")
     assert counts.findtext("DataSourceName") == "ScriptedCaseStatusCounts"
     assert counts.find("Area").get("type").endswith("StiStackedColumnArea")

@@ -541,25 +541,33 @@ REF. Ein Fall, der nichts hinzufügt, belegt Aussage B nicht.
 
 ## 8. n-1 und (n-1)'
 
-Im Fallmanager angekreuzt (*Calculation*). n-0 wird immer gerechnet.
+Im Fallmanager angekreuzt (*Calculation*). n-0 (die quasi-dynamische
+Simulation) und n-1 (die Ausfallanalyse mit eigenem Zeit-Sweep) sind getrennte
+Rechnungen; n-0 lässt sich für einen reinen n-1-Lauf abwählen (Schritt 3).
 
 | Bewertung | Was gerechnet wird | Aktive Planned Outages |
 |---|---|---|
 | n-1 | Contingency Analysis der Referenz | nur die festen Hintergrund-Außerbetriebnahmen |
 | (n-1)' | Contingency Analysis des Planungsfalls; braucht n-1 | die Außerbetriebnahmen des Falls und die festen |
 
-1. **Contingency Analysis.** Outage Assessment verwendet den `ComSimoutage` des Study
-   Case. Gibt es keinen, legt es `OA_<stamp>_N1` an, mit einem Fehlerfall
-   je Zweig, Transformator, Drossel, Kompensation und FACTS-Element (keine
-   Generatoren, Lasten oder Sammelschienen), und behält ihn. Bei mehr als
-   einem `ComSimoutage` wird n-1 nicht bewertet.
-2. **Filter.** Die n-1-Filter der Einstellungen (Netze der ausfallenden
-   Betriebsmittel, ausfallende Elemente) setzen jeden anderen Fehlerfall für
-   den Sweep auf *Not analysed*; danach zurückgesetzt. Der Berichtsfilter
-   entscheidet, welche überwachten Elemente bewertet werden.
-3. **Studienzeitpunkte.** Die QDS-Zeitschritte in den Fenstern der
-   Außerbetriebnahmen des Falls, höchstens *n-1 study times per case*
-   (Standard 2000). Ein Sweep rechnet den Zeitraum vom ersten bis zum letzten
+1. **Contingency Analysis.** Outage Assessment legt die Fehlerfälle immer
+   selbst an: `OA_<stamp>_N1` mit einem Fehlerfall je Leitung, Zweig,
+   Transformator, Drossel, Kompensation und FACTS-Element der n-1-Netze
+   (keine Generatoren, Lasten oder Sammelschienen), erhalten im Study Case.
+   Ein `ComSimoutage`, der schon im Study Case liegt, wird nie verwendet:
+   PowerFactory legt ihn an, oft leer, sobald sein Dialog geöffnet wurde (ein
+   Lauf am 16.11.2026 fand „0 contingencies“, PowerFactory meldete „Could not
+   find contingency cases“). Ein erhaltener `OA_…_N1` mit genau den
+   gewünschten Fehlerfällen wird wiederverwendet statt neu angelegt.
+2. **Filter.** Die n-1-Netze (keins gewählt: jedes Netz, unabhängig vom
+   Berichtsfilter) und die ausfallenden Elemente bestimmen, welche
+   Fehlerfälle angelegt werden. Der Berichtsfilter entscheidet, welche
+   überwachten Elemente bewertet werden.
+3. **Studienzeitpunkte.** Mit n-0: die QDS-Zeitschritte in den Fenstern der
+   Außerbetriebnahmen des Falls. Ohne n-0 (nur n-1): die Fenster, abgetastet
+   alle *n-1 time step without n-0* (Standard 60 min) ab lokaler Mitternacht
+   des ersten Fensters; der ComStatsim wird dafür weder gelesen noch
+   geändert. Höchstens *n-1 study times per case* (Standard 2000). Ein Sweep rechnet den Zeitraum vom ersten bis zum letzten
    davon mit dem QDS-Schritt; Schritte zwischen auseinanderliegenden Fenstern
    werden gerechnet, aber nicht bewertet.
 4. **Sweep.** Zeitraum, Schrittweite und `isPlannedOutages` werden für den

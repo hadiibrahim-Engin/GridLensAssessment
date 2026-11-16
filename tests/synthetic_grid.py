@@ -1,4 +1,4 @@
-"""SYNTHETIC TEST DATA – fictitious contingency results for the GridLens reporting tests (no PowerFactory).
+"""SYNTHETIC TEST DATA – fictitious contingency results for the Outage Assessment reporting tests (no PowerFactory).
 
 Every name starts with "TEST" and every grid is a "TEST area". The results are
 produced study time by study time, the way the reporting core reads a kept

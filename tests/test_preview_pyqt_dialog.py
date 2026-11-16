@@ -16,7 +16,7 @@ def launcher():
     path = Path(__file__).resolve().parents[1] / 'powerfactory_tests' / 'preview_pyqt_dialog.py'
     if not path.is_file():
         pytest.skip('optional development tool not present')
-    spec = importlib.util.spec_from_file_location('gridlens_pyqt_test', path)
+    spec = importlib.util.spec_from_file_location('outage_assessment_pyqt_test', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -24,7 +24,7 @@ def launcher():
 
 @pytest.fixture
 def tool(launcher, monkeypatch):
-    module = ModuleType('gridlens_pyqt_child')
+    module = ModuleType('outage_assessment_pyqt_child')
     exec(compile(launcher.CHILD_SOURCE, 'pyqt_child.py', 'exec'), module.__dict__)
     module.__file__ = launcher.__file__
     for key in list(sys.modules):

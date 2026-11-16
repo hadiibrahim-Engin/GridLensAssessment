@@ -17,7 +17,9 @@ pytestmark = pytest.mark.gui
 
 tk = pytest.importorskip("tkinter")
 
-SPEC = importlib.util.spec_from_file_location("gridlens_dialog", delivered("main.py"))
+# These drivers automate Tk widgets and its mainloop specifically. The Qt
+# matrix selects business logic; it must not route a Tk driver into Qt.exec().
+SPEC = importlib.util.spec_from_file_location("outage_assessment_dialog", delivered("main.py", runtime="tk"))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 
@@ -368,7 +370,9 @@ def test_gui_14_to_16_only_n1_options_period_shown_no_optimisation(monkeypatch, 
 
     _, seen = _run(monkeypatch, records, config, steps)
 
-    assert "QDS: test period" in seen["texts"]
+    # The QDS period follows the planned outages by default; the ComStatsim period is named next to it.
+    assert any(text.startswith("QDS: from the first to the last planned outage") and "test period" in text
+               for text in seen["texts"])
     assert seen["states"] == ("normal", "normal")
     assert all(gl.N1_NOTE in tip for tip in seen["tips"][:2]) and "Needs n-1" in seen["tips"][1]
     assert not any("ptimi" in text or "onservative" in text for text in seen["texts"])
@@ -778,7 +782,8 @@ def test_run_flags_toggle_the_clicked_case_and_update_the_settings_preview(monke
     _, seen = _run(monkeypatch, records, config, steps)
 
     assert 'Summer (A)' in seen['initial'] and 'North-east (B)' in seen['initial']
-    assert 'Assessment: n-0' in seen['initial'] and 'QDS period: test period' in seen['initial']
+    assert 'Assessment: n-0' in seen['initial'] and 'QDS period: from the first to the last planned outage' in seen['initial']
+    assert '(ComStatsim: test period)' in seen['initial'] and 'Log: Standard' in seen['initial']
     assert 'FS1:' in seen['initial'] and 'FS3:' in seen['initial']
     assert seen['off'] == (True, False, '☐', 'excluded')
     assert 'North-east (B)' not in seen['preview_off']
@@ -813,7 +818,7 @@ def test_settings_tab_shows_every_setting_with_source_and_hover_text(monkeypatch
     assert seen["pages"] == ["Network scope", "Limits", "Classification", "Report and run", "Contingency analysis",
                              "QDS time base", "Fixed background & rules"]
     assert seen["keys"] == {key for key, setting in gl.SETTINGS_BY_KEY.items() if setting["kind"] not in ("grids", "elements")}
-    assert seen["line_limit"] == ("110", gl.SOURCE_USER) and seen["warning"] == gl.SOURCE_GRIDLENS
+    assert seen["line_limit"] == ("110", gl.SOURCE_USER) and seen["warning"] == gl.SOURCE_OUTAGE_ASSESSMENT
     assert seen["read_only"] and all(seen["read_only"].values()), "category B and post-fault fields are read only"
     assert all(len(text) > 40 for text in seen["tips"].values()), seen["tips"]
     assert all(seen["buttons"].values())

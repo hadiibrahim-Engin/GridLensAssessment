@@ -61,6 +61,9 @@ VOLTAGE_MAX = 1.05
 ENERGIZED_MIN_PU = 0.1
 # Upper bound of n-1 study times per case: every study time calculates every contingency.
 MAX_N1_TIMES = 2000
+# Time step of the n-1 study times when no quasi-dynamic simulation runs (n-1 only): the windows of the planned
+# outages are sampled every N1_STEP_MINUTES; with n-0 the n-1 study times are the QDS steps instead.
+N1_STEP_MINUTES = 60
 TIME_UNIT_FALLBACK = 'h'
 PUBLISHER_VERSION = '8.1.0'
 TEMPLATE_NAME = 'MASTER_OUTAGE_ASSESSMENT'
@@ -1275,7 +1278,7 @@ QDS_SPAN_OUTAGES, QDS_SPAN_CONFIGURED = 'outages', 'configured'
 QDS_SPAN_CHOICES = ((QDS_SPAN_OUTAGES, 'first to last planned outage of the cases'),
                     (QDS_SPAN_CONFIGURED, 'as set in ComStatsim'))
 # Upper bounds of the count settings: beyond them a run takes hours or the report gets unreadable.
-COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'max_cases': 20}
+COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'max_cases': 20, 'n1_step': 1440}
 # The most planning cases a run can have: the templates hold a band pair for every block up to this number.
 MAX_PLANNING_CASES = COUNT_LIMITS['max_cases']
 NOT_VERIFIED = 'not verified yet'
@@ -1305,7 +1308,7 @@ SETTINGS = (
              note='evaluation only, also in a re-evaluation; no grid selected: every grid (or GRID_NAME_FILTER)'),
     _setting('contingency_grids', 'Network scope', 'n-1 filter: grids of the outaged equipment', '', None, 'grids',
              CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
-             note='calculation: the other contingencies are "Not analysed" (outserv) for the run; none: every grid'),
+             note='calculation: one contingency per branch element in these grids; none: every grid'),
     _setting('contingency_elements', 'Network scope', 'n-1 filter: outaged elements', '', (), 'elements',
              CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
              note='calculation: only contingencies outaging a selected element are analysed, the others are "Not '
@@ -1363,6 +1366,10 @@ SETTINGS = (
              note='every case is one more QDS run over the complete period'),
     _setting('max_n1_times', 'Run', 'n-1 study times per case, at most', 'study times', MAX_N1_TIMES, 'count',
              applies="n-1, (n-1)'", note='every study time calculates every contingency'),
+    _setting('n1_step', 'Run', 'n-1 time step without n-0', 'min', N1_STEP_MINUTES, 'count',
+             CATEGORY_CALCULATION, applies="n-1, (n-1)'",
+             note='only when n-0 is not ticked: the n-1 time sweep samples the outage windows with this step; '
+                  'with n-0 it uses the QDS steps'),
     _contingency_setting('contingency_set', 'Contingency set'),
     _contingency_setting('contingency_categories', 'Equipment categories with contingencies'),
     _contingency_setting('monitored_scope', 'Monitored equipment and network areas'),
@@ -1567,6 +1574,7 @@ _SETTING_CONSTANTS = {
     'run_reference': 'RUN_REFERENCE_CASE',
     'max_cases': 'MAX_CASES',
     'max_n1_times': 'MAX_N1_TIMES',
+    'n1_step': 'N1_STEP_MINUTES',
 }
 
 
@@ -1868,6 +1876,24 @@ def outage_span(windows, step):
     return start, end
 
 
+def n1_only_grid(plans, minutes=None):
+    """(start, end, step) of the n-1 study times of a run without the QDS (n-1 only); None without a known window.
+
+    The step is the setting 'n1_step' (minutes); the grid spans the windows of the planned outages of `plans`
+    from local midnight of the first start to one step after the last end (outage_span). Nothing of the
+    ComStatsim is read: the quasi-dynamic simulation and the n-1 time sweep are separate calculations.
+    """
+    step = (setting_value('n1_step') if minutes is None else minutes) * 60.0
+    windows = [window for plan in plans for window in plan['windows'].values() if None not in window]
+    span = outage_span(windows, step)
+    return (span[0], span[1], step) if span is not None else None
+
+
+def n1_steps_label():
+    """What the n-1 study times are sampled on in this run: 'QDS steps', or 'n-1 time steps' without the QDS."""
+    return RUN_CONTEXT.get('n1_steps') or 'QDS steps'
+
+
 def n1_study_times(windows, grid, limit=None):
     """The QDS steps that lie in at least one window [begin, end), inside the QDS period; sorted.
 
@@ -1888,7 +1914,8 @@ def n1_study_times(windows, grid, limit=None):
             if len(times) > limit:
                 raise OutageAssessmentError(
                     "The n-1 time sweep would need more than {} study times; every one calculates every "
-                    "contingency. Shorten the outage windows or the QDS period.".format(limit))
+                    "contingency. Shorten the outage windows or the period of the {}.".format(
+                        limit, 'QDS' if n1_steps_label() == 'QDS steps' else 'n-1 time sweep'))
             index += 1
             moment = start + index * step
     return sorted(times)
@@ -2944,6 +2971,16 @@ def case_result(case, series, labels, plot_times, time_unit):
 
 
 
+# The status of a planning case whose n-0 QDS was not calculated because the run is n-1 only.
+CASE_N0_SKIPPED = 'NOT SIMULATED'
+N0_SKIPPED_TEXT = 'n-0 not calculated: n-1 only, no quasi-dynamic simulation in this run.'
+
+
+def n0_skipped_case(case):
+    """A planning case of a run without n-0: no QDS result; its n-1 entry is added by evaluate_n1."""
+    return case_result(dict(case, status=CASE_N0_SKIPPED, error_code=0, message=N0_SKIPPED_TEXT), [], [], [], '')
+
+
 def failed_case(case, message):
     """A case that produced no usable result; it stays in the report with its reason."""
     result = case_result(dict(case, status=CASE_FAILED, error_code=-1, message=message), [], [], [], '')
@@ -3878,10 +3915,10 @@ def _model_quality(payload, results, request=None):
     n1_kinds = {result['n1'].get('kind') for result in results if result.get('n1', {}).get('status') == 'EVALUATED'}
     if n1_kinds:
         _quality(payload, 'security_scope', 'Assessment scope', 'WARNING',
-                 'N-0 assessment of the planned network states and {} with the contingency analysis of the study case at '
-                 'the QDS time steps inside the outage windows (rows n-1 below). This is no proof of n-1 security; security '
-                 'of supply, protection coordination and safe isolation are not assessed.'.format(
-                     "(n-1)' against n-1" if N1_PRIME in n1_kinds else 'the n-1 reference'))
+                 'N-0 assessment of the planned network states and {} with the contingency analysis Outage Assessment '
+                 'defines, at the {} inside the outage windows (rows n-1 below). This is no proof of n-1 security; '
+                 'security of supply, protection coordination and safe isolation are not assessed.'.format(
+                     "(n-1)' against n-1" if N1_PRIME in n1_kinds else 'the n-1 reference', n1_steps_label()))
     else:
         _quality(payload, 'security_scope', 'Assessment scope', 'WARNING',
                  'N-0 assessment of the planned network states. N-1 security, security of supply, protection coordination and safe isolation are not assessed.')
@@ -4148,7 +4185,11 @@ def _case_rows(payload, results, request):
         if plan['status'] == PLAN_READY and result is not None:
             status = result['status']
             provenance = result.get('provenance', 'CALCULATED')
-            if result['status'] != CONVERGED:
+            if result['status'] == CASE_N0_SKIPPED:
+                values = {'assessment': ASSESSMENT_SKIPPED, 'violation': 0}
+                detail = result['message']
+                provenance = 'n-1 ONLY'
+            elif result['status'] != CONVERGED:
                 values = {'assessment': AXIS_MISMATCH if result['status'] == AXIS_MISMATCH else ASSESSMENT_NOT_EVALUATED, 'violation': 0}
                 detail = result['message']
             else:
@@ -5431,7 +5472,8 @@ def n1_meta_text(results):
         assessed = any(case.get('n1') for _order, case in planning_results(results))
         return '0', ('n-1 was requested but could not be evaluated; see the quality register and the model quality page.'
                      if assessed else 'n-1 was not assessed in this run (tick n-1 in the case manager).')
-    return '1', ("Contingency analysis of the study case at the QDS time steps inside each case's outage windows. "
+    return '1', ("Contingency analysis with one contingency per branch element of the n-1 grids, at the {} inside "
+                 "each case's outage windows. ".format(n1_steps_label())
                  + ("(n-1)' (with the case's planned outages) is classified against n-1 (without them) per study time, "
                     "contingency and element; an element counts with its worst result. " if N1_PRIME in kinds else
                     "Only the n-1 reference was calculated: its violations are shown as PRE-EXISTING. ")
@@ -6806,8 +6848,8 @@ def validate_case_config(config, max_cases=-1):
     assessments = config.get('assessments', ['n-0'])
     if not _is_text_list(assessments) or not assessments or set(assessments) - set(ASSESSMENTS):
         problems.append('assessments must name at least one of {}'.format(', '.join(ASSESSMENTS)))
-    elif 'n-0' not in assessments:
-        problems.append('the n-0 quasi-dynamic assessment is always calculated: the report is built on it')
+    elif 'n-0' not in assessments and N1_REFERENCE not in assessments:
+        problems.append('choose n-0 (quasi-dynamic simulation), n-1 or both')
     elif N1_PRIME in assessments and N1_REFERENCE not in assessments:
         problems.append("(n-1)' is compared with n-1, so it needs n-1")
     if config.get('log_level', LOG_STANDARD) not in LOG_LEVELS:
@@ -7183,9 +7225,10 @@ SETTINGS_INTRO = ('Limits and classification parameters (category A) only interp
                   'only until the PowerFactory contingency interface is verified. Settings are stored provisionally '
                   'in the case configuration file of this project, not yet inside the PowerFactory project.')
 CONTINGENCIES_NOT_READ = 'not read'
-N1_NOTE = ("Calculated with the contingency analysis (ComSimoutage) of the active study case, at the QDS time steps "
-           "inside the outage windows of each case. Results appear in the log and in the contingency and quality "
-           "sections of the reports.")
+N1_NOTE = ("Calculated with a contingency analysis (ComSimoutage) Outage Assessment defines and keeps: one contingency "
+           "per branch element of the n-1 grids. Its time sweep covers the outage windows of each case: at the QDS "
+           "steps with n-0, every 'n-1 time step' of the Settings without n-0 (no quasi-dynamic simulation). Results "
+           "appear in the log and in the contingency and quality sections of the reports.")
 # Case-manager help texts describing each control's effect on the calculation.
 HELP_TEXTS = {
     'description': "Double-click to write or change the description of the case: Enter or a click elsewhere "
@@ -7223,8 +7266,9 @@ HELP_TEXTS = {
                  "second only after the first: the second may only start after the first has ended.\n"
                  "only together: a case with one of them must contain the other, at the same time.\n"
                  "Rules apply to every case; a case that breaks one is not calculated and is reported.",
-    'n0': "n-0 - reference QDS\nCalculates the time-dependent base state of the network without planned outages and "
-          "without additional contingencies. Loads and infeeds change as in the quasi-dynamic simulation.",
+    'n0': "n-0 - quasi-dynamic simulation\nCalculates the reference and every planning case with the "
+          "quasi-dynamic simulation (ComStatsim). Untick it for an n-1 analysis only: then no QDS runs, the n-1 "
+          "time sweep samples the outage windows with the n-1 time step of the Settings.",
     'n1': "n-1 - reference contingency analysis\nAssesses the security of the base network without planned outages. "
           "Every defined unplanned single contingency is assessed at the chosen points in time.\n" + N1_NOTE,
     'n1_prime': "(n-1)' - contingency analysis with planned-outage scenarios\nAssesses a planned-outage scenario with "
@@ -7293,6 +7337,10 @@ SETTING_HELP = {
                  "so the run time grows with each case.",
     'max_n1_times': "Most n-1 study times per case. Every study time calculates every contingency twice (n-1 and "
                     "(n-1)'); a case with more study times is not evaluated and says so.",
+    'n1_step': "Only for a run without n-0 (n-1 only, no quasi-dynamic simulation): the n-1 time sweep "
+               "samples the windows of the planned outages of the calculated cases every this many minutes, from "
+               "local midnight of the first window on. With n-0 the n-1 study times are the QDS steps inside the "
+               "windows and this setting is not used.",
     'post_fault_voltage': "Post-fault voltage limits per post-fault time phase. PowerFactory's post-fault phases are "
                           "not verified yet, so no separate limit can be set.",
     'loading_change_tolerance': "n-0 QDS: a loading change smaller than this (in %-points) counts as unchanged when a "
@@ -7336,18 +7384,19 @@ SETTING_HELP = {
                         "left out of the report. No grid selected: every grid. It never changes the calculation "
                         "(PowerFactory calculates the whole network) and applies in full when a kept run is "
                         "re-evaluated.",
-    'contingency_grids': "n-1 filter for the calculation. Only contingencies whose outaged equipment lies in the "
-                         "selected grids are analysed; the others are set to 'Not analysed' for the n-1 run and "
-                         "restored afterwards. 'Every grid' analyses every contingency. In a re-evaluation it leaves "
+    'contingency_grids': "n-1 filter for the calculation. Outage Assessment defines one contingency for every line, "
+                         "branch, transformer, reactor, compensation and FACTS element in the selected grids; a "
+                         "contingency analysis already in the study case is not used. 'Every grid' defines one for "
+                         "every such element of the whole model, independent of the report filter. In a re-evaluation it leaves "
                          "contingencies out of the evaluation; it cannot add ones that were not calculated.",
     'contingency_elements': "n-1 filter for the calculation. Choose the elements that are outaged in n-1 and (n-1)': "
                             "only contingencies that outage at least one selected element are analysed, every other is "
-                            "set to 'Not analysed' for the n-1 run (or not created when Outage Assessment defines the "
-                            "contingencies). None selected: every element is outaged. The loading of every element is "
+                            "not created: Outage Assessment defines contingencies only for them. None selected: every "
+                            "element of the n-1 grids is outaged. The loading of every element is "
                             "still assessed under the analysed contingencies. In a re-evaluation it leaves the other "
                             "contingencies out of the evaluation.",
-    'contingency_preview': "How many contingencies of the study case's contingency analysis the selection would keep. "
-                           "Their equipment is read with ComOutage.GetObject; nothing is changed.",
+    'contingency_preview': "How many contingencies Outage Assessment defines for the n-1 grids: one per line, branch, "
+                           "transformer, reactor, compensation and FACTS element. Read only; nothing is created here.",
     'grid_buttons': "Selects every grid, or clears the selection so that every grid is assessed. Takes effect at once.",
     'source': "Origin of the value: Outage Assessment (Outage Assessment default), PowerFactory (read from the model or the calculation "
               "configuration) or user (changed by you). 'edited, not applied' means the entry differs from the applied "
@@ -7965,11 +8014,12 @@ class CaseEditor:
         """The requested assessments; a problem as text, else None."""
         if not n0 and not n1 and not n1_prime:
             return 'Select at least one assessment.'
-        if not n0:
-            return 'n-0 is always calculated: the report is built on it.'
+        if not n0 and not n1:
+            return 'Select n-0 (quasi-dynamic simulation), n-1 or both.'
         if n1_prime and not n1:
             return "(n-1)' is compared with n-1, so it needs n-1."
-        self.config['assessments'] = ['n-0'] + ([N1_REFERENCE] if n1 else []) + ([N1_PRIME] if n1_prime else [])
+        self.config['assessments'] = (['n-0'] if n0 else []) + ([N1_REFERENCE] if n1 else []) + (
+            [N1_PRIME] if n1_prime else [])
         return None
 
     def request(self):
@@ -9539,16 +9589,12 @@ class CaseManagerDialog:
         strip.setSpacing(10)
         options, card = self.card(spacing=6)
         self.card_title(card, 'Calculation')
-        # n-0 (the QDS of REF and every case) is always calculated, so it has no control here.
-        base = widgets.QHBoxLayout()
-        base.addWidget(self.pill('n-0  always', 'primary'))
-        base.addWidget(self.label('reference QDS and one QDS run per case', 'hint'))
-        base.addStretch(1)
-        self.tip(base.itemAt(0).widget(), HELP_TEXTS['n0'])
-        card.addLayout(base)
+        # n-0 is the quasi-dynamic simulation; unticked, the run is n-1 only (no QDS, own n-1 time sweep).
+        self.n0_check = widgets.QCheckBox('n-0 - quasi-dynamic simulation (reference and one run per case)')
         self.n1_check = widgets.QCheckBox('n-1 - reference contingency analysis')
         self.n1_prime_check = widgets.QCheckBox("(n-1)' - contingency analysis with planned-outage scenarios")
-        for check, key, assessment in ((self.n1_check, 'n1', N1_REFERENCE), (self.n1_prime_check, 'n1_prime', N1_PRIME)):
+        for check, key, assessment in ((self.n0_check, 'n0', 'n-0'), (self.n1_check, 'n1', N1_REFERENCE),
+                                       (self.n1_prime_check, 'n1_prime', N1_PRIME)):
             check.setChecked(assessment in self.editor.config['assessments'])
             check.toggled.connect(lambda _checked, which=key: self.safe(lambda: self.apply_assessments(which))())
             self.tip(check, HELP_TEXTS[key])
@@ -10482,7 +10528,12 @@ class CaseManagerDialog:
             target.blockSignals(True)
             target.setChecked(changed != 'n1')
             target.blockSignals(False)
-        self.editor.set_assessments(True, self.n1_check.isChecked(), self.n1_prime_check.isChecked())
+        if not self.n0_check.isChecked() and not self.n1_check.isChecked():
+            # Something must be calculated: without n-1, n-0 stays ticked.
+            self.n0_check.blockSignals(True)
+            self.n0_check.setChecked(True)
+            self.n0_check.blockSignals(False)
+        self.editor.set_assessments(self.n0_check.isChecked(), self.n1_check.isChecked(), self.n1_prime_check.isChecked())
         self.refresh_overview()
 
     def _settings_ready(self, title):
@@ -10524,7 +10575,7 @@ class CaseManagerDialog:
                 saved.get('revision'))):
             return
         self.editor.load(saved)
-        for check, assessment in ((self.n1_check, N1_REFERENCE), (self.n1_prime_check, N1_PRIME)):
+        for check, assessment in ((self.n0_check, 'n-0'), (self.n1_check, N1_REFERENCE), (self.n1_prime_check, N1_PRIME)):
             check.blockSignals(True)
             check.setChecked(assessment in self.editor.config['assessments'])
             check.blockSignals(False)
@@ -10541,7 +10592,8 @@ class CaseManagerDialog:
         self.finish_editing()
         if not self._settings_ready('Start calculation'):
             return
-        problem = self.editor.set_assessments(True, self.n1_check.isChecked(), self.n1_prime_check.isChecked())
+        problem = self.editor.set_assessments(self.n0_check.isChecked(), self.n1_check.isChecked(),
+                                              self.n1_prime_check.isChecked())
         problems = ([problem] if problem else []) + validate_case_config(self.editor.config)
         if problems:
             self.error('Start calculation', '\n'.join(problems))
@@ -11854,8 +11906,8 @@ def sweep_period(times, step, limit=None):
     count = int(round((last - first) / step)) + 1
     if count > limit:
         raise OutageAssessmentError(
-            "The n-1 time sweep from the first to the last study time of the outage windows covers {} QDS steps, more "
-            "than {}; every one calculates every contingency.".format(count, limit),
+            "The n-1 time sweep from the first to the last study time of the outage windows covers {} {}, more "
+            "than {}; every one calculates every contingency.".format(count, n1_steps_label(), limit),
             details=["Study times inside the windows: " + times_text(times)],
             hint="Split the case into cases whose outage windows lie close together, or raise 'max n-1 study times' "
                  "in Settings.")
@@ -11939,7 +11991,7 @@ def run_n1_sweep(command, times, step, active_keys, records, excluded, label, ke
             raise OutageAssessmentError(
                 "The contingency analysis for {} did not calculate {} of the {} study times inside the outage windows, "
                 "so its results cannot be placed in the windows.".format(label, len(missing), len(times)),
-                details=["Wanted (QDS steps inside the outage windows): " + times_text(times),
+                details=["Wanted ({} inside the outage windows): ".format(n1_steps_label()) + times_text(times),
                          "Missing: " + times_text(missing),
                          "Written period: {} to {} (exclusive), {} step(s)".format(
                              _format_pf_time(period[0]), _format_pf_time(period[-1] + step), len(period)),
@@ -12067,7 +12119,8 @@ def n1_data_text(kind, found, data, qds_steps=None, reference=None):
             "study time: {}; {} value(s), {} inside the recording limits (code 3).".format(
                 kind, object_name(kept) if kept is not None else 'read at once', len(data['times']),
                 data.get('calculated_count', len(data['times'])),
-                ", of {} QDS steps in the period; the others are not calculated".format(qds_steps) if qds_steps else "",
+                ", of {} {} in the period; the others are not calculated".format(qds_steps, n1_steps_label())
+                if qds_steps else "",
                 clip_text("; ".join(per_time), 300) or "none", len(cells), sum(1 for value in cells if value is None)))
     if reference is not None:
         mine = {key[0] for values in data['times'].values() for key in values}
@@ -12095,7 +12148,8 @@ def calculate_n1_case(command, plan, request, records, grid, excluded, prime, re
     label = label or 'case ' + plan['id']
     times = n1_study_times([plan['windows'][record['key']] for record in plan['members']], grid)
     if not times:
-        return {'status': 'NOT EVALUATED', 'reason': 'no QDS time step lies inside the outage windows', 'times': 0}
+        return {'status': 'NOT EVALUATED', 'reason': 'no {} lies inside the outage windows'.format(
+            n1_steps_label()[:-1]), 'times': 0}
     mark = 'Outage Assessment {}; case {} {{}}; fingerprint {}'.format(PUBLISHER_VERSION, plan['id'], plan['fingerprint'])
     background = {record['key'] for record in request['background']}
     key = tuple(times)
@@ -12540,7 +12594,7 @@ def _log_findings(logger, payload):
 
 
 def contingency_grid_selection():
-    """The grids whose contingencies are analysed (empty: every grid). Independent of the report filter."""
+    """The grids whose equipment gets a contingency (empty: every grid). Independent of the report filter."""
     return tuple(current_setting('contingency_grids') or ())
 
 
@@ -12634,7 +12688,7 @@ def _equipment_map(commands):
 # ---------------------------------------------------------------------------
 
 
-def calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state, result_objects):
+def calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state, result_objects, grid='qds'):
     """Phase 1 of n-1 and, if requested, (n-1)' for every ready planning case: {case id: entry}.
 
     Every sweep is kept as a copy (OA_<stamp>_<case>_N1 and _N1P) and
@@ -12644,7 +12698,8 @@ def calculate_n1(app, study_case, qds, request, records, ready, logger, study_ti
     calculation.
     """
     prime = N1_PRIME in (request.get('assessments') or ())
-    grid = qds_grid(qds)
+    # With n-0 the n-1 study times are the QDS steps; without it (n-1 only) the caller passes the n-1 time grid.
+    grid = qds_grid(qds) if grid == 'qds' else grid
     command, reason = _n1_command(app, study_case, grid, logger)
     if reason:
         logger.write("CALCULATION", "n-1 is not evaluated: {}.".format(reason), 4, "WARNING")
@@ -12778,7 +12833,7 @@ def kept_stamps(study_case):
     return sorted(stamps, reverse=True)
 
 
-def kept_runs(study_case, stamp, request, ready, logger, grid=None):
+def kept_runs(study_case, stamp, request, ready, logger, grid=None, n0=True):
     """Phase 1 without a calculation: the runs and n-1 entries from the result objects of an earlier run.
 
     Every object is found by its name OA_<stamp>_<case>; a case whose
@@ -12790,7 +12845,7 @@ def kept_runs(study_case, stamp, request, ready, logger, grid=None):
     logger.write("CALCULATION", "Re-evaluating the kept results of the run {}: no calculation, PowerFactory is not "
                  "changed.".format(stamp), 4, verbosity=LOG_COMPACT)
     runs = []
-    if setting_value('run_reference'):
+    if setting_value('run_reference') and n0:
         obj = objects.get(prefix + REFERENCE_CASE_ID)
         if obj is None:
             raise OutageAssessmentError("The run {} kept no reference result object '{}'.".format(stamp, prefix + REFERENCE_CASE_ID))
@@ -12811,12 +12866,14 @@ def kept_runs(study_case, stamp, request, ready, logger, grid=None):
     for plan in ready:
         info = _case_info(plan)
         obj = objects.get(prefix + plan['id'])
-        if obj is None and plan['fingerprint'] in found_by_fingerprint:
+        if n0 and obj is None and plan['fingerprint'] in found_by_fingerprint:
             runs.append({'id': plan['id'], 'plan': plan, 'reuse_of': found_by_fingerprint[plan['fingerprint']]})
             n1[plan['id']] = n1.get(found_by_fingerprint[plan['fingerprint']], {'status': 'NOT EVALUATED',
                                                                                 'reason': 'no kept n-1 result', 'times': 0})
             continue
-        if obj is None:
+        if not n0:
+            pass  # n-1 only: no QDS result object is read
+        elif obj is None:
             runs.append(dict(info, failed="the run {} kept no result object '{}'".format(stamp, prefix + plan['id'])))
         elif result_fingerprint(obj) is None:
             runs.append(dict(info, failed='its kept result has no verifiable fingerprint; calculate again',
@@ -12939,13 +12996,16 @@ def execute_outage_assessment(app):
         report = None
         logger.write("CONTEXT", "This ComPython is not below an IntReport: Outage Assessment calculates and builds the report "
                      "tables but does not publish them (standalone run). Place it below the IntReport to publish.", 1)
-    qds = app.GetFromStudyCase("ComStatsim")
+    try:
+        qds = app.GetFromStudyCase("ComStatsim")
+    except Exception:
+        qds = None
+    original_result = safe_attr(qds, "results") if qds is not None else None
     if qds is None:
-        raise OutageAssessmentError(
-            "No ComStatsim was found in the active study case. Configure the "
-            "quasi-dynamic simulation before running Outage Assessment.")
-    original_result = safe_attr(qds, "results")
-    if original_result is None:
+        # n-0 needs the quasi-dynamic simulation; n-1 only does not (checked once the assessments are chosen).
+        logger.write("CONTEXT", "No ComStatsim was found in the active study case: only n-1 can be calculated "
+                     "(untick n-0 in the case manager).", 1, "WARNING")
+    elif original_result is None:
         logger.write("CONTEXT", "ComStatsim.results is empty. The first run (REF) lets PowerFactory bind its own result "
                      "object; if it binds none, Outage Assessment creates an empty one in the study case. Nothing to do.",
                      1, "WARNING")
@@ -12957,7 +13017,7 @@ def execute_outage_assessment(app):
             details=["Bound result object: " + object_key(original_result)],
             hint="Bind ComStatsim.results to another result object, or run the quasi-dynamic simulation once by hand "
                  "so that PowerFactory binds its own, then run Outage Assessment again.")
-    option_found, original_option = _read_setting(qds, PLANNED_OUTAGE_OPTION)
+    option_found, original_option = _read_setting(qds, PLANNED_OUTAGE_OPTION) if qds is not None else (True, None)
     if not option_found:
         raise OutageAssessmentError(
             "The active ComStatsim does not expose the 'Planned Outages' "
@@ -12972,11 +13032,12 @@ def execute_outage_assessment(app):
                 object_name(original_result), setting_value('run_reference')), 2)
     _log_context(app, study_case, qds, original_result, logger)
     logger.step(2, "ComStatsim settings")
-    _log_qds_settings(qds, original_result, study_time_state, logger)
+    if qds is not None:
+        _log_qds_settings(qds, original_result, study_time_state, logger)
+    period = qds_period(qds) if qds is not None else (None, None)
     results = []
     result_objects = ResultStore(study_case=study_case)
     state_errors = []
-    period = qds_period(qds)
     logger.step(3, "Planned outages and planning cases")
     with RUN_STATS.measure("read planned outages"):
         records, candidates = classify_planned_outages(app, logger, period)
@@ -12991,6 +13052,16 @@ def execute_outage_assessment(app):
     with RUN_STATS.wait():
         request = obtain_case_request(app, records, candidates, period, logger, qds_time_info(qds, period), grids,
                                       contingencies, kept, elements)
+    # n-0 is the quasi-dynamic simulation (ComStatsim), n-1 the contingency analysis with its own time sweep
+    # (ComSimoutage). Without n-0 no QDS runs: the n-1 study times then come from the outage windows.
+    n0 = 'n-0' in (request.get("assessments") or ['n-0'])
+    if n0 and qds is None:
+        raise OutageAssessmentError(
+            "No ComStatsim was found in the active study case, so n-0 (the quasi-dynamic simulation) cannot be "
+            "calculated.", hint="Configure the quasi-dynamic simulation, or untick n-0 in the case manager to "
+                                "calculate n-1 only.")
+    if not n0:
+        RUN_CONTEXT['n1_steps'] = 'n-1 time steps'
     set_log_level(request.get("log_level"))
     # The settings are fixed here, after the case manager has closed, and apply to the whole run.
     request["settings_snapshot"] = activate_settings(request.get("settings"))
@@ -13000,7 +13071,7 @@ def execute_outage_assessment(app):
                                                           current_setting("monitoring_grids"))
     logger.write("SETTINGS", "Report filter: {}. Contingencies: {} {}.".format(
         grid_scope_text(), request["contingency_scope"], n1_filter_text()), 3)
-    if follows_outages():
+    if follows_outages() or not n0:
         follow_outage_statuses(records, logger)
     _log_plan(logger, request)
     ready = [plan for plan in request["cases"] if plan["status"] == PLAN_READY]
@@ -13012,9 +13083,27 @@ def execute_outage_assessment(app):
     evaluate_stamp = request.get("evaluate_stamp")
     # The run ID of both reports: the stamp of the result objects the run keeps (or re-evaluates).
     request["run_id"] = evaluate_stamp or result_objects.stamp
+    n1_grid = None if n0 else n1_only_grid(ready)
     try:
         if evaluate_stamp:
-            runs, n1_runs = kept_runs(study_case, evaluate_stamp, request, ready, logger, span_grid(qds, ready))
+            runs, n1_runs = kept_runs(study_case, evaluate_stamp, request, ready, logger,
+                                      span_grid(qds, ready) if n0 else n1_grid, n0)
+        elif not n0:
+            request["qds_run_period"] = ("No quasi-dynamic simulation in this run: n-0 is not ticked, n-1 only. The n-1 "
+                                         "time sweep samples the outage windows every {} min.".format(
+                                             setting_value('n1_step')))
+            logger.write("CALCULATION", "n-0 is not ticked: no quasi-dynamic simulation (ComStatsim) runs. n-1 is "
+                         "calculated with the contingency analysis alone; its time sweep samples the windows of the "
+                         "planned outages every {} min ({}).".format(
+                             setting_value('n1_step'), 'grid {} to {}'.format(_format_pf_time(n1_grid[0]), _format_pf_time(
+                                 n1_grid[1])) if n1_grid else 'no outage window is known'), 4, verbosity=LOG_COMPACT)
+            if N1_REFERENCE not in (request.get("assessments") or ()):
+                logger.write("CALCULATION", "n-1 is not calculated: it is not ticked.", 4, "WARNING")
+            elif not ready:
+                logger.write("CALCULATION", "n-1 is not calculated: no planning case can be calculated.", 4, "WARNING")
+            else:
+                n1_runs = calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state,
+                                       result_objects, grid=n1_grid)
         else:
             span = set_qds_span(qds_guard, qds, ready, logger)
             request["qds_run_period"] = (
@@ -13070,10 +13159,11 @@ def execute_outage_assessment(app):
         restoring = time.monotonic()
         logger.write("RESTORE", "Restoring the original PowerFactory state.", 5, verbosity=LOG_DETAILED)
         state_errors.extend(_restore_study_time(study_time_state, logger))
-        state_errors.extend(
-            _restore_planned_outage_option(qds, original_option, logger))
-        state_errors.extend(_restore_qds_span(qds_guard, qds, span, logger))
-        _log_results_binding(qds, original_result, logger)
+        if qds is not None:
+            state_errors.extend(
+                _restore_planned_outage_option(qds, original_option, logger))
+            state_errors.extend(_restore_qds_span(qds_guard, qds, span, logger))
+            _log_results_binding(qds, original_result, logger)
         _log_kept_results(result_objects, logger)
         RUN_CONTEXT['restore'] = ("NOT fully restored: " + "; ".join(state_errors)) if state_errors else (
             "restored and verified (Study Case time, 'Planned Outages' option, QDS period, every value Outage Assessment wrote)")
@@ -13090,6 +13180,9 @@ def execute_outage_assessment(app):
                      "(slow). The run summary counts these reads.", 6, "WARNING")
     try:
         results = evaluate_runs(runs, request, logger)
+        if not n0:
+            # n-1 only: one result per calculated case without QDS data; its n-1 entry follows.
+            results = [n0_skipped_case(_case_info(plan)) for plan in ready]
         if n1_runs:
             evaluate_n1(n1_runs, request, ready, results, logger)
     finally:
@@ -13107,7 +13200,9 @@ def execute_outage_assessment(app):
         project = app.GetActiveProject()
     except Exception:
         project = None
-    if ready and setting_value('run_reference'):
+    if not n0:
+        run_mode = "n-1 ONLY - NO QUASI-DYNAMIC SIMULATION"
+    elif ready and setting_value('run_reference'):
         run_mode = "REFERENCE + PLANNING CASES"
     elif ready:
         run_mode = "PLANNING CASES ONLY"

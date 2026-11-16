@@ -1,23 +1,27 @@
-"""CI-specific requirements; ordinary local tests retain their existing behavior."""
+"""Unattended test execution: explicit GUI automation, no user prompts."""
 
+import builtins
 import faulthandler
 import sys
+from types import ModuleType
 
 import pytest
 
 
 def pytest_addoption(parser):
+    parser.addoption("--run-gui", action="store_true",
+                     help="Run automated native GUI tests (requires a graphical session; no manual clicks)")
     parser.addoption("--require-gui", action="store_true",
                      help="Fail desktop validation if any selected test is skipped")
     parser.addoption("--gui-timeout", type=int, default=60,
-                     help="Terminate pytest with a traceback if a GUI test hangs (seconds, default: 60)")
+                     help="Terminate pytest with a traceback if a test hangs (seconds, default: 60)")
 
 
 def pytest_configure(config):
     if config.getoption("--gui-timeout") < 1:
         raise pytest.UsageError("--gui-timeout must be at least 1 second")
-    config._gridlens_skip_tracker = _SkipTracker()
-    config.pluginmanager.register(config._gridlens_skip_tracker, "gridlens-skips")
+    config._outage_assessment_skip_tracker = _SkipTracker()
+    config.pluginmanager.register(config._outage_assessment_skip_tracker, "outage_assessment-skips")
 
 
 class _SkipTracker:
@@ -33,7 +37,7 @@ class _SkipTracker:
 
 
 def pytest_sessionfinish(session, exitstatus):
-    if session.config.getoption("--require-gui") and session.config._gridlens_skip_tracker.skipped:
+    if session.config.getoption("--require-gui") and session.config._outage_assessment_skip_tracker.skipped:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
         reporter = session.config.pluginmanager.getplugin("terminalreporter")
         if reporter is not None:
@@ -42,13 +46,26 @@ def pytest_sessionfinish(session, exitstatus):
 
 @pytest.fixture(autouse=True)
 def _bounded_gui_test(request, monkeypatch):
-    """Keep native dialogs unattended and bound even a blocked Tcl event loop."""
-    if request.node.get_closest_marker("gui") is None:
-        yield
-        return
+    """Fail on an unstubbed interaction, including in tests without a gui marker."""
+    gui = request.node.get_closest_marker("gui") is not None
+    if gui and not (request.config.getoption("--run-gui") or request.config.getoption("--require-gui")):
+        pytest.skip("Native GUI tests are opt-in; use --run-gui in a graphical session")
     timeout = request.config.getoption("--gui-timeout")
     faulthandler.dump_traceback_later(timeout, file=sys.__stderr__, exit=True)
     roots, callback_errors = [], []
+
+    def unexpected_interaction(*args, **kwargs):
+        pytest.fail("Unexpected user interaction in test. Stub the prompt or automate the GUI explicitly.",
+                    pytrace=False)
+
+    monkeypatch.setattr(builtins, "input", unexpected_interaction)
+    # Imported script modules are often loaded with exec_module rather than put
+    # in sys.modules. Guard their shared GUI entry point before either Tk or Qt
+    # can open a native window. Test-specific stubs may replace this guard.
+    if not gui:
+        for module in list(vars(request.module).values()):
+            if isinstance(module, ModuleType) and callable(getattr(module, "run_case_manager", None)):
+                monkeypatch.setattr(module, "run_case_manager", unexpected_interaction)
     try:
         try:
             import tkinter as tk
@@ -60,6 +77,8 @@ def _bounded_gui_test(request, monkeypatch):
         original_init, original_update = tk.Tk.__init__, tk.Misc.update
 
         def tracked_init(root, *args, **kwargs):
+            if not gui:
+                unexpected_interaction()
             original_init(root, *args, **kwargs)
             roots.append(root)
 
@@ -74,11 +93,21 @@ def _bounded_gui_test(request, monkeypatch):
 
         def unexpected_dialog(*args, **kwargs):
             title = args[0] if args else kwargs.get("title", "")
-            raise RuntimeError(f"Unexpected modal dialog in GUI test: {title}. Stub the expected dialog explicitly.")
+            pytest.fail(f"Unexpected modal dialog in test: {title}. Stub the expected dialog explicitly.",
+                        pytrace=False)
 
         monkeypatch.setattr(tk.Tk, "__init__", tracked_init)
         monkeypatch.setattr(tk.Misc, "_report_exception", capture_callback_error)
         monkeypatch.setattr(tk.Misc, "update", checked_update)
+        # Native loops/waits need an explicit test driver; a gui marker alone
+        # must never turn a test into a manual window demonstration.
+        for name in ("mainloop", "wait_window", "wait_visibility", "wait_variable"):
+            monkeypatch.setattr(tk.Misc, name, unexpected_interaction)
+        monkeypatch.setattr(tk, "mainloop", unexpected_interaction)
+        # Also cover filedialog and aliases imported before this fixture.
+        from tkinter import commondialog
+        monkeypatch.setattr(commondialog.Dialog, "show", unexpected_dialog)
+        monkeypatch.setattr(simpledialog.Dialog, "__init__", unexpected_dialog)
         for name in ("showerror", "showinfo", "showwarning", "askyesno", "askokcancel",
                      "askquestion", "askretrycancel", "askyesnocancel"):
             monkeypatch.setattr(messagebox, name, unexpected_dialog)

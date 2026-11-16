@@ -9,7 +9,7 @@ import pytest
 
 from _paths import delivered
 SCRIPT = delivered("main.py")
-SPEC = importlib.util.spec_from_file_location("gridlens_cases", SCRIPT)
+SPEC = importlib.util.spec_from_file_location("outage_assessment_cases", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(gl)
@@ -37,13 +37,16 @@ class Logger:
     def __init__(self):
         self.lines = []
 
-    def write(self, stage, message, step=None, level="INFO"):
+    def write(self, stage, message, step=None, level="INFO", verbosity=None):
         self.lines.append((stage, level, message))
 
-    def detail(self, message, level="INFO"):
+    def shows(self, verbosity):
+        return True  # records every line, whatever its level
+
+    def detail(self, message, level="INFO", verbosity=None):
         self.lines.append(("DETAIL", level, message))
 
-    def table(self, header, rows, level="INFO"):
+    def table(self, header, rows, level="INFO", verbosity=None):
         for row in rows:
             self.lines.append(("TABLE", level, "  ".join(str(cell) for cell in row)))
 
@@ -283,13 +286,13 @@ def test_top_lines_by_case_rank_each_case_on_its_own():
 
 def test_calculation_evidence_lists_every_run_and_its_result_object():
     payload, results, _ = _payload()
-    results[1]["result_object"] = "GridLens_261015-000000_OUT01"
+    results[1]["result_object"] = "OA_261015-000000_OUT01"
 
     payload = gl.build_cases_payload(Obj("Europe", "IntCase"), results, "BDS", "Result", _payload()[2], "operator", "RUN")
 
     runs = payload["ScriptedCalculationRuns"]
     assert [row["run_kind"] for row in runs] == ["REFERENCE", "CASE", "CASE", "CASE"]
-    assert runs[1]["result_object"] == "GridLens_261015-000000_OUT01"
+    assert runs[1]["result_object"] == "OA_261015-000000_OUT01"
     assert runs[0]["time_steps"] == 6
 
 
@@ -307,7 +310,7 @@ def test_report_states_what_the_assessment_does_and_does_not_prove():
 
     meta = payload["ScriptedReportMeta"][0]
     assert "Statement A" in meta["coverage_statement"] and "Statement B" in meta["coverage_statement"]
-    assert meta["qds_mode_text"].startswith("Complete ComStatsim period")
+    assert meta["qds_mode_text"].startswith("Every run covers the same QDS period")
     assert meta["case_source_text"] == "test cases"
 
 
@@ -361,7 +364,7 @@ def test_changed_assessment_limits_change_only_the_assessment_and_restore_cleanl
     assert {row["class_label"] for row in changed["ScriptedPieLines"]} == {"up to 120 %", "120 to 150 %", "above 150 %"}
     quality = {row["check_id"]: row for row in changed["ScriptedModelQuality"]}
     assert "lines" in quality["limit_loading"]["message"] and "150" in quality["limit_loading"]["message"]
-    assert quality["settings"]["status"] == "WARNING" and "GridLens default 100 %" in quality["settings"]["message"]
+    assert quality["settings"]["status"] == "WARNING" and "Outage Assessment default 100 %" in quality["settings"]["message"]
     # The calculated values themselves are untouched: settings only interpret them.
     second = next(result for result in results if result["name"] == "Outage 2")
     assert max(stats["max"] for _, stats in second["by_category"]["line"]) > 100.0
@@ -374,7 +377,7 @@ def test_report_names_the_settings_and_the_rules_version(default_settings_afterw
     quality = {row["check_id"]: row for row in payload["ScriptedModelQuality"]}
     assert quality["settings"]["status"] == "INFO"
     assert "classification rules 1.0" in quality["settings"]["message"]
-    assert "GridLens defaults" in quality["settings"]["message"]
+    assert "Outage Assessment defaults" in quality["settings"]["message"]
     assert "provisionally" in quality["settings"]["message"]
 
 
@@ -531,8 +534,8 @@ def test_outage_component_lines_count_steps_without_load_inside_and_outside_the_
 def test_result_object_text_names_steps_period_classes_and_variables():
     counters = {"columns": 4, "columns_by_class": {"ElmTerm": 2, "ElmLne": 1, "ElmTr2": 1},
                 "columns_by_variable": {"m:u": 2, "c:loading": 2}}
-    text = gl.result_object_text(Obj("GridLens_x_REF", "ElmRes"), counters, LABELS, TIMES)
-    assert text == ("Result object 'GridLens_x_REF': 6 time step(s) from {} to {} (step 1 h, span 5 h); 4 column(s) "
+    text = gl.result_object_text(Obj("OA_x_REF", "ElmRes"), counters, LABELS, TIMES)
+    assert text == ("Result object 'OA_x_REF': 6 time step(s) from {} to {} (step 1 h, span 5 h); 4 column(s) "
                     "by class: ElmTerm 2, ElmLne 1, ElmTr2 1; by variable: c:loading 2, m:u 2.".format(LABELS[0], LABELS[-1]))
 
 
@@ -585,3 +588,47 @@ def test_without_n1_the_time_criticality_shows_the_qds_steps_of_reference_and_ev
     again = gl.empty_payload()
     gl._time_criticality(again, results, {})
     assert again["ScriptedTimeCriticality"] == chart and again["ScriptedTimeMatrix"] == matrix
+
+
+def test_the_line_bars_carry_their_value_only_in_the_series_of_their_loading_class():
+    payload, *_ = _payload()
+    warning, limit = gl.loading_warning("line"), gl.loading_limit("line")
+    for row in payload["ScriptedLineLoadingBars"]:
+        values = (row["value_ok"], row["value_warning"], row["value_over"])
+        assert sorted(values)[:2] == [0.0, 0.0], "exactly one class holds the value"
+        value = max(values)
+        expected = 0 if value <= warning else 1 if value <= limit else 2
+        assert values[expected] == value
+    assert "max_value" not in dict(dict(gl.TABLES)["ScriptedLineLoadingBars"]), "kept by the script, not published"
+
+
+def test_the_window_chart_gets_the_duration_of_every_window():
+    payload, *_ = _payload()
+    for row in payload["ScriptedOutageWindows"]:
+        assert row["duration_hours"] == pytest.approx(row["end_hours"] - row["start_hours"])
+        assert row["duration_hours"] > 0
+
+
+def test_without_n1_the_settings_table_says_so_once():
+    payload = {name: [] for name, _ in gl.TABLES}
+    gl._assessment_settings(payload, {"assessments": ["n-0"]})
+    rows = payload["ScriptedAssessmentSettings"]
+    contingency = [row for row in rows if row["section"] == "Contingency analysis"]
+    assert [row["value_text"] for row in contingency] == ["n-1 not calculated in this run"]
+    filters = {row["setting_key"]: row["status"] for row in rows if row["setting_key"] in ("contingency_grids", "contingency_elements")}
+    assert set(filters.values()) == {"not used: n-1 not calculated"}
+    n1_only = {row["setting_key"]: row["status"] for row in rows if row["setting_key"] in ("n1_limit_mode", "max_n1_times")}
+    assert set(n1_only.values()) == {"not used: n-1 not calculated"}, "settings that only n-1 uses"
+    assert {row["status"] for row in rows if row["setting_key"] == "line_limit"} == {"applied"}
+    assert {row["origin"] for row in rows} <= {"default", "user", "PowerFactory"}, "no wrapping tool name"
+
+    payload = {name: [] for name, _ in gl.TABLES}
+    gl._assessment_settings(payload, {"assessments": ["n-0", gl.N1_REFERENCE]})
+    rows = payload["ScriptedAssessmentSettings"]
+    assert len([row for row in rows if row["section"] == "Contingency analysis"]) > 1
+    assert {row["status"] for row in rows if row["setting_key"] == "contingency_grids"} == {"applied to the n-1 run"}
+
+
+def test_a_network_state_without_case_outage_is_named_so():
+    plan = {"members": [{"key": "A", "name": "SW_L4"}], "states": [(0.0, 3600.0, {"A"}), (3600.0, 7200.0, set())]}
+    assert gl.states_text(plan).endswith("no case outage active")

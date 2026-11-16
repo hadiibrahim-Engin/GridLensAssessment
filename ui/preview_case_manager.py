@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>
-# Outage Assessment 8.1.0: 185 definitions.
+# Outage Assessment 8.1.0: 187 definitions.
 import hashlib
 import math
 import re
@@ -87,6 +87,9 @@ ENERGIZED_MIN_PU = 0.1
 
 
 MAX_N1_TIMES = 2000
+
+
+N1_STEP_MINUTES = 60
 
 
 PUBLISHER_VERSION = '8.1.0'
@@ -252,7 +255,7 @@ QDS_SPAN_CHOICES = ((QDS_SPAN_OUTAGES, 'first to last planned outage of the case
                     (QDS_SPAN_CONFIGURED, 'as set in ComStatsim'))
 
 
-COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'max_cases': 20}
+COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'max_cases': 20, 'n1_step': 1440}
 
 
 NOT_VERIFIED = 'not verified yet'
@@ -284,7 +287,7 @@ SETTINGS = (
              note='evaluation only, also in a re-evaluation; no grid selected: every grid (or GRID_NAME_FILTER)'),
     _setting('contingency_grids', 'Network scope', 'n-1 filter: grids of the outaged equipment', '', None, 'grids',
              CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
-             note='calculation: the other contingencies are "Not analysed" (outserv) for the run; none: every grid'),
+             note='calculation: one contingency per branch element in these grids; none: every grid'),
     _setting('contingency_elements', 'Network scope', 'n-1 filter: outaged elements', '', (), 'elements',
              CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
              note='calculation: only contingencies outaging a selected element are analysed, the others are "Not '
@@ -342,6 +345,10 @@ SETTINGS = (
              note='every case is one more QDS run over the complete period'),
     _setting('max_n1_times', 'Run', 'n-1 study times per case, at most', 'study times', MAX_N1_TIMES, 'count',
              applies="n-1, (n-1)'", note='every study time calculates every contingency'),
+    _setting('n1_step', 'Run', 'n-1 time step without n-0', 'min', N1_STEP_MINUTES, 'count',
+             CATEGORY_CALCULATION, applies="n-1, (n-1)'",
+             note='only when n-0 is not ticked: the n-1 time sweep samples the outage windows with this step; '
+                  'with n-0 it uses the QDS steps'),
     _contingency_setting('contingency_set', 'Contingency set'),
     _contingency_setting('contingency_categories', 'Equipment categories with contingencies'),
     _contingency_setting('monitored_scope', 'Monitored equipment and network areas'),
@@ -515,6 +522,7 @@ _SETTING_CONSTANTS = {
     'run_reference': 'RUN_REFERENCE_CASE',
     'max_cases': 'MAX_CASES',
     'max_n1_times': 'MAX_N1_TIMES',
+    'n1_step': 'N1_STEP_MINUTES',
 }
 
 
@@ -1477,8 +1485,8 @@ def validate_case_config(config, max_cases=-1):
     assessments = config.get('assessments', ['n-0'])
     if not _is_text_list(assessments) or not assessments or set(assessments) - set(ASSESSMENTS):
         problems.append('assessments must name at least one of {}'.format(', '.join(ASSESSMENTS)))
-    elif 'n-0' not in assessments:
-        problems.append('the n-0 quasi-dynamic assessment is always calculated: the report is built on it')
+    elif 'n-0' not in assessments and N1_REFERENCE not in assessments:
+        problems.append('choose n-0 (quasi-dynamic simulation), n-1 or both')
     elif N1_PRIME in assessments and N1_REFERENCE not in assessments:
         problems.append("(n-1)' is compared with n-1, so it needs n-1")
     if config.get('log_level', LOG_STANDARD) not in LOG_LEVELS:
@@ -1782,9 +1790,10 @@ SETTINGS_INTRO = ('Limits and classification parameters (category A) only interp
 CONTINGENCIES_NOT_READ = 'not read'
 
 
-N1_NOTE = ("Calculated with the contingency analysis (ComSimoutage) of the active study case, at the QDS time steps "
-           "inside the outage windows of each case. Results appear in the log and in the contingency and quality "
-           "sections of the reports.")
+N1_NOTE = ("Calculated with a contingency analysis (ComSimoutage) Outage Assessment defines and keeps: one contingency "
+           "per branch element of the n-1 grids. Its time sweep covers the outage windows of each case: at the QDS "
+           "steps with n-0, every 'n-1 time step' of the Settings without n-0 (no quasi-dynamic simulation). Results "
+           "appear in the log and in the contingency and quality sections of the reports.")
 
 
 HELP_TEXTS = {
@@ -1823,8 +1832,9 @@ HELP_TEXTS = {
                  "second only after the first: the second may only start after the first has ended.\n"
                  "only together: a case with one of them must contain the other, at the same time.\n"
                  "Rules apply to every case; a case that breaks one is not calculated and is reported.",
-    'n0': "n-0 - reference QDS\nCalculates the time-dependent base state of the network without planned outages and "
-          "without additional contingencies. Loads and infeeds change as in the quasi-dynamic simulation.",
+    'n0': "n-0 - quasi-dynamic simulation\nCalculates the reference and every planning case with the "
+          "quasi-dynamic simulation (ComStatsim). Untick it for an n-1 analysis only: then no QDS runs, the n-1 "
+          "time sweep samples the outage windows with the n-1 time step of the Settings.",
     'n1': "n-1 - reference contingency analysis\nAssesses the security of the base network without planned outages. "
           "Every defined unplanned single contingency is assessed at the chosen points in time.\n" + N1_NOTE,
     'n1_prime': "(n-1)' - contingency analysis with planned-outage scenarios\nAssesses a planned-outage scenario with "
@@ -1894,6 +1904,10 @@ SETTING_HELP = {
                  "so the run time grows with each case.",
     'max_n1_times': "Most n-1 study times per case. Every study time calculates every contingency twice (n-1 and "
                     "(n-1)'); a case with more study times is not evaluated and says so.",
+    'n1_step': "Only for a run without n-0 (n-1 only, no quasi-dynamic simulation): the n-1 time sweep "
+               "samples the windows of the planned outages of the calculated cases every this many minutes, from "
+               "local midnight of the first window on. With n-0 the n-1 study times are the QDS steps inside the "
+               "windows and this setting is not used.",
     'post_fault_voltage': "Post-fault voltage limits per post-fault time phase. PowerFactory's post-fault phases are "
                           "not verified yet, so no separate limit can be set.",
     'loading_change_tolerance': "n-0 QDS: a loading change smaller than this (in %-points) counts as unchanged when a "
@@ -1937,18 +1951,19 @@ SETTING_HELP = {
                         "left out of the report. No grid selected: every grid. It never changes the calculation "
                         "(PowerFactory calculates the whole network) and applies in full when a kept run is "
                         "re-evaluated.",
-    'contingency_grids': "n-1 filter for the calculation. Only contingencies whose outaged equipment lies in the "
-                         "selected grids are analysed; the others are set to 'Not analysed' for the n-1 run and "
-                         "restored afterwards. 'Every grid' analyses every contingency. In a re-evaluation it leaves "
+    'contingency_grids': "n-1 filter for the calculation. Outage Assessment defines one contingency for every line, "
+                         "branch, transformer, reactor, compensation and FACTS element in the selected grids; a "
+                         "contingency analysis already in the study case is not used. 'Every grid' defines one for "
+                         "every such element of the whole model, independent of the report filter. In a re-evaluation it leaves "
                          "contingencies out of the evaluation; it cannot add ones that were not calculated.",
     'contingency_elements': "n-1 filter for the calculation. Choose the elements that are outaged in n-1 and (n-1)': "
                             "only contingencies that outage at least one selected element are analysed, every other is "
-                            "set to 'Not analysed' for the n-1 run (or not created when Outage Assessment defines the "
-                            "contingencies). None selected: every element is outaged. The loading of every element is "
+                            "not created: Outage Assessment defines contingencies only for them. None selected: every "
+                            "element of the n-1 grids is outaged. The loading of every element is "
                             "still assessed under the analysed contingencies. In a re-evaluation it leaves the other "
                             "contingencies out of the evaluation.",
-    'contingency_preview': "How many contingencies of the study case's contingency analysis the selection would keep. "
-                           "Their equipment is read with ComOutage.GetObject; nothing is changed.",
+    'contingency_preview': "How many contingencies Outage Assessment defines for the n-1 grids: one per line, branch, "
+                           "transformer, reactor, compensation and FACTS element. Read only; nothing is created here.",
     'grid_buttons': "Selects every grid, or clears the selection so that every grid is assessed. Takes effect at once.",
     'source': "Origin of the value: Outage Assessment (Outage Assessment default), PowerFactory (read from the model or the calculation "
               "configuration) or user (changed by you). 'edited, not applied' means the entry differs from the applied "
@@ -2566,11 +2581,12 @@ class CaseEditor:
         """The requested assessments; a problem as text, else None."""
         if not n0 and not n1 and not n1_prime:
             return 'Select at least one assessment.'
-        if not n0:
-            return 'n-0 is always calculated: the report is built on it.'
+        if not n0 and not n1:
+            return 'Select n-0 (quasi-dynamic simulation), n-1 or both.'
         if n1_prime and not n1:
             return "(n-1)' is compared with n-1, so it needs n-1."
-        self.config['assessments'] = ['n-0'] + ([N1_REFERENCE] if n1 else []) + ([N1_PRIME] if n1_prime else [])
+        self.config['assessments'] = (['n-0'] if n0 else []) + ([N1_REFERENCE] if n1 else []) + (
+            [N1_PRIME] if n1_prime else [])
         return None
 
     def request(self):
@@ -3633,13 +3649,18 @@ class CaseManagerDialog:
         options = self._card(strip, row=0, column=0, sticky='nsew', padx=(0, 4))
         options.columnconfigure(0, weight=1)
         ttk.Label(options, text='Calculation', style='Title.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 4))
-        # n-0 (the QDS of REF and every case) is always calculated, so it has no control here.
+        # n-0 is the quasi-dynamic simulation; unticked, the run is n-1 only (no QDS, own n-1 time sweep).
+        self.n0_var = tk.BooleanVar(value='n-0' in self.editor.config['assessments'])
         self.n1_var = tk.BooleanVar(value=N1_REFERENCE in self.editor.config['assessments'])
         self.n1_prime_var = tk.BooleanVar(value=N1_PRIME in self.editor.config['assessments'])
         check_style = dict(background=self.CARD, foreground=self.TEXT, activebackground=self.INSET,
                            activeforeground=self.TEXT, selectcolor=self.CARD, font=self.body_font,
                            borderwidth=0, highlightthickness=1, highlightbackground=self.CARD,
                            highlightcolor=self.ACCENT, anchor='w', justify='left', padx=0, pady=4)
+        n0 = tk.Checkbutton(options, text='n-0 - quasi-dynamic simulation (reference and one run per case)',
+                            variable=self.n0_var, command=self.apply_assessments, **check_style)
+        n0.grid(row=1, column=0, sticky='w')
+        self.tip(n0, HELP_TEXTS['n0'])
         n1 = tk.Checkbutton(options, text='n-1 - reference contingency analysis', variable=self.n1_var,
                             command=self.apply_assessments, **check_style)
         n1.grid(row=2, column=0, sticky='w')
@@ -3648,7 +3669,7 @@ class CaseManagerDialog:
                                variable=self.n1_prime_var, command=self.apply_assessments, **check_style)
         prime.grid(row=3, column=0, sticky='w')
         options.bind('<Configure>', lambda event: [widget.configure(wraplength=max(180, event.width - 58))
-                                                   for widget in (n1, prime)], add='+')
+                                                   for widget in (n0, n1, prime)], add='+')
         self.tip(prime, HELP_TEXTS['n1_prime'])
         note = self._wrapped_label(options, "n-1 and (n-1)': results in the log and reports",
                                    row=4, column=0, padx=(22, 0))
@@ -4677,7 +4698,10 @@ class CaseManagerDialog:
                 self.n1_prime_var.set(False)
             else:
                 self.n1_var.set(True)
-        self.editor.set_assessments(True, self.n1_var.get(), self.n1_prime_var.get())
+        if not self.n0_var.get() and not self.n1_var.get():
+            # Something must be calculated: without n-1, n-0 stays ticked.
+            self.n0_var.set(True)
+        self.editor.set_assessments(self.n0_var.get(), self.n1_var.get(), self.n1_prime_var.get())
         self.refresh_overview()
 
     def _settings_ready(self, title):
@@ -4720,6 +4744,7 @@ class CaseManagerDialog:
                 saved.get('revision')), parent=self.root):
             return
         self.editor.load(saved)
+        self.n0_var.set('n-0' in self.editor.config['assessments'])
         self.n1_var.set(N1_REFERENCE in self.editor.config['assessments'])
         self.n1_prime_var.set(N1_PRIME in self.editor.config['assessments'])
         for key in self.setting_vars:
@@ -4735,7 +4760,7 @@ class CaseManagerDialog:
         self.finish_editing()
         if not self._settings_ready('Start calculation'):
             return
-        problem = self.editor.set_assessments(True, self.n1_var.get(), self.n1_prime_var.get())
+        problem = self.editor.set_assessments(self.n0_var.get(), self.n1_var.get(), self.n1_prime_var.get())
         problems = ([problem] if problem else []) + validate_case_config(self.editor.config)
         if problems:
             self.messagebox.showerror('Start calculation', '\n'.join(problems), parent=self.root)
@@ -4897,6 +4922,9 @@ def _friendly_exception(exc):
     return " -> ".join(messages)
 
 
+DEFINED_CONTINGENCIES = 'one contingency per branch, transformer, reactor, compensation and FACTS element'
+
+
 def project_grids(app):
     """Every grid (ElmNet) of the model as (name, active), sorted by name; read only, [] when none can be read.
 
@@ -4999,6 +5027,10 @@ def contingency_scope_text(info, contingency_grids, monitoring_grids=()):
         return 'no contingency analysis (ComSimoutage) in the active study case'
     scope = contingency_scope(info, contingency_grids, monitoring_grids)
     total = len(info['contingencies'])
+    if info.get('defined'):
+        return '{} contingencies in scope ({}), {} of {} in the network: Outage Assessment defines {}.'.format(
+            len(scope['in']), ', '.join(scope['grids']) if scope['grids'] else 'every grid', len(scope['in']), total,
+            DEFINED_CONTINGENCIES)
     parts = ['{} of {} contingencies of {!r} in scope ({})'.format(
         len(scope['in']), total, info['command'], ', '.join(scope['grids']) if scope['grids'] else 'every grid')]
     for key, label in (('partly', 'partly outside'), ('outside', 'outside'), ('unknown', 'equipment not readable'),

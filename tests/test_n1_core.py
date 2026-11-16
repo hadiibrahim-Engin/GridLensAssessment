@@ -8,7 +8,7 @@ import pytest
 
 from _paths import delivered
 
-SPEC = importlib.util.spec_from_file_location("gridlens_n1", delivered("main.py"))
+SPEC = importlib.util.spec_from_file_location("outage_assessment_n1", delivered("main.py"))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 
@@ -18,7 +18,9 @@ GRID = (START, START + 23 * H, H)
 
 
 @pytest.fixture(autouse=True)
-def defaults():
+def defaults(monkeypatch):
+    # These tests read log content of every level; the filter itself is tested in test_log_levels.py.
+    monkeypatch.setattr(gl, "LOG_LEVEL", "diagnostic")
     gl.reset_settings()
     yield
     gl.reset_settings()
@@ -93,7 +95,7 @@ def test_study_times_are_the_qds_steps_inside_the_windows():
     assert gl.n1_study_times(windows, GRID) == [START + step * H for step in (3, 4, 5, 22, 23)]
     assert gl.n1_study_times([(START + 2.2 * H, START + 2.8 * H)], GRID) == [], "no QDS step inside the window"
     assert len(gl.n1_study_times([(None, None)], GRID)) == 24, "an unknown window covers the QDS period"
-    with pytest.raises(gl.GridLensError, match="more than 5 study times"):
+    with pytest.raises(gl.OutageAssessmentError, match="more than 5 study times"):
         gl.n1_study_times([(START, START + 10 * H)], GRID, limit=5)
 
 
@@ -257,13 +259,16 @@ class Logger:
     def __init__(self):
         self.lines = []
 
-    def write(self, stage, message, step=0, level="INFO"):
+    def write(self, stage, message, step=0, level="INFO", verbosity=None):
         self.lines.append((level, message))
+
+    def shows(self, verbosity):
+        return True  # records every line, whatever its level
 
     def case(self, message):
         self.lines.append(("CASE", message))
 
-    def detail(self, message, level="INFO"):
+    def detail(self, message, level="INFO", verbosity=None):
         self.lines.append((level, message))
 
 
@@ -285,7 +290,7 @@ def test_a_case_runs_n1_and_n1_prime_on_the_qds_steps_of_its_windows_and_restore
     assert "contingencies x equipment with a value per study time: " in reference_text
     assert scenario_text.endswith("Contingencies of n-1 missing here: C2 (their equipment is switched off by the case).")
     assert (analysis.isPlannedOutages, analysis.studyTime, analysis.bIgnoreTime) == (1, [START], [0.0])
-    # The period GridLens wrote for the run is undone: the sweep settings are those found before.
+    # The period Outage Assessment wrote for the run is undone: the sweep settings are those found before.
     assert (analysis.calcPeriod, analysis.startTime, analysis.endTime, analysis.stepNumber) == (
         4, int(START + 10 * H), int(START + 14 * H), 4)
     assert (fs.outserv, other.outserv) == (1, 0), "only the case's outage was active, and both are restored"
@@ -303,7 +308,7 @@ def test_windows_that_lie_apart_are_calculated_as_one_period_and_only_the_window
 
 
 def test_a_period_longer_than_the_n1_limit_is_refused_with_the_window_times():
-    with pytest.raises(gl.GridLensError, match="covers 25 QDS steps, more than 10") as raised:
+    with pytest.raises(gl.OutageAssessmentError, match="covers 25 QDS steps, more than 10") as raised:
         gl.sweep_period([START, START + 24 * H], H, limit=10)
     assert raised.value.details[0].startswith("Study times inside the windows: ")
     assert gl.step_setting(3600.0) == (1, 2) and gl.step_setting(900.0) == (15, 1) and gl.step_setting(86400.0) == (1, 3)
@@ -323,13 +328,13 @@ def test_cases_with_the_same_study_times_share_one_reference_sweep():
 
 def test_a_failed_calculation_or_other_study_times_are_errors_and_settings_are_restored():
     analysis, records, plan, *_ = _scenario(fail=True)
-    with pytest.raises(gl.GridLensError, match="error code 1"):
+    with pytest.raises(gl.OutageAssessmentError, match="error code 1"):
         gl.run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, True, {})
     assert analysis.studyTime == [START]
 
     analysis, records, plan, *_ = _scenario()
     analysis.Execute = lambda: (setattr(analysis, "p_rescnt", Folder([])), 0)[1]
-    with pytest.raises(gl.GridLensError, match="did not calculate 2 of the 2 study times inside the outage") as raised:
+    with pytest.raises(gl.OutageAssessmentError, match="did not calculate 2 of the 2 study times inside the outage") as raised:
         gl.run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, False, {})
     # The report names the wanted, missing and calculated times, the written period and the settings read back.
     wanted, missing, period, calculated, before, _ = raised.value.details
@@ -350,6 +355,13 @@ def test_contingencies_outside_the_contingency_grids_are_not_analysed_for_the_ru
     assert all(outage.outserv == 0 for outage in outages), "'Not analysed' is restored"
 
 
+def _kept(analysis, stamp="261023-110000"):
+    """Makes `analysis` one an earlier run defined and kept (OA_<stamp>_N1); returns an App whose candidates are
+    exactly its lines, so that the n-1 filter asks for the same contingencies and the analysis is used again."""
+    analysis.loc_name = "OA_{}_N1".format(stamp)
+    return App(list(analysis._lines))
+
+
 def _run_n1(app, study, qds, request, records, ready, results, logger, clock, store=None):
     """Both n-1 phases as a run does them: calculate (keeping copies where possible), then evaluate."""
     entries = gl.calculate_n1(app, study, qds, request, records, ready, logger, clock,
@@ -367,11 +379,15 @@ def test_run_n1_marks_every_case_when_no_contingency_analysis_exists_and_reports
 
     _run_n1(App([]), Study([]), qds, request, records, [plan], results, Logger(), clock)
     assert results[0]["n1"]["status"] == "NOT EVALUATED" and "no contingency can be defined" in results[0]["n1"]["reason"]
-    _run_n1(App([]), Study([analysis, analysis]), qds, request, records, [plan], results, Logger(), clock)
-    assert "more than one contingency analysis" in results[0]["n1"]["reason"]
+    # A contingency analysis of the study case is never used, however many contingencies it holds.
+    _run_n1(App([]), Study([analysis]), qds, request, records, [plan], results, Logger(), clock)
+    assert "no contingency can be defined" in results[0]["n1"]["reason"] and analysis.runs == []
 
     logger = Logger()
-    _run_n1(App([]), Study([analysis]), qds, request, records, [plan, dict(plan, id="C2")], results + [{"id": "C2"}], logger, clock)
+    app = _kept(analysis)
+    _run_n1(app, Study([analysis]), qds, request, records, [plan, dict(plan, id="C2")], results + [{"id": "C2"}], logger, clock)
+    assert any("Using the contingency analysis 'OA_261023-110000_N1' of an earlier run again" in message
+               for _, message in logger.lines)
     assert results[0]["n1"]["summary"].startswith("(n-1)' against n-1: NEW")
     assert len(analysis.runs) == 2, "C2 has the same outages and windows: evaluated once"
     read_back = [message for _, message in logger.lines if "Read back before the calculation" in message]
@@ -420,7 +436,7 @@ class Creating(Study):
         return command
 
 
-def test_without_a_contingency_analysis_gridlens_defines_one_for_the_selected_grids_and_keeps_it():
+def test_without_a_contingency_analysis_outage_assessment_defines_one_for_the_selected_grids_and_keeps_it():
     grid_a, grid_b = Obj("Grid A", "ElmNet"), Obj("Grid B", "ElmNet")
     line, branch_line = Obj("L1", "ElmLne", cpGrid=grid_a), Obj("L2", "ElmLne", cpGrid=grid_a)
     branch = Obj("Branch", "ElmBranch", cpGrid=grid_a)
@@ -445,10 +461,10 @@ def test_without_a_contingency_analysis_gridlens_defines_one_for_the_selected_gr
     _run_n1(app, study, qds, {"background": [], "assessments": ["n-0", "n-1"]}, records, [plan], results, logger, clock)
 
     created = study._children[0]
-    assert created.loc_name.startswith("GridLens_") and created.loc_name.endswith("_N1") and created.iEnableTS == 1
+    assert created.loc_name.startswith("OA_") and created.loc_name.endswith("_N1") and created.iEnableTS == 1
     assert [outage.loc_name for outage in created._outages] == ["L1", "Branch"], "only the selected elements"
     assert results[0]["n1"]["status"] == "EVALUATED"
-    assert any("GridLens created" in message and "2 contingencies" in message for _, message in logger.lines)
+    assert any("Outage Assessment created" in message and "2 contingencies" in message for _, message in logger.lines)
 
 
 
@@ -500,10 +516,10 @@ def test_n1_results_are_kept_as_copies_and_evaluated_from_them_also_later_withou
     request = {"background": [], "assessments": ["n-0", "n-1", "(n-1)'"]}
     results = [{"id": "C1"}]
 
-    entries = _run_n1(App([]), study, qds, request, records, [plan], results, Logger(), clock)
+    entries = _run_n1(_kept(analysis), study, qds, request, records, [plan], results, Logger(), clock)
 
     kept = [child for child in study._children if child.GetClassName() == "ElmRes"]
-    assert [child.loc_name for child in kept] == ["GridLens_261023-120000_C1_N1", "GridLens_261023-120000_C1_N1P"]
+    assert [child.loc_name for child in kept] == ["OA_261023-120000_C1_N1", "OA_261023-120000_C1_N1P"]
     assert entries["C1"]["reference"]["kept"] is kept[0], "phase 2 reads the kept copy, not the contingency analysis"
     assert "recording 80,0.95,1.05" in kept[0].desc[0] and "fingerprint f1" in kept[0].desc[0]
     first = results[0]["n1"]["summary"]
@@ -541,23 +557,64 @@ def test_n1_results_are_kept_as_copies_and_evaluated_from_them_also_later_withou
     assert narrowed[0]["n1"]["summary"] != first
 
 
-def test_only_contingencies_outaging_a_selected_element_are_analysed_for_the_run():
-    analysis, records, plan, outages, _ = _scenario()
+class EmptyAnalysis(Obj):
+    """The contingency analysis PowerFactory creates in the study case when its dialog is opened: no contingency."""
+
+    def __init__(self):
+        super().__init__("Contingency Analysis", "ComSimoutage")
+        self.runs = []
+
+    def GetContents(self, pattern="*"):
+        return []
+
+    def Execute(self):
+        self.runs.append("executed")
+        return 0
+
+
+def test_the_study_cases_own_contingency_analysis_is_never_used_every_line_of_the_grid_gets_a_contingency():
+    # Log of 16 Nov 2026: "with contingency analysis 'Contingency Analysis': 0 contingencies" - PowerFactory then
+    # warned "Could not find contingency cases". Now Outage Assessment defines one contingency per line of the grid.
+    grid_a, grid_b = Obj("Grid A", "ElmNet"), Obj("Grid B", "ElmNet")
+    lines = [Obj("L{}".format(number), "ElmLne", cpGrid=grid_a) for number in (1, 2, 3)]
+    app = App(lines + [Obj("L9", "ElmLne", cpGrid=grid_b)])
+    _, records, plan, _, planned = _scenario()
+    empty = EmptyAnalysis()
+    study = Creating([empty])
+    study._app, study._planned = app, list(planned)
     qds = Obj("QDS", "ComStatsim", startTime=START, endTime=START + 23 * H, stepSize=1, stepUnit=2)
     clock = {"object": Obj("time", "SetTime", cDate=1, cTime=2), "date": 1, "time": 2}
-    seen = []
-    execute = analysis.Execute
-    analysis.Execute = lambda: (seen.append([outage.outserv for outage in outages]), execute())[1]
-    gl.activate_settings({"contingency_elements": [gl.object_key(analysis._lines[0]), gl.object_key(analysis._lines[1])]})
+    request = {"background": [], "assessments": ["n-0", "n-1"]}
+    gl.activate_settings({"contingency_grids": ["Grid A"]})
     try:
         logger = Logger()
-        _run_n1(App([]), Study([analysis]), qds, {"background": [], "assessments": ["n-0", "n-1"]}, records, [plan],
-                [{"id": "C1"}], logger, clock)
+        _run_n1(app, study, qds, request, records, [plan], [{"id": "C1"}], logger, clock)
+        created = study._children[1]
+        assert empty.runs == [], "PowerFactory's own analysis is not executed"
+        assert [outage.loc_name for outage in created._outages] == ["L1", "L2", "L3"], "every line of Grid A, none of B"
+        assert any("created '{}' with 3 contingencies".format(created.loc_name) in message
+                   and "'Contingency Analysis' of the study case is not used" in message for _, message in logger.lines)
+
+        # The next run with the same n-1 filter uses the kept analysis again instead of defining another one.
+        logger = Logger()
+        _run_n1(app, study, qds, request, records, [plan], [{"id": "C1"}], logger, clock)
+        assert len(study._children) == 2 and any("of an earlier run again" in message for _, message in logger.lines)
+
+        # Another element selection asks for other contingencies: a new analysis, again only with those.
+        gl.activate_settings({"contingency_grids": ["Grid A"], "contingency_elements": [gl.object_key(lines[0])]})
+        _run_n1(app, study, qds, request, records, [plan], [{"id": "C1"}], Logger(), clock)
+        assert [outage.loc_name for outage in study._children[2]._outages] == ["L1"]
     finally:
         gl.reset_settings()
-    assert seen == [[0, 0, 1]], "C3 outages L3: not analysed during the run"
-    assert [outage.outserv for outage in outages] == [0, 0, 0], "restored afterwards"
-    assert any("Not analysed for the run: C3 (outages no selected element)." in message for _, message in logger.lines)
+
+
+def test_the_case_manager_previews_the_contingencies_outage_assessment_defines():
+    grid_a, grid_b = Obj("Grid A", "ElmNet"), Obj("Grid B", "ElmNet")
+    app = App([Obj("L1", "ElmLne", cpGrid=grid_a), Obj("L2", "ElmLne", cpGrid=grid_a), Obj("T1", "ElmTr2", cpGrid=grid_b)])
+    info = gl.defined_contingencies(app)
+    assert [item["name"] for item in info["contingencies"]] == ["L1", "L2", "T1"]
+    assert gl.contingency_scope_text(info, ("Grid A",)).startswith("2 contingencies in scope (Grid A), 2 of 3 in the network")
+    assert [item[1] for item in gl.contingency_element_choices(app, info)] == ["L1", "L2", "T1"]
 
 
 def test_the_contract_seven_tables_of_one_case_come_from_the_reporting_core():
@@ -616,7 +673,8 @@ def test_the_contract_seven_tables_of_one_case_come_from_the_reporting_core():
     assert [(row["value_ref"], row["value_a"]) for row in times] == [(0.0, 2.0), (0.0, 2.0)]
     assert [row["case_a_text"] for row in payload["ScriptedTimeMatrix"]] == ["E 2 · C 2", "E 2 · C 2"]
     flag, text = gl.n1_meta_text(results)
-    assert flag == "1" and text.startswith("Contingency analysis of the study case at the QDS time steps")
+    assert flag == "1" and text.startswith("Contingency analysis with one contingency per branch element of the n-1 grids, at the "
+                                    "QDS steps")
     assert gl.n1_meta_text(results[:1])[0] == "0"
 
 

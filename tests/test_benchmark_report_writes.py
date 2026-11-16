@@ -69,11 +69,11 @@ def small(monkeypatch):
 
 def test_the_probe_never_resets_a_report_without_the_marker_or_without_enabled(monkeypatch, small):
     monkeypatch.setattr(probe, "ENABLED", True)
-    gridlens = Report("GridLens report")
-    lines = probe.main(App(gridlens))
-    assert gridlens.calls == [] and "must contain 'probe'" in lines[-1]
+    outage_assessment = Report("Outage Assessment report")
+    lines = probe.main(App(outage_assessment))
+    assert outage_assessment.calls == [] and "must contain 'probe'" in lines[-1]
     monkeypatch.setattr(probe, "ENABLED", False)
-    marked = Report("GridLens write probe")
+    marked = Report("Outage Assessment write probe")
     assert probe.main(App(marked))[-1].startswith("Not run: set ENABLED = True") and marked.calls == []
     assert "directly below an IntReport" in probe.main(App(None))[-1]
 
@@ -81,7 +81,7 @@ def test_the_probe_never_resets_a_report_without_the_marker_or_without_enabled(m
 def test_the_probe_writes_every_stage_into_new_rows_and_prints_rates_and_estimates(monkeypatch, small):
     monkeypatch.setattr(probe, "ENABLED", True)
     monkeypatch.setattr(probe, "CLEAN_UP", False)
-    report = Report("GridLens write probe")
+    report = Report("Outage Assessment write probe")
     lines = probe.main(App(report))
 
     assert report.calls[0] == "Reset"

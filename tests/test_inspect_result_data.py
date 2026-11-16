@@ -67,7 +67,7 @@ class Obj:
 
 class Result(Obj):
     def __init__(self, name, parent, columns=(), index=(), row_objects=(), load_code=0, **values):
-        super().__init__(name, "ElmRes", parent, desc=["GridLens saved case", "Unicode: Süd"], calTp=31, **values)
+        super().__init__(name, "ElmRes", parent, desc=["Outage Assessment saved case", "Unicode: Süd"], calTp=31, **values)
         self.columns, self.index = list(columns), list(index)
         self.row_objects, self.load_code = row_objects, load_code
         self.loaded, self.released = 0, 0
@@ -134,7 +134,7 @@ def model():
     bus = Obj("Node", "ElmTerm", app.project)
     start = 1783296000
     index = [start+i*3600 for i in range(4)]
-    res = Result("GridLens_saved_C1", app.case, [
+    res = Result("OA_saved_C1", app.case, [
         ("c:loading", "%", line, [0.0, 50.0, 110.0, float("nan")]),
         ("m:P:bus1", "MW", line, [-3.0, -1.0, 1.0, 3.0]),
         ("m:u", "p.u.", bus, [1.0, .99, .98, .97])], index=index)
@@ -160,7 +160,7 @@ def test_complete_inventory_counts_equipment_once_per_object_not_per_column(tmp_
     assert summary["data_cells"] == 12 and summary["finite_values"] == 11
     assert summary["non_finite_values"] == 1
     assert result.loaded == result.released == 1
-    assert result.desc == ["GridLens saved case", "Unicode: Süd"]
+    assert result.desc == ["Outage Assessment saved case", "Unicode: Süd"]
     assert [obj.loc_name for obj in result.children] == ["Line monitor"]
     assert (folder / "report.txt").exists()
     assert "Recorded variable definitions" in (folder / "report.txt").read_text()

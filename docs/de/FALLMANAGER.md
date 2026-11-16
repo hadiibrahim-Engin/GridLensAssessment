@@ -81,7 +81,12 @@ lassen sich ziehen.
   - IDs (`C1`, `C2`, …) werden erzeugt, nie eingetippt. Sie benennen die
     Ergebnisobjekte (`OA_<stamp>_C1`) und bleiben beim Umbenennen.
 - **Calculation** (unten links):
-  - n-0 (die QDS von REF und jedem Fall) wird immer gerechnet.
+  - *n-0 – quasi-dynamic simulation*: die QDS von REF und jedem Fall,
+    standardmäßig angekreuzt. Abgewählt ist der Lauf **nur n-1**: keine
+    QDS läuft, kein ComStatsim wird gebraucht; der n-1-Zeit-Sweep tastet die
+    Fenster der Außerbetriebnahmen mit *n-1 time step without n-0* ab
+    (Settings → Run, Standard 60 min). Solange n-1 nicht angekreuzt ist,
+    bleibt n-0 angekreuzt.
   - *n-1 – reference contingency analysis* und *(n-1)' – contingency analysis
     with planned-outage scenarios*. (n-1)' braucht n-1: Ankreuzen von (n-1)'
     kreuzt n-1 an, Abwählen von n-1 wählt (n-1)' ab.

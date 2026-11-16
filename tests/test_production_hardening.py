@@ -9,17 +9,19 @@ import pytest
 from _paths import delivered
 import test_n1_core as native
 import test_cases as cases
-import test_gridlens_report as runtime
+import test_outage_assessment_report as runtime
 import test_reporting_core as reporting
 
 
-SPEC = importlib.util.spec_from_file_location('gridlens_production', delivered('main.py'))
+SPEC = importlib.util.spec_from_file_location('outage_assessment_production', delivered('main.py'))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 
 
 @pytest.fixture(autouse=True)
-def defaults():
+def defaults(monkeypatch):
+    # These tests read log content of every level; the filter itself is tested in test_log_levels.py.
+    monkeypatch.setattr(gl, "LOG_LEVEL", "diagnostic")
     gl.reset_settings()
     yield
     gl.reset_settings()
@@ -45,7 +47,7 @@ def test_a_zero_from_a_sparse_bulk_read_is_not_a_measured_loading(monkeypatch):
 
 @pytest.mark.parametrize('outages', [[None], [native.C1, native.C1]])
 def test_native_contingency_rows_must_have_unique_readable_identities(outages):
-    with pytest.raises(gl.GridLensError, match='contingency row'):
+    with pytest.raises(gl.OutageAssessmentError, match='contingency row'):
         gl.read_n1_results(native.command({native.START: {}}, outages=outages))
 
 
@@ -66,7 +68,7 @@ def test_contingency_filters_also_remove_unreadable_rows_and_metadata():
 def test_invalid_or_duplicate_native_study_times_are_rejected(reader, moment):
     first = native.Sub(native.START, [native.C1], native.COLUMNS, {})
     second = native.Sub(moment, [native.C1], native.COLUMNS, {})
-    with pytest.raises(gl.GridLensError, match='study time'):
+    with pytest.raises(gl.OutageAssessmentError, match='study time'):
         reader(native.Folder([first, second]))
 
 
@@ -121,7 +123,7 @@ def test_a_failed_config_replace_preserves_the_file_and_cleans_up(tmp_path, monk
     before = (tmp_path / 'cases.json').read_bytes()
     revision = config['revision']
     monkeypatch.setattr(gl.os, 'replace', lambda *_: (_ for _ in ()).throw(OSError('replace refused')))
-    with pytest.raises(gl.GridLensError, match='replace refused'):
+    with pytest.raises(gl.OutageAssessmentError, match='replace refused'):
         gl.save_case_config(path, config)
     assert (tmp_path / 'cases.json').read_bytes() == before
     assert config['revision'] == revision
@@ -141,14 +143,14 @@ def test_standalone_runs_validate_the_payload_before_reporting_success(tmp_path,
     monkeypatch.setattr(gl, 'CASE_CONFIG_DIR', str(tmp_path))
     monkeypatch.setattr(gl, 'build_cases_payload', lambda *a, **k: {'unexpected': []})
     with pytest.raises(ValueError, match='payload'):
-        gl.execute_gridlens(app)
+        gl.execute_outage_assessment(app)
     assert app.report.reset_calls == 0
 
 
 def test_bad_revision_in_a_saved_file_names_the_file(tmp_path):
     path = tmp_path / 'damaged.json'
     path.write_text(json.dumps(dict(gl.empty_case_config(), revision=[])))
-    with pytest.raises(gl.GridLensError, match='damaged.json'):
+    with pytest.raises(gl.OutageAssessmentError, match='damaged.json'):
         gl.load_case_config(str(path))
 
 
@@ -162,15 +164,15 @@ def test_a_new_run_avoids_existing_native_result_names(monkeypatch):
 
         fromtimestamp = staticmethod(datetime.fromtimestamp)
     monkeypatch.setattr(gl, 'datetime', Clock)
-    old = native.Obj('GridLens_261027-120000_REF', 'ElmRes')
+    old = native.Obj('OA_261027-120000_REF', 'ElmRes')
     store = gl.ResultStore(study_case=native.Folder([old]))
     assert store.stamp == '261027-120001'
     assert gl.ResultStore('chosen').stamp == 'chosen'
 
 
 def test_a_kept_reference_without_provenance_is_not_reused():
-    obj = native.Obj('GridLens_261027-120000_REF', 'ElmRes', desc=[])
-    with pytest.raises(gl.GridLensError, match='no verifiable fingerprint'):
+    obj = native.Obj('OA_261027-120000_REF', 'ElmRes', desc=[])
+    with pytest.raises(gl.OutageAssessmentError, match='no verifiable fingerprint'):
         gl.kept_runs(native.Folder([obj]), '261027-120000', {'background': []}, [], native.Logger())
 
 

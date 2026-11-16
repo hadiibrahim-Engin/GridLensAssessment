@@ -248,7 +248,7 @@ def test_the_expected_findings_are_reported(run):
     assert lines["IntDplmap instances"] == "DETECTED" and lines["IntDplvec instances"] == "NOT_DETECTED"
     assert lines["Grids readable"] == "TRUE" and lines["Element grid attribute"] == "PRESENT"
     assert all(lines[label] == "NO" for label in probe.PRIVACY_LABELS)
-    assert text.startswith("GridLens Diagnostic Probe 2.3\nPrivacy Mode: STRICT")
+    assert text.startswith("Outage Assessment Diagnostic Probe 2.3\nPrivacy Mode: STRICT")
 
 
 def test_without_code_three_no_sparse_indicator_is_claimed(run):

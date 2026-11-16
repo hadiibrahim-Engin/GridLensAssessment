@@ -2,7 +2,7 @@
 
 At the end of the project only the tests, the scripts in outage-assessment/
 (main.py, main_qt.py) and the two reports as pages remain:
-designer-pages/MASTER_GRIDLENS and designer-pages/MASTER_GRIDLENS_DETAIL, each
+designer-pages/MASTER_OUTAGE_ASSESSMENT and designer-pages/MASTER_OUTAGE_ASSESSMENT_DETAIL, each
 one .dct dictionary and one .pg file per page (Stimulsoft "Save Page"). The
 report itself is assembled in the Stimulsoft designer: dictionary first, then
 Open Page in file order. The scripts are looked up in outage-assessment/ and
@@ -17,14 +17,15 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORTS = ("MASTER_GRIDLENS", "MASTER_GRIDLENS_DETAIL")
-RUNTIME = os.environ.get("GRIDLENS_TEST_RUNTIME", "tk")
+REPORTS = ("MASTER_OUTAGE_ASSESSMENT", "MASTER_OUTAGE_ASSESSMENT_DETAIL")
+RUNTIME = os.environ.get("OUTAGE_ASSESSMENT_TEST_RUNTIME", "tk")
 if RUNTIME not in ("tk", "qt"):
-    raise ValueError("GRIDLENS_TEST_RUNTIME must be tk or qt")
+    raise ValueError("OUTAGE_ASSESSMENT_TEST_RUNTIME must be tk or qt")
 
 
-def delivered(name):
-    if name == "main.py" and RUNTIME == "qt":
+def delivered(name, *, runtime=None):
+    selected_runtime = RUNTIME if runtime is None else runtime
+    if name == "main.py" and selected_runtime == "qt":
         name = "main_qt.py"
     for folder in (ROOT / "outage-assessment", ROOT):
         if (folder / name).is_file():

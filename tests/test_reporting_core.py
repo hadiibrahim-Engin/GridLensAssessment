@@ -13,7 +13,7 @@ import pytest
 import synthetic_grid as sg
 from _paths import delivered
 
-SPEC = importlib.util.spec_from_file_location("gridlens_reporting_core", delivered("main.py"))
+SPEC = importlib.util.spec_from_file_location("outage_assessment_reporting_core", delivered("main.py"))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 

@@ -10,7 +10,7 @@ import pytest
 
 from _paths import delivered
 
-SPEC = importlib.util.spec_from_file_location("gridlens_settings", delivered("main.py"))
+SPEC = importlib.util.spec_from_file_location("outage_assessment_settings", delivered("main.py"))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 
@@ -53,7 +53,7 @@ def test_defaults_are_the_values_of_the_existing_code():
 def test_voltage_proposal_and_sources_are_labelled():
     assert "proposal" in gl.SETTINGS_BY_KEY["voltage_min_pu"]["note"]
     assert "proposal" in gl.SETTINGS_BY_KEY["voltage_max_pu"]["note"]
-    assert gl.setting_source("line_limit") == gl.SOURCE_GRIDLENS
+    assert gl.setting_source("line_limit") == gl.SOURCE_OUTAGE_ASSESSMENT
     assert gl.setting_source("line_limit", {"line_limit": 110.0}) == gl.SOURCE_USER
     assert gl.setting_source("contingency_set") == gl.SOURCE_POWERFACTORY
 
@@ -64,7 +64,7 @@ def test_calculation_parameters_are_category_b_and_read_only():
     assert {setting["key"] for setting in calculation} >= {"contingency_set", "post_fault_phases", "remedial_actions",
                                                             "islanding", "unsupplied_load", "calculation_method"}
     # Only the two n-1 filters can be edited: the n-1 run applies them via "Not analysed".
-    assert [setting["key"] for setting in calculation if setting["editable"]] == ["contingency_grids", "contingency_elements"]
+    assert [setting["key"] for setting in calculation if setting["editable"]] == ["contingency_grids", "contingency_elements", "n1_step"]
     value, problem = gl.parse_setting("contingency_set", "all lines")
     assert value is None and "read only" in problem
     assert all(gl.setting_help(setting["key"]).count("Category B") == 1 for setting in calculation)
@@ -101,15 +101,15 @@ def test_cross_checks():
     assert "must not exceed" in problems["line_warning"]
     assert gl.validate_settings({}) == []
     assert gl.validate_settings("110") == [("settings", "settings must be an object of overrides")]
-    with pytest.raises(gl.GridLensError, match="cannot be used"):
+    with pytest.raises(gl.OutageAssessmentError, match="cannot be used"):
         gl.effective_settings({"line_limit": -5})
 
 
 def test_overrides_keep_only_real_changes():
     assert gl.clean_overrides(dict(gl.default_settings(), line_limit=110.0)) == {"line_limit": 110.0}
     assert gl.clean_overrides(gl.default_settings()) == {}
-    assert gl.overrides_text({}) == "GridLens defaults, no user override"
-    assert "GridLens default 100 %" in gl.overrides_text({"line_limit": 110.0})
+    assert gl.overrides_text({}) == "Outage Assessment defaults, no user override"
+    assert "Outage Assessment default 100 %" in gl.overrides_text({"line_limit": 110.0})
 
 
 def test_snapshot_is_fixed_once_and_names_versions_and_sources():
@@ -118,11 +118,12 @@ def test_snapshot_is_fixed_once_and_names_versions_and_sources():
     overrides["line_limit"] = 130.0
 
     assert snapshot["values"]["line_limit"] == 110.0, "a later change does not reach the snapshot"
-    assert snapshot["sources"]["line_limit"] == gl.SOURCE_USER and snapshot["sources"]["line_warning"] == gl.SOURCE_GRIDLENS
+    assert snapshot["sources"]["line_limit"] == gl.SOURCE_USER and snapshot["sources"]["line_warning"] == gl.SOURCE_OUTAGE_ASSESSMENT
     assert snapshot["settings_version"] == gl.SETTINGS_VERSION and snapshot["classification_version"] == "1.0"
     parameters = snapshot["calculation_parameters"]
-    assert parameters.pop("contingency_grids") == gl.SAME_AS_ASSESSMENT + " (stored, not applied yet)"
-    assert parameters.pop("contingency_elements") == "every element (stored, not applied yet)"
+    assert parameters.pop("contingency_grids") == gl.SAME_AS_ASSESSMENT
+    assert parameters.pop("contingency_elements") == "every element"
+    assert parameters.pop("n1_step") == "60 min"
     assert set(parameters.values()) == {gl.NOT_VERIFIED}
     assert snapshot["storage"].startswith("provisional")
 
@@ -160,7 +161,7 @@ def test_invalid_saved_settings_are_refused_with_the_reason(tmp_path):
     config["settings"] = {"line_limit": -1}
 
     assert any(problem.startswith("settings: ") for problem in gl.validate_case_config(config))
-    with pytest.raises(gl.GridLensError, match="not saved"):
+    with pytest.raises(gl.OutageAssessmentError, match="not saved"):
         gl.save_case_config(str(tmp_path / "cases.json"), config)
 
 
@@ -183,7 +184,7 @@ def test_editor_refuses_invalid_settings_and_restores_defaults(editor):
     assert editor.set_settings({"voltage_min_pu": "0.9"}) == []
     assert editor.settings_overrides() == {"voltage_min_pu": 0.9}
     rows = {row[0]: row for row in editor.settings_rows()}
-    assert rows["voltage_min_pu"][4] == gl.SOURCE_USER and rows["line_limit"][4] == gl.SOURCE_GRIDLENS
+    assert rows["voltage_min_pu"][4] == gl.SOURCE_USER and rows["line_limit"][4] == gl.SOURCE_OUTAGE_ASSESSMENT
     assert rows["contingency_set"][3] == gl.NOT_VERIFIED and rows["contingency_set"][6] is False
     assert "Settings" in dict(editor.summary()[0])
     assert "Settings: Minimum voltage, every voltage level = 0.9 p.u." in editor.calculation_preview()

@@ -9,7 +9,7 @@ import pytest
 
 from _paths import delivered
 
-SPEC = importlib.util.spec_from_file_location("gridlens_classification", delivered("main.py"))
+SPEC = importlib.util.spec_from_file_location("outage_assessment_classification", delivered("main.py"))
 gl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gl)
 
@@ -35,7 +35,7 @@ def defaults():
     gl.reset_settings()
 
 
-def test_codes_are_the_ten_gridlens_codes():
+def test_codes_are_the_ten_outage_assessment_codes():
     assert gl.CLASSIFICATION_VERSION == "1.0"
     assert dict(gl.CLASSIFICATION_STATUSES) == {0: "OK", 1: "NEW", 2: "WORSENED", 3: "PRE_EXISTING", 4: "IMPROVED",
                                                 5: "RESOLVED", 90: "FAILED", 91: "NOT_EVALUATED", 92: "NOT_APPLICABLE",

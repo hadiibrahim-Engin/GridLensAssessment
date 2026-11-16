@@ -12,7 +12,7 @@ import pytest
 
 from _paths import delivered
 SCRIPT = delivered("main.py")
-SPEC = importlib.util.spec_from_file_location("gridlens_planner", SCRIPT)
+SPEC = importlib.util.spec_from_file_location("outage_assessment_planner", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(gl)
@@ -21,6 +21,8 @@ H = 3600.0
 WEEK = 7 * 24 * H
 YEAR_START = calendar.timegm((2026, 1, 1, 0, 0, 0))
 PERIOD = (YEAR_START, YEAR_START + 52 * WEEK)
+# The QDS period as set in ComStatsim instead of the span of the planned outages.
+AS_SET = {"qds_period": "configured"}
 
 
 def kw(week):
@@ -133,7 +135,9 @@ def test_c_kw10_and_kw40_run_over_the_complete_period_without_proposed_windows()
     plan = request["cases"][0]
     assert plan["status"] == gl.PLAN_READY and "calc_windows" not in plan
     assert "mode" not in request and "optimization" not in request
-    assert gl.qds_mode_text(request).startswith("Complete ComStatsim period")
+    assert gl.qds_mode_text(request).startswith("Every run covers the same QDS period")
+    request["qds_run_period"] = "QDS period 2016-05-02 08:00 - 2016-07-29 18:00, set for the run."
+    assert gl.qds_mode_text(request).startswith("QDS period 2016-05-02 08:00 - 2016-07-29 18:00, set for the run. Every")
     assert "proposed" not in gl.preview_text(request, PERIOD)
 
 
@@ -227,7 +231,7 @@ def test_removed_relations_cannot_silently_affect_current_configurations():
     fs1 = record("FS1", kw(10), kw(11))
     for field in ("includes", "requires"):
         data = config([case("A", fs1, **{field: ["missing"]})])
-        with pytest.raises(gl.GridLensError, match="case relations are no longer supported"):
+        with pytest.raises(gl.OutageAssessmentError, match="case relations are no longer supported"):
             gl.resolve_request(data, [fs1], PERIOD)
 
 
@@ -238,7 +242,7 @@ def test_legacy_cycle_is_rejected_before_assignments_can_be_lost(tmp_path):
     original = json.dumps(data)
     path.write_text(original)
 
-    with pytest.raises(gl.GridLensError, match="include each other"):
+    with pytest.raises(gl.OutageAssessmentError, match="include each other"):
         gl.load_case_config(str(path))
     assert path.read_text() == original
 
@@ -284,15 +288,17 @@ def test_the_check_box_adds_and_removes_one_outage(editor):
 def test_case_outside_the_simulated_period_is_not_simulated():
     fs1 = record("FS1", PERIOD[1] + WEEK, PERIOD[1] + 2 * WEEK)
 
-    plan = gl.resolve_request(config([case("A", fs1)]), [fs1], PERIOD)["cases"][0]
+    plan = gl.resolve_request(config([case("A", fs1)], settings=AS_SET), [fs1], PERIOD)["cases"][0]
 
     assert plan["status"] == gl.PLAN_NOT_SIMULATED
+    follows = gl.resolve_request(config([case("A", fs1)]), [fs1], PERIOD)["cases"][0]
+    assert follows["status"] == gl.PLAN_READY, "the QDS period of the run follows the outages by default"
 
 
 def test_f12_outage_starting_before_the_period_is_kept_with_a_warning():
     fs1 = record("FS1", PERIOD[0] - WEEK, PERIOD[0] + WEEK)
 
-    plan = gl.resolve_request(config([case("A", fs1)]), [fs1], PERIOD)["cases"][0]
+    plan = gl.resolve_request(config([case("A", fs1)], settings=AS_SET), [fs1], PERIOD)["cases"][0]
 
     assert plan["status"] == gl.PLAN_READY
     assert any("outside the simulated period" in warning for warning in plan["warnings"])
@@ -352,7 +358,7 @@ def test_damaged_configuration_is_reported_not_ignored(tmp_path):
     path = tmp_path / "cases.json"
     path.write_text(json.dumps({"schema": "other"}), encoding="utf-8")
 
-    with pytest.raises(gl.GridLensError, match="invalid"):
+    with pytest.raises(gl.OutageAssessmentError, match="invalid"):
         gl.load_case_config(str(path))
 
 
@@ -522,7 +528,7 @@ def test_damaged_configuration_is_named_before_anything_reads_it(change, message
     problems = gl.validate_case_config(data)
 
     assert any(message in problem for problem in problems), problems
-    with pytest.raises(gl.GridLensError, match="cannot be used"):
+    with pytest.raises(gl.OutageAssessmentError, match="cannot be used"):
         gl.resolve_request(data, [], PERIOD)
 
 
@@ -555,7 +561,7 @@ def test_comparison_of_released_series_is_refused_with_a_clear_message():
     reference, case_result, hours = _case_pair([90] * 6, [90] * 6)
     gl.release_values(case_result)
 
-    with pytest.raises(gl.GridLensError, match="already released"):
+    with pytest.raises(gl.OutageAssessmentError, match="already released"):
         gl.compare_case(case_result, reference, [(hours[0] * H, hours[2] * H)])
 
 
@@ -830,7 +836,11 @@ def test_gui_14_and_16_n1_rules_and_no_time_optimisation_remains(editor):
     edit, _ = editor
 
     assert edit.set_assessments(False, False) == "Select at least one assessment."
-    assert "always calculated" in edit.set_assessments(False, True)
+    assert "Select n-0" in edit.set_assessments(False, False, True), "(n-1)' alone has nothing to compare with"
+    # n-1 only: no quasi-dynamic simulation, the n-1 time sweep runs alone.
+    assert edit.set_assessments(False, True) is None and edit.config["assessments"] == ["n-1"]
+    assert not gl.validate_case_config(edit.config)
+    assert edit.set_assessments(False, True, True) is None and edit.config["assessments"] == ["n-1", "(n-1)'"]
     assert "needs n-1" in edit.set_assessments(True, False, True)
     assert edit.set_assessments(True, True, True) is None
     assert edit.config["assessments"] == ["n-0", "n-1", "(n-1)'"]
@@ -847,7 +857,9 @@ def test_gui_15_preview_names_the_comstatsim_period_and_the_runs(editor):
 
     values = dict(edit.summary()[0])
 
-    assert values["QDS period"].startswith(gl.qds_period_text(PERIOD))
+    assert values["QDS period"].startswith("planned outages ") and gl.qds_period_text(PERIOD) in values["QDS period"]
+    assert edit.set_settings({"qds_period": gl.QDS_SPAN_CONFIGURED}) == []
+    assert dict(edit.summary()[0])["QDS period"].startswith(gl.qds_period_text(PERIOD))
     assert values["Cases selected"] == "2 of 2: Case A, Case B"
     assert values["Valid cases"] == "2"
     assert values["Calculation runs"] == "1 reference + 2 case run(s)"
@@ -1010,10 +1022,13 @@ def test_the_window_fits_the_screen_and_opens_centred():
 def test_one_case_per_outage_takes_only_outages_in_the_simulated_period():
     outside = record("FS Next year", PERIOD[1] + WEEK, PERIOD[1] + 2 * WEEK)
     inside = [record("FS{}".format(i), kw(10), kw(11), ["Project\\W{}.ElmLne".format(i)]) for i in range(5)]
-    edit = gl.CaseEditor([outside] + inside, config([]), PERIOD)
+    edit = gl.CaseEditor([outside] + inside, config([], settings=AS_SET), PERIOD)
 
     assert edit.one_case_per_outage() is None
     assert [row[2] for row in edit.case_rows()] == ["FS0", "FS1", "FS2", "FS3", "FS4"]
+    follows = gl.CaseEditor([outside] + inside[:4], config([]), PERIOD)
+    assert follows.one_case_per_outage() is None
+    assert [row[2] for row in follows.case_rows()][0] == "FS Next year", "with the QDS period from the outages none lies outside"
 
 
 def test_copy_keeps_own_dates_independent(editor):
@@ -1105,7 +1120,7 @@ def test_more_than_five_cases_are_refused_where_engineers_define_them():
     data = config([case("K{}".format(i), item) for i, item in enumerate(outages)])
 
     assert "at most 5 planning cases" in " ".join(gl.validate_case_config(data))
-    with pytest.raises(gl.GridLensError, match="at most 5 planning cases"):
+    with pytest.raises(gl.OutageAssessmentError, match="at most 5 planning cases"):
         gl.resolve_request(data, outages, PERIOD, "saved")
     assert len(gl.resolve_request(data, outages, PERIOD, "per_outage")["cases"]) == 6, "the window-less mode keeps every outage"
 
@@ -1117,14 +1132,14 @@ def test_a_saved_file_with_too_many_cases_still_opens_so_cases_can_be_deleted(tm
     data["cases"][5]["enabled"] = False
     path = str(tmp_path / "old.json")
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(data, handle)  # as GridLens 8.0 saved it, without a case limit
+        json.dump(data, handle)  # as Outage Assessment 8.0 saved it, without a case limit
 
     loaded = gl.load_case_config(path)
     edit = gl.CaseEditor(outages, loaded, PERIOD)
     statuses = edit.case_statuses()
     assert statuses["K5"] == "excluded" and statuses["K0"] == "not calculated"
     assert "at most 5 planning cases" in " ".join(problem for _, problem in edit.problem_rows())
-    with pytest.raises(gl.GridLensError, match="at most 5 planning cases"):
+    with pytest.raises(gl.OutageAssessmentError, match="at most 5 planning cases"):
         gl.save_case_config(path, loaded, "operator")
     edit.delete_case("K5")
     assert set(edit.case_statuses().values()) == {"ready"}, "after deleting one the configuration works again"
@@ -1156,7 +1171,7 @@ def test_gui_the_editor_never_changes_the_configuration_it_was_given(editor):
 @pytest.mark.parametrize("change, message", [
     (lambda data: data.update(assessments=[]), "assessments must name"),
     (lambda data: data.update(assessments=["n-2"]), "assessments must name"),
-    (lambda data: data.update(assessments=["n-1"]), "n-0 quasi-dynamic assessment is always calculated"),
+    (lambda data: data.update(assessments=["(n-1)'"]), "choose n-0 (quasi-dynamic simulation), n-1 or both"),
     (lambda data: data.update(assessments=["n-0", "(n-1)'"]), "needs n-1"),
     (lambda data: data["cases"].append({"id": "E", "outages": [], "enabled": "yes"}), "enabled must be"),
 ])
@@ -1222,7 +1237,7 @@ def test_invalid_legacy_references_are_reported_without_rewriting_the_file(tmp_p
     path = tmp_path / "cases.json"
     original = json.dumps(data)
     path.write_text(original)
-    with pytest.raises(gl.GridLensError, match="cannot be upgraded"):
+    with pytest.raises(gl.OutageAssessmentError, match="cannot be upgraded"):
         gl.load_case_config(str(path))
     assert path.read_text() == original
 

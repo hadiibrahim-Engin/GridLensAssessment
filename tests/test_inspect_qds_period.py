@@ -79,13 +79,13 @@ def model(stale_first=True):
     return App(project, case, stale if stale_first else used)
 
 
-def test_shows_every_command_and_the_one_gridlens_reads():
+def test_shows_every_command_and_the_one_outage_assessment_reads():
     app = model()
     probe.main(app)
     text = "\n".join(app.lines)
     assert "ComStatsim in the active study case: 2; elsewhere in the project: 1" in text
-    assert "ComStatsim #1: ACTIVE_STUDY_CASE, READ BY GRIDLENS" in text
-    assert "period as GridLens reads it (startTime..endTime): YEAR 2002 .. YEAR 2003" in text
+    assert "ComStatsim #1: ACTIVE_STUDY_CASE, READ BY OUTAGE ASSESSMENT" in text
+    assert "startTime..endTime alone (read so before 29 Oct 2026): YEAR 2002 .. YEAR 2003" in text
     assert "ComStatsim #2: ACTIVE_STUDY_CASE\n" in text + "\n"
     assert "ComStatsim #3: OTHER_PLACE_IN_PROJECT" in text
     assert "SetTime.cDate year: 2028" in text
@@ -107,3 +107,33 @@ def test_study_case_without_qds_creates_none():
     probe.main(app)
     assert not app.created
     assert any("holds no ComStatsim" in line for line in app.lines)
+
+
+def test_reads_the_period_by_its_kind_like_outage_assessment():
+    """calcPeriod 0: `date` plus stepNumber steps; the old startTime/endTime would have put every outage outside."""
+    project = Obj("SECRET-project", "IntPrj")
+    case = Obj("SECRET-case", "IntCase", project, iStudyTime=int(Y2028))
+    qds = Obj("SECRET-qds", "ComStatsim", case, calcPeriod=0, date=20280301, stepNumber=24, stepSize=1, stepUnit=2,
+              startTime=int(Y2002), endTime=int(Y2002 + 365 * 86400))
+    Obj("SECRET-in", "IntPlannedout", project, starttime=int(Y2028 + 3600), endtime=int(Y2028 + 7200))
+    Obj("SECRET-out", "IntPlannedout", project, starttime=int(Y2028 + 40 * 86400), endtime=int(Y2028 + 41 * 86400))
+    app = App(project, case, qds)
+    probe.main(app)
+    text = "\n".join(app.lines)
+    assert "period as Outage Assessment reads it [date + stepNumber x stepSize/stepUnit (calcPeriod 0)]: 2028-03 .. 2028-03, 24 h" in text
+    assert "1 inside, 1 outside, 0 not comparable" in text
+    assert "if every planned outage not Ignored were in a case: 2028-03 .. 2028-04, " in text and text.endswith("h, calcPeriod 4")
+    assert probe.outage_assessment_period(qds)[:2] == (Y2028, Y2028 + 86400)
+    qds.calcPeriod = 2
+    assert probe.outage_assessment_period(qds)[:2] == (None, None)
+
+
+def test_its_outage_span_is_the_one_of_outage_assessment():
+    """The probe carries a copy of outage_span; both must agree."""
+    from _paths import delivered
+    spec = importlib.util.spec_from_file_location("outage_assessment_for_probe", delivered("main.py"))
+    gl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gl)
+    for windows, step in (([(Y2028 + 600, Y2028 + 7800)], 3600), ([(Y2028, Y2028 + 86400), (Y2028 + 5e5, Y2028 + 6e5)], 900),
+                          ([(Y2028, None)], 3600), ([], 3600)):
+        assert probe.outage_span(windows, step) == gl.outage_span(windows, step)

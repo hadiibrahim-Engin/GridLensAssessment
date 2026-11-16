@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -11,7 +12,7 @@ import pytest
 
 from _paths import REPORTS, delivered, report_tree
 SCRIPT = delivered("main.py")
-SPEC = importlib.util.spec_from_file_location("gridlens_report", SCRIPT)
+SPEC = importlib.util.spec_from_file_location("outage_assessment_report", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(gl)
@@ -21,10 +22,12 @@ SPEC.loader.exec_module(gl)
 def _assess_every_element(monkeypatch, tmp_path):
     """Fake elements belong to no grid; only the scope tests use D7. No dialog opens."""
     monkeypatch.setattr(gl, "GRID_NAME_FILTER", "")
+    # Log content of every level is checked here; the filter itself is tested in test_log_levels.py.
+    monkeypatch.setattr(gl, "LOG_LEVEL", "diagnostic")
     monkeypatch.setattr(gl, "CASE_SOURCE", "per_outage")
     monkeypatch.setattr(gl, "CASE_CONFIG_DIR", str(tmp_path / "cases"))
     # The IntVec a run creates for column reads; direct calls of collect_series use it too.
-    buffer = PFObject("GridLens_column_buffer", "IntVec")
+    buffer = PFObject("OutageAssessment_column_buffer", "IntVec")
     monkeypatch.setattr(gl, "COLUMN_BUFFER", buffer)
 
 
@@ -167,7 +170,7 @@ class QDS(PFObject):
     def __init__(self, result, study_time, failure=None):
         super().__init__(
             "Configured QDS", "ComStatsim", results=result,
-            calcPeriod=2, stepSize=1, stepUnit=2,
+            calcPeriod=4, stepSize=1, stepUnit=2,
             iopt_net=0, iopt_at=1, iopt_maint=0,
             startTime=PERIOD_START, endTime=PERIOD_END,
         )
@@ -194,7 +197,7 @@ class QDS(PFObject):
 
 class Report(PFObject):
     def __init__(self):
-        super().__init__("GridLens", "IntReport")
+        super().__init__("Outage Assessment", "IntReport")
         self.reset_calls = 0
         self.tables = {}
 
@@ -214,7 +217,7 @@ class Report(PFObject):
 
 class Script(PFObject):
     def __init__(self, parent):
-        super().__init__("Run GridLens", "ComPython")
+        super().__init__("Run Outage Assessment", "ComPython")
         self.parent = parent
         self.created = []
 
@@ -275,9 +278,9 @@ class App:
 
 
 def test_table_contract_is_single_versioned_contract_seven():
-    assert gl.PUBLISHER_VERSION == "8.0.1"
-    assert gl.TEMPLATE_VERSION == "7.0.0"
-    assert gl.DATA_CONTRACT_VERSION == "7.0"
+    assert gl.PUBLISHER_VERSION == "8.1.0"
+    assert gl.TEMPLATE_VERSION == "7.1.0"
+    assert gl.DATA_CONTRACT_VERSION == "7.1"
     # No field name carries a digit: tables with such fields were missing from the PowerFactory report database.
     assert not [field for _, fields in gl.TABLES for field, _ in fields if any(char.isdigit() for char in field)]
     assert not [name for name, _ in gl.TABLES if any(char.isdigit() for char in name)], "nor table names"
@@ -319,7 +322,7 @@ def test_reference_runs_without_and_every_outage_runs_as_its_own_case(monkeypatc
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
     monkeypatch.setattr(gl.getpass, "getuser", lambda: "operator")
 
-    counts = gl.execute_gridlens(app)
+    counts = gl.execute_outage_assessment(app)
 
     assert app.qds.execute_calls == 3
     # REF is free of planned outages; each outage case has the option on.
@@ -336,7 +339,7 @@ def test_reference_runs_without_and_every_outage_runs_as_its_own_case(monkeypatc
     names = [copy.loc_name for copy in app.study.copies]
     assert len(names) == 3 and len(set(names)) == 3
     assert [name.rsplit("_", 1)[-1] for name in names] == ["REF", "OUT01", "OUT02"]
-    assert all(name.startswith("GridLens_") and len(name) <= 40 for name in names)
+    assert all(name.startswith("OA_") and len(name) <= 40 for name in names)
     runs = app.report.tables["CalculationRuns"]["values"]
     assert [runs[index, "result_object"] for index in range(3)] == names
     assert (app.study_time.cDate, app.study_time.cTime) == (20140501, 0)
@@ -347,13 +350,13 @@ def test_reference_runs_without_and_every_outage_runs_as_its_own_case(monkeypatc
     assert values[0, "run_mode"] == "REFERENCE + PLANNING CASES"
     assert any("blocking API call may take several minutes" in line
                for line in app.messages)
-    assert any("Time period [calcPeriod] = 2" in line for line in app.messages)
+    assert any("Time period [calcPeriod] = 4" in line for line in app.messages)
     assert any("Step size [stepSize] = 1" in line for line in app.messages)
     assert any("Step unit [stepUnit] = 2" in line for line in app.messages)
     assert any("Calculation options: iopt_at=1, iopt_maint=0, iopt_net=0" in line
                for line in app.messages)
     assert any("Planned outages [iopt_maint] = 0" in line for line in app.messages)
-    assert any("Simulated period [startTime..endTime] = 2014-01-01" in line
+    assert any("Simulated period [startTime .. endTime (calcPeriod 4)] = 2014-01-01" in line
                for line in app.messages)
     assert any("Initial Study Case time: 2014-05-01 00:00:00" in line
                for line in app.messages)
@@ -367,7 +370,7 @@ def test_direct_mode_with_no_outage_in_scope_does_not_calculate(monkeypatch):
     app = App((PlannedOutage("Disabled", disabled=True),))
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", False)
 
-    counts = gl.execute_gridlens(app)
+    counts = gl.execute_outage_assessment(app)
 
     assert app.qds.execute_calls == 0
     assert app.qds.results is app.original_result
@@ -383,8 +386,8 @@ def test_reference_failure_still_restores_option_and_result_binding(monkeypatch)
     app = App((outage,), qds_failure=RuntimeError("solver stopped"))
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
 
-    with pytest.raises(gl.GridLensError, match="solver stopped"):
-        gl.execute_gridlens(app)
+    with pytest.raises(gl.OutageAssessmentError, match="solver stopped"):
+        gl.execute_outage_assessment(app)
 
     assert app.qds.iopt_maint == 0
     assert outage.outserv == 0
@@ -406,7 +409,7 @@ def test_failed_outage_case_is_reported_and_state_is_restored(monkeypatch):
         return real_execute()
     app.qds.Execute = execute
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert [item.outserv for item in outages] == [0, 0]
     assert app.qds.iopt_maint == 0
@@ -437,13 +440,13 @@ def test_ignored_flag_that_cannot_be_restored_stops_the_run(monkeypatch):
     app.qds.Execute = execute
 
     with pytest.raises(gl.StateRestoreError, match="expected 0, read back 1"):
-        gl.execute_gridlens(app)
+        gl.execute_outage_assessment(app)
 
 
 def test_production_script_has_no_obsolete_runtime_dependencies():
     text = SCRIPT.read_text(encoding="utf-8")
     forbidden = (
-        "gridlens_pf", "IntScenario", "IntScheme", "GetActiveScenario",
+        "outage_assessment_pf", "IntScenario", "IntScheme", "GetActiveScenario",
         "SCAN_VARIATIONS", ".Activate(", ".Deactivate(", "import traceback", "print_exc",
     )
     assert not [value for value in forbidden if value in text]
@@ -475,11 +478,11 @@ def test_friendly_exception_respects_suppressed_context():
         try:
             raise RuntimeError("low-level failure")
         except RuntimeError:
-            raise gl.GridLensError("Readable operator message") from None
-    except gl.GridLensError as exc:
+            raise gl.OutageAssessmentError("Readable operator message") from None
+    except gl.OutageAssessmentError as exc:
         message = gl._friendly_exception(exc)
 
-    assert message == "GridLensError: Readable operator message"
+    assert message == "OutageAssessmentError: Readable operator message"
 
 
 @pytest.mark.parametrize(
@@ -648,7 +651,7 @@ def test_complete_outage_discovery_failure_is_not_reported_as_empty():
     app.project.GetContents = lambda *_args: (_ for _ in ()).throw(
         RuntimeError("project unavailable"))
 
-    with pytest.raises(gl.GridLensError, match="discovery could not query"):
+    with pytest.raises(gl.OutageAssessmentError, match="discovery could not query"):
         gl.classify_planned_outages(app, gl.RunLogger(app))
 
 
@@ -671,6 +674,35 @@ def test_qds_period_is_read_from_the_command():
 
     del app.qds.startTime
     assert gl.qds_period(app.qds) == (None, None)
+
+
+def test_qds_period_follows_the_kind_of_time_period():
+    """calcPeriod 0 runs stepNumber steps from the day in `date`; startTime/endTime then keep old values."""
+    qds = PFObject("QDS", "ComStatsim", calcPeriod=0, date=20280115, stepNumber=24, stepSize=1, stepUnit=2,
+                   startTime=int(datetime(2002, 1, 1).timestamp()), endTime=int(datetime(2003, 1, 1).timestamp()))
+    start = datetime(2028, 1, 15).timestamp()
+
+    assert gl.qds_period(qds) == (start, start + 24 * 3600)
+    assert "date" in gl.qds_period_source(qds)
+
+    qds.stepSize, qds.stepUnit = 15, 1
+    assert gl.qds_period(qds) == (start, start + 24 * 15 * 60)
+
+    for broken in ({"date": 20281399}, {"date": None}, {"stepNumber": 0}, {"stepUnit": 9}):
+        attributes = {key: value for key, value in vars(qds).items() if key not in ("loc_name", "kind", "desc")}
+        bad = PFObject("QDS", "ComStatsim", **dict(attributes, **broken))
+        assert gl.qds_period(bad) == (None, None), broken
+
+    qds.calcPeriod = 4
+    assert gl.qds_period(qds) == (datetime(2002, 1, 1).timestamp(), datetime(2003, 1, 1).timestamp())
+
+
+def test_an_unverified_kind_of_time_period_leaves_the_period_unknown():
+    """Outages are then judged against the result time axis instead of a period Outage Assessment guessed."""
+    qds = PFObject("QDS", "ComStatsim", calcPeriod=2, startTime=PERIOD_START, endTime=PERIOD_END)
+
+    assert gl.qds_period(qds) == (None, None)
+    assert "calcPeriod 2" in gl.qds_period_source(qds)
 
 
 def test_payload_validation_rejects_unknown_fields_and_booleans():
@@ -761,7 +793,7 @@ def test_extraction_logs_the_time_axis_span(monkeypatch):
     app = App((PlannedOutage("Applicable"),))
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     spans = [line for line in app.messages if "Time axis" in line]
     assert spans
@@ -855,7 +887,7 @@ def test_epoch_axis_span_is_reported_in_hours(monkeypatch):
     app.qds.results = app.original_result
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     spans = [line for line in app.messages if "Time axis" in line]
     assert spans
@@ -986,7 +1018,7 @@ def test_report_row_carries_the_verdict_for_each_outage(monkeypatch):
     app = App((PlannedOutage("Outage A"),))
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     values = app.report.tables["Cases"]["values"]
     assert values[0, "case_name"] == "Reference"
@@ -1003,7 +1035,7 @@ def test_skipped_outage_shows_its_reason_as_the_detail(monkeypatch):
     app = App((PlannedOutage("Disabled", disabled=True),))
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     values = app.report.tables["Cases"]["values"]
     assert values[1, "assessment"] == gl.ASSESSMENT_SKIPPED
@@ -1193,7 +1225,7 @@ def test_executed_publisher_output_matches_mrt_and_all_sql_queries(
         monkeypatch, reference, enabled):
     app = App((PlannedOutage("Outage A", disabled=not enabled),))
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", reference)
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     _check_emitted_report_against_mrt(app.report)
 
@@ -1224,7 +1256,7 @@ def test_emitted_schema_check_catches_missing_tables_and_fields_from_export_log(
         monkeypatch, table, field):
     app = App((PlannedOutage("Outage A"),))
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
     if field is None:
         del app.report.tables[table]
     else:
@@ -1238,7 +1270,7 @@ def test_emitted_schema_check_catches_missing_tables_and_fields_from_export_log(
 
 
 
-def test_powerfactory_writes_into_its_own_result_object_and_gridlens_keeps_a_copy_after_each_run():
+def test_powerfactory_writes_into_its_own_result_object_and_outage_assessment_keeps_a_copy_after_each_run():
     # As probed on 24 October 2026: the bound object is a temporary one without variable selection; on Execute
     # PowerFactory binds its own result object of the study case and writes into it, every run into the same one.
     app = App((PlannedOutage("Outage A"),))
@@ -1253,26 +1285,26 @@ def test_powerfactory_writes_into_its_own_result_object_and_gridlens_keeps_a_cop
     add_copy = app.study.AddCopy
     app.study.AddCopy = lambda result: (copied.append(result), add_copy(result))[1]
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.execute_calls == 2 and copied == [own, own], "each run is copied from the object written into"
     assert [copy.loc_name.rsplit("_", 1)[-1] for copy in app.study.copies] == ["REF", "OUT01"]
     assert app.qds.results is own, "PowerFactory's own binding is left as a run by hand leaves it"
     assert temporary.deleted is False
     text = "\n".join(app.messages)
-    assert "PowerFactory wrote REF into 'Quasi-Dynamic Simulation AC'; kept as 'GridLens_" in text
+    assert "PowerFactory wrote REF into 'Quasi-Dynamic Simulation AC'; kept as 'OA_" in text
     assert "PowerFactory bound its own result object 'Quasi-Dynamic Simulation AC'" in text
 
 
-def test_a_binding_to_a_kept_gridlens_result_stops_before_any_calculation(monkeypatch):
+def test_a_binding_to_a_kept_outage_assessment_result_stops_before_any_calculation(monkeypatch):
     # The QDS writes into the bound result object; a kept run must not be overwritten.
     app = App((PlannedOutage("Outage"),))
     leftover = app.original_result
-    leftover.loc_name = "GridLens_260928-145610_REF"
+    leftover.loc_name = "OA_260928-145610_REF"
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
 
-    with pytest.raises(gl.GridLensError, match="kept result object of an earlier GridLens run") as raised:
-        gl.execute_gridlens(app)
+    with pytest.raises(gl.OutageAssessmentError, match="kept result object of an earlier Outage Assessment run") as raised:
+        gl.execute_outage_assessment(app)
 
     assert app.qds.execute_calls == 0
     assert app.qds.results is leftover and leftover.deleted is False
@@ -1371,7 +1403,7 @@ def test_report_states_which_elements_were_assessed(monkeypatch):
     app.study.AddCopy = lambda result: ScopedElmRes()
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     scope = app.report.tables["ReportMeta"]["values"][0, "assessment_scope"]
     assert "grids named *D7*" in scope
@@ -1466,7 +1498,7 @@ def test_run_output_is_structured_in_steps_cases_and_tables(monkeypatch):
     app = App(outages)
     monkeypatch.setattr(gl, "RUN_REFERENCE_CASE", True)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     text = "\n".join(app.messages)
     for step in ("STEP 1/7 \u00b7 Startup and context", "STEP 2/7 \u00b7 ComStatsim settings",
@@ -1486,7 +1518,7 @@ def test_run_output_is_structured_in_steps_cases_and_tables(monkeypatch):
     assert "Grids in the result file" not in text, "without a grid selection no grid is looked up"
     assert "SKIPPED" in text and "CONSIDERED" in text
     assert not any("LODF" in line for line in app.messages)
-    assert "Kept result object 'GridLens_" in text
+    assert "Kept result object 'OA_" in text
     # What PowerFactory applies is read back before the case run, and whether n-1 runs is always said.
     assert "Read back before the calculation: 'Planned outages' [iopt_maint] = 1; planned outages applied: Outage A." in text
     assert "n-1 is not calculated: it is not ticked in the case manager" in text
@@ -1515,12 +1547,108 @@ def test_nan_voltage_is_a_de_energised_node_and_does_not_stop_the_case():
     assert counters['deenergized_steps'] == 3
 
 
-def test_nan_loading_still_stops_the_extraction():
-    result = ElmRes()
-    result.columns = ([0.0, 1.0], [90.0, float("nan")], [0.96, 0.94], [0.0, 2.0])
+NAN = float("nan")
 
-    with pytest.raises(RuntimeError, match="Invalid result value"):
-        gl.collect_series(result)
+
+class StagedElmRes(ElmRes):
+    """Four hourly steps; a second line is put into operation at step 2 (an expansion stage): NaN before."""
+
+    def __init__(self, line_a=(90.0, 95.0, 110.0, 80.0), line_b=(NAN, NAN, 60.0, 70.0)):
+        super().__init__()
+        self.line_b = PFObject("Line B", "ElmLne", outserv=0, uknom=110)
+        self.variables = ("b:tnow", "c:loading", "c:loading", "m:u")
+        self.objects = (self.time, self.line, self.line_b, self.term)
+        self.units = ("h", "%", "%", "p.u.")
+        self.columns = ([0.0, 1.0, 2.0, 3.0], list(line_a), list(line_b), [1.0, 1.0, 1.0, 1.0])
+
+    def GetNumberOfRows(self):
+        return len(self.columns[0])
+
+
+def test_a_loading_without_value_at_some_steps_is_no_value_there_and_does_not_stop():
+    counters = {}
+
+    series = gl.collect_series(StagedElmRes(), counters=counters)[0]
+
+    line_b = next(item for item in series if item["element_name"] == "Line B")
+    assert line_b["gaps"] == [(0, 1)], "rows 0 and 1 have no value"
+    assert [gl.array_value(line_b["values"], row) for row in range(4)] == [None, None, 60.0, 70.0]
+    assert line_b["statistics"]["max"] == 70.0, "missing values never count, never as 0"
+    assert counters["loading_gap_steps"] == 2 and counters["partial_series"] == 1
+
+
+def test_a_loading_never_valued_is_left_out_and_counted():
+    counters = {}
+
+    series = gl.collect_series(StagedElmRes(line_b=(NAN,) * 4), counters=counters)[0]
+
+    assert "Line B" not in [item["element_name"] for item in series]
+    assert counters["unvalued_branches"] == 1
+
+
+def test_a_time_step_without_any_loading_value_still_stops_the_case():
+    """Not a new object: no branch has a value, so the load flow most likely failed there."""
+    with pytest.raises(RuntimeError, match="no line or transformer has a loading value"):
+        gl.collect_series(StagedElmRes(line_a=(90.0, NAN, 110.0, 80.0), line_b=(NAN, NAN, 60.0, 70.0)))
+
+
+def test_the_changes_of_operation_are_listed_by_time():
+    series, labels = gl.collect_series(StagedElmRes())[0:2]
+
+    changes = gl.operation_changes(series, labels)
+
+    assert changes == [(labels[2], ["Line B"], [])], "put into operation at the third step"
+    rows = gl.operation_change_rows(series, labels)
+    assert rows == [(labels[2], "Line B", "-")]
+
+
+def test_a_branch_without_value_only_in_the_case_is_de_energised_and_never_improved():
+    item = {"category": "line", "element_name": "Line B", "key": "B", "nominal_kv": 110}
+    ref = gl.value_array([120.0, 120.0, 50.0])
+    case = gl.value_array([None, 130.0, None])
+    record = gl.compare_element(item, case, ref, [0, 1, 2], [1.0, 1.0, 1.0], ["t0", "t1", "t2"])
+
+    assert record["status"] == gl.STATUS_WORSENED
+    only_missing = gl.compare_element(item, gl.value_array([None, None, None]), ref, [0, 1, 2], [1.0] * 3, ["a", "b", "c"])
+    assert only_missing["status"] == gl.STATUS_DEENERGIZED, "cut off by the case, not RESOLVED"
+    new = gl.compare_element(item, gl.value_array([None, 130.0, None]), gl.value_array([None, None, None]),
+                             [0, 1, 2], [1.0] * 3, ["a", "b", "c"])
+    assert new["status"] == gl.STATUS_EXCEEDED, "an overloaded element without REF value is never overlooked"
+
+
+def test_outage_checks_read_a_missing_value_as_no_load():
+    assert gl._magnitude(gl.MISSING) == 0.0 and gl._magnitude(None) == 0.0 and gl._magnitude(-5.0) == 5.0
+
+
+def _n1_data(values, absent=()):
+    moment = 3600.0
+    return {"times": {moment: dict(values)}, "absent": {moment: set(absent)}, "present": {moment: {"C1"}},
+            "elements": {"L1": "Line 1", "L2": "Line 2"}, "contingencies": {"C1": "Contingency 1"},
+            "categories": {"L1": "line", "L2": "line"}, "nominal_kv": {}, "grids": {}}
+
+
+def test_n1_a_value_missing_where_ref_has_none_is_not_in_operation_and_not_assessed(monkeypatch):
+    monkeypatch.setattr(gl, "OFFLINE", {"L2": [(0.0, 7200.0)]})
+    reference = _n1_data({("C1", "L1", "loading"): 50.0}, absent={("C1", "L2", "loading")})
+    scenario = _n1_data({("C1", "L1", "loading"): 55.0}, absent={("C1", "L2", "loading")})
+
+    comparison = gl.compare_n1(reference, scenario)
+
+    assert comparison["not_in_operation"] == 1
+    assert "NOT_EVALUATED" not in comparison["counts"]
+    assert set(entry["element"] for entry in comparison["elements"].values()) == {"L1"}
+
+
+def test_n1_a_value_missing_only_in_the_scenario_is_not_evaluated_with_its_cause(monkeypatch):
+    monkeypatch.setattr(gl, "OFFLINE", {})
+    reference = _n1_data({("C1", "L1", "loading"): 120.0})
+    scenario = _n1_data({}, absent={("C1", "L1", "loading")})
+
+    comparison = gl.compare_n1(reference, scenario)
+
+    worst = comparison["elements"][("L1", "loading")]["worst"]
+    assert worst["status"] == "NOT_EVALUATED", "never IMPROVED or RESOLVED"
+    assert any("cut off" in reason for reason in worst["reasons"])
 
 
 def test_a_result_object_without_loading_or_voltage_says_what_is_missing_and_what_to_do():
@@ -1535,7 +1663,7 @@ def test_a_result_object_without_loading_or_voltage_says_what_is_missing_and_wha
         gl.collect_series(result)
 
     message = str(raised.value)
-    assert "records none of the results GridLens assesses" in message
+    assert "records none of the results Outage Assessment assesses" in message
     assert "c:loading" in message and "m:u" in message, "names what is needed"
     assert "ElmLod m:P:bus1 (1 column)" in message and "ElmTerm m:phiu (1 column)" in message, "names what is there"
     assert "b:tnow" not in message, "the time column is no result"
@@ -1563,13 +1691,13 @@ def test_a_run_without_publication_says_that_the_report_cannot_be_generated(monk
     # The failure report says what, where, why, which state PowerFactory holds and what to do.
     text = "\n".join(app.messages)
     report = text[text.index("FAILURE REPORT"):text.index("RUN SUMMARY")]
-    for heading in ("Error:", "Where:", "Details:", "Code location in the GridLens script", "PowerFactory state:",
+    for heading in ("Error:", "Where:", "Details:", "Code location in the Outage Assessment script", "PowerFactory state:",
                     "Result objects kept in the study case:", "What to do:"):
         assert heading in report, heading
     assert "RecordingError: REF was calculated" in report
     assert "STEP 4/7" in report and "case: Case REF" in report
     assert "restored and verified" in report
-    assert "GridLens_" in report.split("Result objects kept in the study case:")[1]
+    assert "OA_" in report.split("Result objects kept in the study case:")[1]
     assert "check_recording() line" in report
     assert "Send this" in report.split("What to do:")[1]
 
@@ -1594,11 +1722,11 @@ def test_cancel_says_that_the_report_is_not_generated(monkeypatch):
     monkeypatch.setitem(sys.modules, "powerfactory", types.SimpleNamespace(GetApplication=lambda: app))
 
     def cancelled(_app):
-        raise gl.GridLensCancelled("Cancelled in the case manager. Nothing was calculated and nothing was changed.")
-    monkeypatch.setattr(gl, "execute_gridlens", cancelled)
+        raise gl.OutageAssessmentCancelled("Cancelled in the case manager. Nothing was calculated and nothing was changed.")
+    monkeypatch.setattr(gl, "execute_outage_assessment", cancelled)
 
     # The cancellation reaches PowerFactory as an error, so an IntReport stops before it renders.
-    with pytest.raises(gl.GridLensCancelled):
+    with pytest.raises(gl.OutageAssessmentCancelled):
         gl.main()
     line = [message for message in app.messages if "CANCELLED" in message][-1]
     assert "Report generation cancelled" in line
@@ -1608,7 +1736,7 @@ def test_cancel_says_that_the_report_is_not_generated(monkeypatch):
 def test_a_successful_run_names_the_report_to_generate():
     app = App((PlannedOutage("FS1"),))
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert any("Generate the report now from the IntReport '{}'".format(app.report.loc_name) in line
                for line in app.messages)
@@ -1619,7 +1747,7 @@ def test_without_an_intreport_the_run_calculates_and_builds_the_tables_but_publi
     folder = PFObject("Scripts", "IntFolder")
     app.script.parent = folder
 
-    counts = gl.execute_gridlens(app)
+    counts = gl.execute_outage_assessment(app)
 
     assert counts["ScriptedReportMeta"] >= 1 and counts["ScriptedModelQuality"] >= 1
     assert app.report.tables == {} and app.report.reset_calls == 0
@@ -1630,7 +1758,7 @@ def test_without_an_intreport_the_run_calculates_and_builds_the_tables_but_publi
 def test_every_run_ends_with_the_time_per_service_and_the_number_of_calculations():
     app = App((PlannedOutage("FS1"),))
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     text = "\n".join(app.messages)
     assert "RUN SUMMARY" in text and "Service" in text and "Calls" in text and "Share" in text
@@ -1659,7 +1787,7 @@ def test_results_are_read_a_whole_column_per_call_and_the_buffer_is_deleted_afte
     app = App((PlannedOutage("FS1"),))
     gl.COLUMN_BUFFER = None
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     buffers = [item for item in app.script.created if item.kind == "IntVec"]
     assert len(buffers) == 1 and buffers[0].deleted and gl.COLUMN_BUFFER is None
@@ -1679,9 +1807,9 @@ def test_without_a_buffer_every_value_is_read_alone_and_the_summary_says_so():
 
 def test_a_kept_run_is_re_evaluated_without_any_calculation(monkeypatch):
     app = App((PlannedOutage("FS1"),))
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
     stamps = gl.kept_stamps(app.study)
-    assert len(stamps) == 1 and all(copy.loc_name.startswith("GridLens_" + stamps[0]) for copy in app.study.copies)
+    assert len(stamps) == 1 and all(copy.loc_name.startswith("OA_" + stamps[0]) for copy in app.study.copies)
     calculations, copies = app.qds.execute_calls, len(app.study.copies)
 
     real = gl.obtain_case_request
@@ -1692,7 +1820,7 @@ def test_a_kept_run_is_re_evaluated_without_any_calculation(monkeypatch):
         return request
     monkeypatch.setattr(gl, "obtain_case_request", choose_kept_run)
     app.messages.clear()
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.execute_calls == calculations and len(app.study.copies) == copies, "nothing calculated or copied"
     text = "\n".join(app.messages)
@@ -1702,11 +1830,11 @@ def test_a_kept_run_is_re_evaluated_without_any_calculation(monkeypatch):
 
 def test_a_case_that_changed_since_the_kept_run_is_not_evaluated(monkeypatch):
     app = App((PlannedOutage("FS1"),))
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
     stamp = gl.kept_stamps(app.study)[0]
     for copy in app.study.copies:
         if not copy.loc_name.endswith("_REF"):
-            copy.desc = ["GridLens 8.0.0; case X; fingerprint another"]
+            copy.desc = ["Outage Assessment 8.0.0; case X; fingerprint another"]
     real = gl.obtain_case_request
 
     def choose_kept_run(*args, **kwargs):
@@ -1715,7 +1843,7 @@ def test_a_case_that_changed_since_the_kept_run_is_not_evaluated(monkeypatch):
         return request
     monkeypatch.setattr(gl, "obtain_case_request", choose_kept_run)
     app.messages.clear()
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert any("changed since the run {}".format(stamp) in line for line in app.messages)
 
@@ -1741,14 +1869,14 @@ def test_an_unusable_result_object_is_named_in_the_run_error():
         return copy
     app.original_result.clone = angles_only
 
-    with pytest.raises(gl.GridLensError) as raised:
-        gl.execute_gridlens(app)
+    with pytest.raises(gl.OutageAssessmentError) as raised:
+        gl.execute_outage_assessment(app)
 
     # Found right after REF, before any other run, with what the copy and the configured object record.
     error = raised.value
     assert isinstance(error, gl.RecordingError)
-    assert "REF was calculated, but its kept result object 'GridLens_" in str(error)
-    assert "records none of the variables GridLens assesses" in str(error)
+    assert "REF was calculated, but its kept result object 'OA_" in str(error)
+    assert "records none of the variables Outage Assessment assesses" in str(error)
     assert app.qds.execute_calls == 1
     assert any(line.startswith("Recorded in the kept result object: 2 column(s): ") and "m:phiu x1" in line
                for line in error.details)
@@ -1780,7 +1908,7 @@ def test_a_case_with_two_outages_runs_them_together(monkeypatch):
     monkeypatch.setattr(gl, "CASE_SOURCE", "saved")
     _save_cases([{"id": "A", "name": "Case A", "outages": [_key(outages[0]), _key(outages[1])]}])
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.outage_options == [0, 1]
     assert app.qds.active_outages[1] == ["FS1", "FS2"], "FS3 is not part of the case"
@@ -1807,7 +1935,7 @@ def test_saved_legacy_relations_become_independent_case_runs(monkeypatch):
     original = json.dumps(data)
     Path(path).write_text(original)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.active_outages == [["FS1", "FS2"], ["FS1"], ["FS2"], ["FS1", "FS2"]]
     assert app.qds.outage_options == [0, 1, 1, 1]
@@ -1823,7 +1951,7 @@ def test_identical_cases_are_calculated_once_and_say_so(monkeypatch):
     keys = [_key(item) for item in outages]
     _save_cases([{"id": "A", "name": "A", "outages": keys}, {"id": "B", "name": "B", "outages": keys[::-1]}])
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.execute_calls == 2  # REF and A; B reuses A
     runs = app.report.tables["CalculationRuns"]["values"]
@@ -1837,7 +1965,7 @@ def test_fixed_outages_stay_active_in_the_reference_and_every_case(monkeypatch):
     monkeypatch.setattr(gl, "CASE_SOURCE", "saved")
     _save_cases([{"id": "N", "name": "New FS1", "outages": [_key(outages[1])]}], background=[_key(outages[0])])
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.outage_options == [1, 1]
     assert app.qds.active_outages == [["FS0"], ["FS0", "FS1"]]
@@ -1851,8 +1979,8 @@ def test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing(monkeypat
     monkeypatch.setattr(gl, "CASE_SOURCE", "gui")
     monkeypatch.setattr(gl, "run_case_manager", lambda *args, **kwargs: None)
 
-    with pytest.raises(gl.GridLensCancelled):
-        gl.execute_gridlens(app)
+    with pytest.raises(gl.OutageAssessmentCancelled):
+        gl.execute_outage_assessment(app)
 
     assert app.qds.execute_calls == 0
     assert app.study.copies == []
@@ -1867,7 +1995,7 @@ def test_cancel_reaches_the_report_caller_instead_of_returning_success(monkeypat
 
     app = App((PlannedOutage("FS1"),))
     if previous_report:
-        gl.execute_gridlens(app)
+        gl.execute_outage_assessment(app)
     tables = deepcopy(app.report.tables)
     reset_calls = app.report.reset_calls
     execute_calls = app.qds.execute_calls
@@ -1877,7 +2005,7 @@ def test_cancel_reaches_the_report_caller_instead_of_returning_success(monkeypat
     monkeypatch.setattr(gl, "CASE_SOURCE", "gui")
     monkeypatch.setattr(gl, "run_case_manager", lambda *args, **kwargs: None)
 
-    with pytest.raises(gl.GridLensCancelled):
+    with pytest.raises(gl.OutageAssessmentCancelled):
         gl.main()
 
     assert app.qds.execute_calls == execute_calls
@@ -1914,7 +2042,7 @@ def test_v31_without_tkinter_the_saved_configuration_is_used(monkeypatch):
         raise gl.CaseManagerUnavailable("no display")
     monkeypatch.setattr(gl, "run_case_manager", unavailable)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.active_outages[1] == ["FS2"]
     assert any("Using the saved configuration revision 1" in line for line in app.messages)
@@ -1928,7 +2056,7 @@ def test_v31_without_tkinter_and_without_configuration_falls_back_to_one_case_pe
         raise gl.CaseManagerUnavailable("no display")
     monkeypatch.setattr(gl, "run_case_manager", unavailable)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.active_outages[1:] == [["FS1"], ["FS2"]]
     meta = app.report.tables["ReportMeta"]["values"]
@@ -1943,7 +2071,7 @@ def test_case_with_a_rule_conflict_is_reported_and_not_calculated(monkeypatch):
     _save_cases([{"id": "A", "name": "A", "outages": keys}],
                 rules=[{"kind": "not_overlap", "first": keys[0], "second": keys[1]}])
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.execute_calls == 1  # the reference only
     cases = app.report.tables["Cases"]["values"]
@@ -1965,7 +2093,7 @@ def test_a_failing_comparison_fails_only_its_own_case(monkeypatch):
         return real(result, *args, **kwargs)
     monkeypatch.setattr(gl, "compare_case", compare)
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert app.qds.execute_calls == 3, "B still runs after A failed"
     cases = app.report.tables["Cases"]["values"]
@@ -1981,8 +2109,8 @@ def test_memory_budget_stops_the_evaluation_and_the_calculated_results_stay(monk
     app = App((PlannedOutage("FS1"), PlannedOutage("FS2")))
     monkeypatch.setattr(gl, "MAX_RUN_CELLS", 1)
 
-    with pytest.raises(gl.GridLensError, match="MAX_RUN_CELLS"):
-        gl.execute_gridlens(app)
+    with pytest.raises(gl.OutageAssessmentError, match="MAX_RUN_CELLS"):
+        gl.execute_outage_assessment(app)
 
     # Phase 1 calculates every run into its kept result object; phase 2 stops before reading the next one.
     assert app.qds.execute_calls == 3 and len(app.study.copies) == 3
@@ -1998,7 +2126,7 @@ def test_reused_case_names_the_result_object_it_shares(monkeypatch):
     _save_cases([{"id": "A", "name": "A", "outages": [_key(outages[0])]},
                  {"id": "B", "name": "B", "outages": [_key(outages[0])]}])
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     runs = app.report.tables["CalculationRuns"]["values"]
     assert runs[2, "result_object"].endswith("_A (shared with A)")
@@ -2010,7 +2138,7 @@ def test_every_case_is_judged_once_and_all_pages_show_that_verdict(monkeypatch):
     real = gl.assess_case
     monkeypatch.setattr(gl, "assess_case", lambda results, case: calls.append(case["id"]) or real(results, case))
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert sorted(calls) == ["OUT01", "OUT02"]
     cases = app.report.tables["Cases"]["values"]
@@ -2023,6 +2151,165 @@ def test_every_case_is_judged_once_and_all_pages_show_that_verdict(monkeypatch):
 def test_windows_off_the_time_axis_are_compared_in_full_and_said_so(monkeypatch):
     app = App((PlannedOutage("FS1", starttime=None, endtime=None),))
 
-    gl.execute_gridlens(app)
+    gl.execute_outage_assessment(app)
 
     assert any("cannot be placed on the time axis" in line for line in app.messages)
+
+
+H = 3600
+
+
+def test_outage_span_runs_from_the_first_start_to_one_step_after_the_last_end():
+    """No step before the first start: it may fall into another network state (a loading without a value)."""
+    first, second = (OUTAGE_START + 600, OUTAGE_START + 2 * H + 600), (OUTAGE_START + 5 * H, OUTAGE_START + 6 * H)
+
+    assert gl.outage_span([second, first], H) == (OUTAGE_START, OUTAGE_START + 7 * H)
+    assert gl.outage_span([(OUTAGE_START, OUTAGE_END)], H) == (OUTAGE_START, OUTAGE_END + 1 + H)
+    assert gl.outage_span([(OUTAGE_START, None)], H) is None, "an unreadable window leaves the span unknown"
+    assert gl.outage_span([], H) is None
+    assert gl.outage_span([first], None) is None
+
+
+def _watch_periods(app):
+    seen, real = [], app.qds.Execute
+
+    def execute():
+        seen.append((app.qds.calcPeriod, app.qds.startTime, app.qds.endTime))
+        return real()
+    app.qds.Execute = execute
+    return seen
+
+
+def test_every_run_calculates_the_span_of_the_planned_outages_and_the_qds_is_restored(monkeypatch):
+    """calcPeriod 0 with an old user-defined period: REF and the case run over the outage span, then all is back."""
+    early = PlannedOutage("FS1", starttime=OUTAGE_START + 2 * H, endtime=OUTAGE_START + 4 * H)
+    late = PlannedOutage("FS2", starttime=OUTAGE_START + 30 * H, endtime=OUTAGE_START + 31 * H)
+    app = App((early, late))
+    app.qds.calcPeriod, app.qds.date, app.qds.stepNumber = 0, 20140101, 24
+    original = (app.qds.calcPeriod, app.qds.startTime, app.qds.endTime, app.qds.stepNumber)
+    seen = _watch_periods(app)
+    monkeypatch.setattr(gl, "CASE_SOURCE", "saved")
+    _save_cases([{"id": "A", "name": "A", "outages": [_key(early), _key(late)]}])
+
+    gl.execute_outage_assessment(app)
+
+    span = (4, OUTAGE_START + 2 * H, OUTAGE_START + 32 * H)
+    assert seen == [span, span], "REF and the case calculate the same period"
+    assert (app.qds.calcPeriod, app.qds.startTime, app.qds.endTime, app.qds.stepNumber) == original
+    text = "\n".join(app.messages)
+    assert "QDS period for every run: " in text and "restored afterwards" in text
+    assert "Restored the QDS period" in text
+    assert app.report.tables["Cases"]["values"][1, "assessment"] not in (gl.ASSESSMENT_NOT_EVALUATED, gl.ASSESSMENT_SKIPPED)
+
+
+def test_the_qds_period_as_set_in_comstatsim_is_left_alone(monkeypatch):
+    outage = PlannedOutage("FS1")
+    app = App((outage,))
+    seen = _watch_periods(app)
+    monkeypatch.setattr(gl, "CASE_SOURCE", "saved")
+    _save_cases([{"id": "A", "name": "A", "outages": [_key(outage)]}], settings={"qds_period": gl.QDS_SPAN_CONFIGURED})
+
+    gl.execute_outage_assessment(app)
+
+    assert seen == [(4, PERIOD_START, PERIOD_END)] * 2
+    assert not any("QDS period for every run" in line for line in app.messages)
+
+
+def test_with_the_outage_span_no_outage_lies_outside_the_simulated_period():
+    """The configured period would put the outage outside; the span follows the outages, so the case can run."""
+    outage = PlannedOutage("FS1", starttime=PERIOD_END + 10 * H, endtime=PERIOD_END + 12 * H)
+    records = [gl._outage_record(outage)]
+    config = gl.empty_case_config()
+    config["cases"] = [{"id": "A", "name": "A", "outages": [records[0]["key"]]}]
+
+    assert gl.resolve_request(config, records, (PERIOD_START, PERIOD_END))["cases"][0]["status"] == gl.PLAN_READY
+    config["settings"] = {"qds_period": gl.QDS_SPAN_CONFIGURED}
+    assert gl.resolve_request(config, records, (PERIOD_START, PERIOD_END))["cases"][0]["status"] == gl.PLAN_NOT_SIMULATED
+
+    editor = gl.CaseEditor(records, gl.empty_case_config(), (PERIOD_START, PERIOD_END))
+    assert editor.outage_status(records[0]) == "in simulated period"
+    assert "first to the last planned outage" in editor.qds_text
+    assert editor.set_settings({"qds_period": gl.QDS_SPAN_CONFIGURED}) == []
+    assert editor.outage_status(records[0]) == "outside simulated period"
+
+
+class StrictQds(PFObject):
+    """ComStatsim that checks every write as PowerFactory does: the end must not lie before the beginning."""
+
+    def __init__(self, **attributes):
+        object.__setattr__(self, "violations", [])
+        super().__init__("QDS", "ComStatsim", **attributes)
+
+    def __setattr__(self, name, value):
+        object.__setattr__(self, name, value)
+        start, end = getattr(self, "startTime", None), getattr(self, "endTime", None)
+        if name in ("startTime", "endTime") and start is not None and end is not None and end < start:
+            self.violations.append((name, start, end))
+
+
+@pytest.mark.parametrize("old", [(PERIOD_START - 400 * 86400, PERIOD_START - 300 * 86400),  # old period years before
+                                 (PERIOD_START + 400 * 86400, PERIOD_START + 500 * 86400)])  # and years after
+def test_the_qds_period_is_written_without_an_invalid_state_in_between(old):
+    qds = StrictQds(calcPeriod=0, date=20140101, stepNumber=24, stepSize=1, stepUnit=2, startTime=old[0], endTime=old[1])
+    plan = {"windows": {"FS1": (OUTAGE_START, OUTAGE_START + 2 * H)}}
+    guard = gl.StateGuard()
+    gl.activate_settings({})
+    try:
+        span = gl.set_qds_span(guard, qds, [plan], gl.RunLogger(App()))
+        assert span["span"] == (OUTAGE_START, OUTAGE_START + 3 * H)
+        assert qds.violations == [], "PowerFactory reports 'Inconsistent data' for every such write"
+        assert guard.restore() == []
+    finally:
+        gl.reset_settings()
+    assert (qds.calcPeriod, qds.startTime, qds.endTime, qds.stepNumber) == (0, old[0], old[1], 24)
+    assert qds.violations == [], "nor while restoring"
+
+
+def test_a_run_with_an_expansion_stage_logs_the_change_and_names_it_on_the_quality_page(monkeypatch):
+    app = App((PlannedOutage("FS1"),))
+    monkeypatch.setattr(ElmRes, "clone", lambda self: StagedElmRes())
+
+    gl.execute_outage_assessment(app)
+
+    text = "\n".join(app.messages)
+    assert "Time-dependent operation: " in text and "Line B" in text
+    quality = app.report.tables["ModelQuality"]["values"]
+    checks = {quality[row, "check_name"]: quality[row, "message"] for (row, field) in quality if field == "check_name"}
+    assert "not in operation" in checks["Time-dependent operation"]
+
+
+def test_an_empty_result_binding_does_not_stop_the_run_when_powerfactory_binds_its_own(monkeypatch):
+    app = App((PlannedOutage("FS1"),))
+    app.qds.results = None
+    real = app.qds.Execute
+
+    def execute():
+        if app.qds.results is None:
+            app.qds.results = ElmRes("Quasi-Dynamic Simulation AC")  # PowerFactory binds its default object
+        return real()
+    app.qds.Execute = execute
+
+    gl.execute_outage_assessment(app)
+
+    assert app.qds.execute_calls == 2, "REF and the case, nothing calculated twice"
+    assert app.report.tables
+    assert any("ComStatsim.results is empty" in line for line in app.messages)
+
+
+def test_an_empty_result_binding_gets_an_empty_result_object_when_powerfactory_binds_none(monkeypatch):
+    app = App((PlannedOutage("FS1"),))
+    app.qds.results = None
+    created = []
+
+    def create(kind, name):
+        assert kind == "ElmRes"
+        obj = ElmRes(name)
+        created.append(obj)
+        return obj
+    app.study.CreateObject = create
+
+    gl.execute_outage_assessment(app)
+
+    assert len(created) == 1 and app.qds.results is created[0], "created once, left bound for the next runs"
+    assert app.qds.execute_calls == 3, "REF once more after binding, then the case"
+    assert any("created the empty result object" in line for line in app.messages)
