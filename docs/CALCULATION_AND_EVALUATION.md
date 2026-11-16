@@ -138,8 +138,7 @@ number of calculations, so the effect of each measure can be read off a run.
 | Filter (Settings → Network scope) | Calculation | Evaluation | Re-evaluation of a kept run |
 |---|---|---|---|
 | **Report filter: assessed equipment, grids** | no effect: PowerFactory calculates the whole network | only lines, transformers and terminals of these grids are assessed (n-0 and the elements watched in n-1) | applies in full |
-| **n-1 filter: grids of the outaged equipment** | contingencies outside these grids are "Not analysed" for the run | – | narrows: contingencies now outside are left out of the evaluation |
-| **n-1 filter: outaged elements** | only contingencies outaging at least one selected element are analysed; the others are "Not analysed" for the run (or not created). None selected: every element | the loading of every element is still assessed under the analysed contingencies | narrows in the same way |
+| **n-1 filter: grids of the outaged equipment** | one contingency is defined per line, branch, transformer, reactor, compensation, FACTS element, generator and load in these grids; none outside | – | narrows: contingencies now outside are left out of the evaluation |
 | *(no filter on the QDS)* | the QDS always calculates the whole network | | |
 
 In a re-evaluation the n-1 filters can only **narrow**: a contingency that was

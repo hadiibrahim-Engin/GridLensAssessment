@@ -63,10 +63,10 @@ MAX_N1_TIMES = 2000
 # outages are sampled every N1_STEP_MINUTES; with n-0 the n-1 study times are the QDS steps instead.
 N1_STEP_MINUTES = 60
 TIME_UNIT_FALLBACK = 'h'
-PUBLISHER_VERSION = '8.1.0'
+PUBLISHER_VERSION = '8.2.0'
 TEMPLATE_NAME = 'MASTER_OUTAGE_ASSESSMENT'
-TEMPLATE_VERSION = '7.1.0'
-DATA_CONTRACT_VERSION = '7.1'
+TEMPLATE_VERSION = '7.2.0'
+DATA_CONTRACT_VERSION = '7.2'
 RUN_REFERENCE_CASE = True
 # Where the planning cases come from:
 #   'gui'        open the case manager; without tkinter use the saved
@@ -183,6 +183,8 @@ MATRIX_FIELDS = (
     (("block", "integer"), ("row_order", "integer"), ("element_name", "string"), ("ref_text", "string"))
     + _slot_fields(case_text_field, "string") + _slot_fields(case_name_field, "string")
     + (("col_count", "integer"), ("violation", "integer")))
+# The appendix matrices of contract 7.2 name where each element is, so that equal names are told apart.
+APPENDIX_FIELDS = MATRIX_FIELDS + (("location_text", "string"),)
 # Charts that draw REF and up to CASE_SLOTS cases: one fixed series per slot.
 SERIES_NAME_FIELDS = _slot_fields(series_name_field, "string", 0)
 SERIES_VALUE_FIELDS = _slot_fields(series_value_field, "number", 0)
@@ -233,11 +235,11 @@ TABLES = (
         ("run_order", "integer"), ("run_id", "string"), ("run_kind", "string"), ("case_name", "string"),
         ("reference_text", "string"), ("period_text", "string"), ("time_steps", "integer"),
         ("elapsed_text", "string"), ("status", "string"), ("provenance_text", "string"), ("result_object", "string"),
-        ("note", "string"))),
+        ("result_path", "string"), ("note", "string"))),
     ("ScriptedTopLinesByCase", MATRIX_FIELDS),
-    ("ScriptedAppendixLine", MATRIX_FIELDS),
-    ("ScriptedAppendixTransformer", MATRIX_FIELDS),
-    ("ScriptedAppendixVoltage", MATRIX_FIELDS),
+    ("ScriptedAppendixLine", APPENDIX_FIELDS),
+    ("ScriptedAppendixTransformer", APPENDIX_FIELDS),
+    ("ScriptedAppendixVoltage", APPENDIX_FIELDS),
     # --- contract 7.0: statistics of the reporting core (main report H02-H10, detail report D01-D12)
     ("ScriptedCaseStatistics", (
         ("case_order", "integer"), ("case_name", "string"), ("level", "string"), ("assessment", "string"),
@@ -264,7 +266,8 @@ TABLES = (
     ("ScriptedOutageWindows", (
         ("row_order", "integer"), ("case_order", "integer"), ("case_name", "string"), ("outage_name", "string"),
         ("outage_path", "string"), ("equipment_name", "string"), ("start_text", "string"), ("end_text", "string"),
-        ("start_hours", "number"), ("end_hours", "number"), ("gantt_label", "string"), ("duration_hours", "number"))),
+        ("start_hours", "number"), ("end_hours", "number"), ("gantt_label", "string"), ("duration_hours", "number"),
+        ("duration_text", "string"))),
     ("ScriptedReferenceFindings", (
         ("row_order", "integer"), ("level", "string"), ("criterion_order", "integer"), ("main_rank", "integer"),
         ("element_name", "string"), ("element_type", "string"), ("grid_name", "string"), ("criterion", "string"),
@@ -309,6 +312,21 @@ TABLES = (
     ("ScriptedResultProvenance", (
         ("row_order", "integer"), ("level", "string"), ("case_name", "string"), ("object_name", "string"),
         ("object_path", "string"), ("content_text", "string"), ("status", "string"))),
+    # Contract 7.2, tabular report: every fact about a case in one row, and the n-0 violation episodes.
+    ("ScriptedCaseSummary", (
+        ("case_order", "integer"), ("case_id", "string"), ("case_name", "string"), ("assessment", "string"),
+        ("assessment_reason", "string"), ("max_loading_text", "string"), ("max_loading_element", "string"),
+        ("max_loading_location", "string"), ("max_loading_time", "string"), ("coincident_delta_text", "string"),
+        ("coincident_delta_element", "string"), ("coincident_delta_time", "string"),
+        ("maxima_difference_text", "string"), ("lines_text", "string"), ("transformers_text", "string"),
+        ("nodes_text", "string"), ("violation_hours_text", "string"), ("voltage_range_text", "string"),
+        ("coverage_text", "string"), ("violation", "integer"))),
+    ("ScriptedEpisodes", (
+        ("case_order", "integer"), ("row_order", "integer"), ("row_kind", "string"), ("case_name", "string"),
+        ("element_name", "string"), ("location_text", "string"), ("element_type", "string"), ("criterion", "string"),
+        ("start_text", "string"), ("end_text", "string"), ("duration_text", "string"), ("peak_text", "string"),
+        ("peak_time", "string"), ("reference_text", "string"), ("delta_text", "string"), ("status", "string"),
+        ("violation", "integer"))),
 )
 REQUIRED_FIELDS = {
     "ScriptedReportMeta": (
@@ -355,6 +373,9 @@ REQUIRED_FIELDS = {
     "ScriptedTimeCriticality": ("time_label", "timestamp", "series_ref_name"),
     "ScriptedAssessmentSettings": ("row_order", "setting_key", "label"),
     "ScriptedResultProvenance": ("row_order", "level", "case_name", "object_name"),
+    "ScriptedCaseSummary": ("case_order", "case_id", "case_name", "assessment", "violation"),
+    # A case row carries only its case name, an episode row no case name.
+    "ScriptedEpisodes": ("case_order", "row_order", "row_kind", "violation"),
 }
 
 # Fields the builders compute for the script itself (summaries, log, checks) that no template shows: they are not
@@ -465,6 +486,31 @@ def element_grid_name(obj):
             return part[:-len('.ElmNet')]
     return ''
 
+
+
+# PowerFactory classes that hold equipment as a station: the nearest one in an element's path names its station.
+STATION_CLASSES = ('ElmSubstat', 'ElmTrfstat', 'ElmSite')
+
+
+def element_location(obj):
+    """'Grid / Station' of an element for the report, 'Grid' without a station, '-' without either.
+
+    Several elements may share a name (two substations each with a 'TR1'); the location tells them apart. The
+    station is the nearest ElmSubstat, ElmTrfstat or ElmSite in the element's path, else its cpSubstat (an element
+    of a variant lies in an expansion stage, not in its station).
+    """
+    station = ''
+    for part in reversed(object_key(obj).split('\\')[:-1]):
+        name, _, kind = part.rpartition('.')
+        if kind in STATION_CLASSES and name:
+            station = name
+            break
+    if not station:
+        found = safe_attr(obj, 'cpSubstat')
+        if found is not None and not isinstance(found, (str, int, float, bool)):
+            station = object_name(found)
+    parts = [part for part in (element_grid_name(obj), station) if part]
+    return ' / '.join(parts) if parts else '-'
 
 
 def grid_in_scope(grid_name):
@@ -930,6 +976,7 @@ def collect_series(elmres, counters=None):
             'key': object_key(obj),
             'element_id': object_id(obj),
             'element_name': object_name(obj),
+            'location': element_location(obj),
             'voltage_level': voltage_level(obj),
             'nominal_kv': nominal,
             'limits': voltage_band(nominal) if category == 'voltage' else None,
@@ -3190,6 +3237,7 @@ def compare_element(item, case_values, ref_values, rows, steps, labels, out_of_s
     tolerance = _tolerance(item)
     statuses = []
     caused_rows = []
+    findings = []
     caused = violated = ref_violated = dark = 0.0
     best = None
     for row in rows:
@@ -3203,6 +3251,8 @@ def compare_element(item, case_values, ref_values, rows, steps, labels, out_of_s
         if status is None:
             continue
         statuses.append(status)
+        if (in_case is not None and in_case > 0) or (status == STATUS_DEENERGIZED and not is_loading):
+            findings.append((row, status, case_value, ref_value))
         weight = steps[row]
         if status in CAUSED_STATUSES:
             caused += weight
@@ -3227,7 +3277,8 @@ def compare_element(item, case_values, ref_values, rows, steps, labels, out_of_s
             'coincident_delta': best[1] if best else None, 'coincident_time': best[2] if best else '',
             'maxima_difference': difference, 'caused_hours': caused, 'violation_hours': violated,
             'ref_violation_hours': ref_violated, 'deenergized_hours': dark, 'out_of_service': out_of_service,
-            'caused_rows': caused_rows if status != STATUS_OUT_OF_SERVICE else []}
+            'caused_rows': caused_rows if status != STATUS_OUT_OF_SERVICE else [],
+            'episodes': [] if status == STATUS_OUT_OF_SERVICE else build_episodes(item, findings, steps)}
 
 
 
@@ -3604,10 +3655,11 @@ def _result_name(result):
 
 
 def _matrix_tables(payload, results, table, entries):
-    """Write entries (name, REF text, {case id: text}, violation) as blocks of CASE_SLOTS cases."""
+    """Write entries (name, REF text, {case id: text}, violation[, location]) as blocks of CASE_SLOTS cases."""
     cases = outage_cases(results)
     for block_number, block in enumerate(case_blocks(cases), 1):
-        for order, (name, ref_text, texts, violation) in enumerate(entries, 1):
+        for order, entry in enumerate(entries, 1):
+            name, ref_text, texts, violation = entry[:4]
             row = {
                 'block': block_number,
                 'row_order': order,
@@ -3616,6 +3668,8 @@ def _matrix_tables(payload, results, table, entries):
                 'col_count': len(block),
                 'violation': violation,
             }
+            if len(entry) > 4:
+                row['location_text'] = entry[4]
             for slot, case in enumerate(block, 1):
                 row[case_name_field(slot)] = case['name']
                 row[case_text_field(slot)] = texts.get(case['id'], 'n/a')
@@ -3654,7 +3708,7 @@ def _loading_appendix(payload, results, category, table):
             continue
         case_stats = [by_result[case['id']][key][1] for case in cases if key in by_result[case['id']]]
         texts = {case['id']: loading_text(by_result[case['id']][key][1]['max']) if key in by_result[case['id']] else 'n/a' for case in cases}
-        listed.append((-max(peaks), item['element_name'].casefold(), item['element_name'], loading_text(ref_stats['max'] if ref_stats else None), texts, _violation_flag(item, ref_stats, case_stats)))
+        listed.append((-max(peaks), item['element_name'].casefold(), item['element_name'], loading_text(ref_stats['max'] if ref_stats else None), texts, _violation_flag(item, ref_stats, case_stats), item.get('location') or '-'))
     _matrix_tables(payload, results, table, [entry[2:] for entry in sorted(listed, key=lambda entry: entry[:2])])
 
 
@@ -3676,10 +3730,16 @@ def _voltage_appendix(payload, results):
             continue
         lower, upper = voltage_limits(item)
         excess = max(max(lower - stats['min'], stats['max'] - upper) for _, stats in found)
-        texts = {case['id']: voltage_text(by_result[case['id']][key][1]['min']) if key in by_result[case['id']] else 'n/a' for case in cases}
-        listed.append((-excess, item['element_name'].casefold(), item['element_name'], voltage_text(ref_stats['min'] if ref_stats else None), texts, _violation_flag(item, ref_stats, case_stats)))
+        # Minimum and maximum: a node can leave the band on either side.
+        texts = {case['id']: _voltage_extremes_text(by_result[case['id']][key][1]) if key in by_result[case['id']] else 'n/a' for case in cases}
+        listed.append((-excess, item['element_name'].casefold(), item['element_name'], _voltage_extremes_text(ref_stats), texts, _violation_flag(item, ref_stats, case_stats), item.get('location') or '-'))
     _matrix_tables(payload, results, 'ScriptedAppendixVoltage', [entry[2:] for entry in sorted(listed, key=lambda entry: entry[:2])])
 
+
+
+def _voltage_extremes_text(stats):
+    """'0.931 / 1.010': minimum and maximum of a node over the period; 'n/a' without a value."""
+    return 'n/a' if stats is None else '{} / {}'.format(voltage_text(stats.get('min')), voltage_text(stats.get('max')))
 
 
 def _top_lines_by_case(payload, results):
@@ -4003,6 +4063,7 @@ def assess_case(results, case):
         'violation': 1 if verdict in ASSESSMENT_CAUSED else 2 if verdict in ASSESSMENT_ATTENTION else 0,
         'max_loading': worst['outage']['max'] if worst else None,
         'max_loading_element': worst['item']['element_name'] if worst else '',
+        'max_loading_location': worst['item'].get('location') or '-' if worst else '',
         'max_loading_time': worst['outage']['time_max'] if worst else '',
         'reference_max_loading': worst['ref']['max'] if worst and worst['ref'] else None,
         'delta': _loading_delta(rising) if rising else None,
@@ -4312,7 +4373,9 @@ def _calculation_runs(payload, results, request):
             'status': result['status'],
             'provenance_text': provenance,
             'result_object': result.get('result_object') or '-',
-            'note': result.get('run_note') or result.get('message') or '-',
+            'result_path': result.get('result_path') or '-',
+            # The reason a case failed stands in its assessment; the run note only says how the run was made.
+            'note': result.get('run_note') or '-',
         })
     for plan in request.get('cases') or ():
         if plan['id'] in by_id:
@@ -4330,7 +4393,8 @@ def _calculation_runs(payload, results, request):
             'status': plan['status'],
             'provenance_text': 'NOT CALCULATED',
             'result_object': '-',
-            'note': plan.get('reason') or '-',
+            'result_path': '-',
+            'note': '-',
         })
 
 
@@ -4677,7 +4741,9 @@ def _outage_windows(payload, request):
             'gantt_label': '{} · {}'.format(plan['name'], record['name']),
             # The window chart stacks an invisible bar of start_hours and a visible bar of this duration: the
             # range (Gantt) chart of PowerFactory 2026 SP1 does not draw the end column.
-            'duration_hours': (end - start) / 3600.0 if None not in (start, end) and origin is not None else 0.0})
+            'duration_hours': (end - start) / 3600.0 if None not in (start, end) and origin is not None else 0.0,
+            # The tabular report prints the duration as text: a number would follow the Windows culture of the export.
+            'duration_text': hours_text((end - start) / 3600.0) if None not in (start, end) else '-'})
 
 
 def _element_view(results):
@@ -4834,16 +4900,18 @@ def _table_cut(payload, table, text):
              'the rows left out.'.format(text, MAX_TABLE_ROWS))
 
 
-def _fair_cut(payload, table, group, priority):
-    """At most MAX_TABLE_ROWS rows of `table`, shared between the groups (cases): small groups keep everything, the
-    others an equal share of the rest; each group keeps its most severe rows (`priority`), in their order."""
+def _fair_cut(payload, table, group, priority, limit=None):
+    """At most `limit` (default MAX_TABLE_ROWS) rows of `table`, shared between the groups (cases): small groups keep
+    everything, the others an equal share of the rest; each group keeps its most severe rows (`priority`), in their
+    order."""
     rows = payload[table]
-    if len(rows) <= MAX_TABLE_ROWS:
+    limit = MAX_TABLE_ROWS if limit is None else max(0, limit)
+    if len(rows) <= limit:
         return
     groups = {}
     for row in rows:
         groups.setdefault(group(row), []).append(row)
-    remaining, kept = MAX_TABLE_ROWS, set()
+    remaining, kept = limit, set()
     for position, (_key, members) in enumerate(sorted(groups.items(), key=lambda item: len(item[1]))):
         take = min(len(members), remaining // (len(groups) - position))
         kept.update(id(row) for row in sorted(members, key=priority)[:take])
@@ -5384,6 +5452,255 @@ def _result_provenance(payload, results):
             })
 
 
+# ---------------------------------------------------------------------------
+# n-0 violation episodes (tabular report)
+# ---------------------------------------------------------------------------
+EPISODE_TYPES = {'line': 'Line', 'transformer': 'Transformer', 'voltage': 'Node'}
+CRITERION_DEENERGIZED = 'de-energised'
+
+
+def _episode_criterion(item, status, value):
+    """'loading', 'voltage low', 'voltage high' or 'de-energised' of one finding step."""
+    if item['category'] in LOADING_CATEGORIES:
+        return 'loading'
+    if status == STATUS_DEENERGIZED or value is None:
+        return CRITERION_DEENERGIZED
+    lower, _upper = voltage_limits(item)
+    return 'voltage low' if value < lower else 'voltage high'
+
+
+def build_episodes(item, findings, steps):
+    """Episodes of one element from its finding steps [(row, status, value, ref value)] in row order.
+
+    An episode is a run of directly consecutive rows with the same criterion; a row without a finding, without a
+    value or outside the assessed rows ends it. Peak: the highest value (loading, voltage high) or the lowest
+    (voltage low) and the reference at that row; status: the most severe step status; hours: the steps' durations.
+    """
+    episodes, current = [], None
+    for row, status, value, ref in findings:
+        criterion = _episode_criterion(item, status, value)
+        if current is None or current['criterion'] != criterion or row != current['end_row'] + 1:
+            current = {'criterion': criterion, 'start_row': row, 'end_row': row, 'peak_row': row, 'peak': value,
+                       'ref': ref, 'statuses': [], 'hours': 0.0}
+            episodes.append(current)
+        current['end_row'] = row
+        current['hours'] += steps[row]
+        current['statuses'].append(status)
+        if value is not None and (current['peak'] is None or (
+                value < current['peak'] if criterion == 'voltage low' else value > current['peak'])):
+            current.update(peak=value, peak_row=row, ref=ref)
+    for episode in episodes:
+        episode['status'] = _worst_status(episode.pop('statuses'))
+    return episodes
+
+
+def reference_episodes(reference):
+    """Episodes of REF over its whole period, status EXCEEDED; kept as reference['episodes'] = [(item, episode)].
+
+    Called right after REF is evaluated, while its values are still there.
+    """
+    steps = row_steps(reference['hours']) if reference.get('hours') else []
+    found = []
+    for item in reference['item_by_key'].values():
+        values = item.get('values')
+        if values is None:
+            continue
+        measure = excess_function(item)
+        findings = []
+        for row in range(len(steps)):
+            value = array_value(values, row)
+            if value is not None and measure(value) > 0:
+                findings.append((row, STATUS_EXCEEDED, value, None))
+        found.extend((item, episode) for episode in build_episodes(item, findings, steps))
+    reference['episodes'] = found
+
+
+def _time_after(result, row, steps):
+    """The time a row's step ends: the next row's label, after the last row its own time plus its step."""
+    labels = result['labels']
+    if row + 1 < len(labels):
+        return labels[row + 1]
+    moment = result['hours'][row] + steps[row]
+    return format_absolute_time(moment) if result.get('absolute') else format_clock(moment)
+
+
+def _episode_value_text(item, value):
+    if value is None:
+        return ''
+    return loading_text(value) if item['category'] in LOADING_CATEGORIES else '{:.3f} p.u.'.format(value)
+
+
+def _episode_delta_text(item, value, ref):
+    if value is None or ref is None:
+        return ''
+    return delta_text(value - ref) if item['category'] in LOADING_CATEGORIES else '{:+.3f} p.u.'.format(value - ref)
+
+
+def _episode_severity(item_episode):
+    """(status rank, peak) of one episode: the smaller, the more severe."""
+    _item, episode = item_episode
+    peak = episode['peak']
+    rank = STATUS_PRECEDENCE.index(episode['status']) if episode['status'] in STATUS_PRECEDENCE else len(STATUS_PRECEDENCE)
+    return rank, 0.0 if peak is None else peak if episode['criterion'] == 'voltage low' else -peak
+
+
+def _ordered_episodes(found):
+    """Elements by their most severe episode, then name; the episodes of one element in time order."""
+    by_element = {}
+    for item_episode in found:
+        by_element.setdefault((item_episode[0]['category'], item_episode[0]['key']), []).append(item_episode)
+    elements = sorted(by_element.values(), key=lambda episodes: (min(_episode_severity(entry) for entry in episodes),
+                                                                  episodes[0][0]['element_name'].casefold()))
+    return [entry for episodes in elements for entry in sorted(episodes, key=lambda entry: entry[1]['start_row'])]
+
+
+def _episode_row(case_order, result, item, episode, steps, is_reference):
+    status = episode['status']
+    return {
+        'case_order': case_order, 'row_kind': 'episode', 'case_name': '',
+        'element_name': item['element_name'], 'location_text': item.get('location') or '-',
+        'element_type': EPISODE_TYPES.get(item['category'], item['category']), 'criterion': episode['criterion'],
+        'start_text': result['labels'][episode['start_row']], 'end_text': _time_after(result, episode['end_row'], steps),
+        'duration_text': hours_text(episode['hours']),
+        'peak_text': _episode_value_text(item, episode['peak']) or 'no voltage',
+        'peak_time': result['labels'][episode['peak_row']],
+        'reference_text': '' if is_reference else _episode_value_text(item, episode['ref']),
+        'delta_text': '' if is_reference else _episode_delta_text(item, episode['peak'], episode['ref']),
+        'status': status,
+        'violation': 2 if is_reference or status not in CAUSED_STATUSES else 1,
+    }
+
+
+def _n0_episodes(payload, results):
+    """ScriptedEpisodes: REF, then every calculated case; a case row ('ID · name') before the episodes of each.
+
+    Only sections with an episode are written. More than MAX_TABLE_ROWS rows are cut fairly between the sections,
+    each keeping its most severe episodes; the case rows always stay.
+    """
+    sections = []
+    reference = find_reference(results)
+    if reference is not None and reference.get('episodes'):
+        sections.append((reference, _ordered_episodes(reference['episodes']), True))
+    for case in outage_cases(results):
+        found = [(record['item'], episode) for records in (case.get('comparison') or {}).values()
+                 for record in records for episode in record.get('episodes') or ()]
+        if found:
+            sections.append((case, _ordered_episodes(found), False))
+    rows = []
+    for case_order, (result, found, is_reference) in enumerate(sections, 0 if reference is not None else 1):
+        steps = row_steps(result['hours']) if result.get('hours') else []
+        order = 0 if is_reference else case_order
+        rows.extend(dict(_episode_row(order, result, item, episode, steps, is_reference), rank=rank)
+                    for rank, (item, episode) in enumerate(found))
+    names = {(0 if is_reference else case_order): '{} \u00b7 {}'.format(result['id'], _result_name(result))
+             for case_order, (result, _found, is_reference) in enumerate(sections, 0 if reference is not None else 1)}
+    payload['ScriptedEpisodes'][:] = rows
+    if len(rows) + len(names) > MAX_TABLE_ROWS:
+        _fair_cut(payload, 'ScriptedEpisodes', lambda row: row['case_order'], lambda row: row['rank'],
+                  limit=MAX_TABLE_ROWS - len(names))
+    kept = payload['ScriptedEpisodes']
+    table, seen = [], set()
+    for row in kept:
+        if row['case_order'] not in seen:
+            seen.add(row['case_order'])
+            table.append(dict({field: '' for field in row}, case_order=row['case_order'], row_kind='case',
+                              case_name=names[row['case_order']], violation=0))
+        table.append(row)
+    for position, row in enumerate(table, 1):
+        row.pop('rank', None)
+        row['row_order'] = position
+    payload['ScriptedEpisodes'][:] = table
+
+
+# ---------------------------------------------------------------------------
+# Case summary (tabular report): every fact about a case in one row
+# ---------------------------------------------------------------------------
+def _status_counts_text(statuses):
+    """'2 new · 1 pre-existing' from the element statuses of one category; 'none' without a finding."""
+    groups = (('new', (STATUS_NEW,)), ('exceeded', (STATUS_EXCEEDED,)), ('worsened', (STATUS_WORSENED,)),
+              ('pre-existing', (STATUS_PREEXISTING, STATUS_IMPROVED)), ('de-energised', (STATUS_DEENERGIZED,)))
+    parts = ['{} {}'.format(sum(1 for status in statuses if status in members), label)
+             for label, members in groups if any(status in members for status in statuses)]
+    return ' \u00b7 '.join(parts) or 'none'
+
+
+def _summary_row(case_order, case_id, case_name, assessment, reason='', violation=0):
+    row = {field: '' for field, _ in dict(TABLES)['ScriptedCaseSummary']}
+    row.update(case_order=case_order, case_id=case_id, case_name=case_name, assessment=assessment,
+               assessment_reason=reason, violation=violation)
+    return row
+
+
+def _voltage_range_text(low, high):
+    return '-' if low is None or high is None else '{:.3f} - {:.3f} p.u.'.format(low, high)
+
+
+def _case_summary(payload, results, request):
+    """ScriptedCaseSummary: REF first, then every planning case in its order, also those not calculated."""
+    table = payload['ScriptedCaseSummary']
+    reference = find_reference(results)
+    if reference is not None:
+        loading = [(item, stats) for category in LOADING_CATEGORIES for item, stats in reference['by_category'][category]
+                   if stats.get('max') is not None]
+        top = max(loading, key=lambda entry: (entry[1]['max'], entry[0]['element_name']), default=None)
+        voltages = [stats for _, stats in reference['by_category']['voltage']]
+        row = _summary_row(0, REFERENCE_ID, _result_name(reference), 'BASELINE')
+        row.update(
+            max_loading_text=loading_text(top[1]['max']) if top else '-',
+            max_loading_element=top[0]['element_name'] if top else '-',
+            max_loading_location=(top[0].get('location') or '-') if top else '-',
+            max_loading_time=top[1].get('time_max') or '-' if top else '-',
+            lines_text=_status_counts_text([STATUS_EXCEEDED for item, stats in reference['by_category']['line']
+                                            if is_critical(item, stats)]),
+            transformers_text=_status_counts_text([STATUS_EXCEEDED for item, stats in reference['by_category']['transformer']
+                                                   if is_critical(item, stats)]),
+            nodes_text=_status_counts_text([STATUS_EXCEEDED for item, stats in reference['by_category']['voltage']
+                                            if is_critical(item, stats)]),
+            voltage_range_text=_voltage_range_text(
+                min((stats['min'] for stats in voltages if stats.get('min') is not None), default=None),
+                max((stats['max'] for stats in voltages if stats.get('max') is not None), default=None)),
+            coverage_text='whole period')
+        table.append(row)
+    by_id = {result['id']: result for result in results}
+    for case_order, plan in enumerate(request.get('cases') or (), 1):
+        result = by_id.get(plan['id'])
+        if plan['status'] != PLAN_READY or result is None:
+            table.append(_summary_row(case_order, plan['id'], plan['name'],
+                                      ASSESSMENT_SKIPPED if plan['status'] == PLAN_NOT_SIMULATED else ASSESSMENT_NOT_EVALUATED,
+                                      plan.get('reason') or ''))
+            continue
+        if result['status'] != CONVERGED:
+            table.append(_summary_row(case_order, plan['id'], plan['name'],
+                                      ASSESSMENT_SKIPPED if result['status'] == CASE_N0_SKIPPED else ASSESSMENT_NOT_EVALUATED,
+                                      result.get('message') or ''))
+            continue
+        verdict = judged(results, result)
+        if verdict is None:
+            table.append(_summary_row(case_order, plan['id'], plan['name'], ASSESSMENT_NO_DATA,
+                                      'No result rows fall inside the outage windows of this case.'))
+            continue
+        row = _summary_row(case_order, plan['id'], plan['name'], verdict['assessment'], violation=verdict['violation'])
+        counts = {category: _status_counts_text([limit_status(record) for record in paired(results, category, result, True)])
+                  for category in ('line', 'transformer', 'voltage')}
+        row.update(
+            max_loading_text=loading_text(verdict['max_loading']),
+            max_loading_element=verdict['max_loading_element'] or '-',
+            max_loading_location=verdict.get('max_loading_location') or '-',
+            max_loading_time=verdict['max_loading_time'] or '-',
+            # An increase within the change tolerance is no increase: '-' instead of '+0.0 pp' on some element.
+            **(dict(coincident_delta_text=delta_text(verdict['delta']),
+                    coincident_delta_element=verdict['delta_element'] or '-',
+                    coincident_delta_time=verdict['delta_time'] or '-')
+               if verdict['delta'] is not None and verdict['delta'] > change_tolerance('line') else
+               dict(coincident_delta_text='-', coincident_delta_element='', coincident_delta_time='')),
+            maxima_difference_text=delta_text(verdict['maxima_difference']),
+            lines_text=counts['line'], transformers_text=counts['transformer'], nodes_text=counts['voltage'],
+            violation_hours_text=hours_text(verdict['caused_hours'] or 0.0),
+            voltage_range_text=_voltage_range_text(verdict['min_voltage'], verdict['max_voltage']),
+            coverage_text=percent_text(verdict['coverage']) if verdict['coverage'] is not None else 'whole axis')
+        table.append(row)
+
+
 def _reporting_tables(payload, results, request):
     """Every contract 7.0 table built from the reporting core; returns the notes for ScriptedReportMeta."""
     notes = {}
@@ -5567,6 +5884,8 @@ def build_cases_payload(study_case, results, project_name, result_name, request,
     _loading_appendix(payload, results, 'transformer', 'ScriptedAppendixTransformer')
     _voltage_appendix(payload, results)
     notes = _reporting_tables(payload, results, request)
+    _case_summary(payload, results, request)
+    _n0_episodes(payload, results)
     meta = payload['ScriptedReportMeta'][0]
     meta.update(overall_text=overall_text(payload), critical_note=critical_note(notes), events_note=events_note(notes))
     _enforce_table_limits(payload)
@@ -12239,6 +12558,8 @@ def evaluate_runs(runs, request, logger):
                 raise OutageAssessmentError(run['failed'])
             reference = evaluate_qds(run, run.get('description', ''), None, logger)
             set_offline(reference)
+            if reference.get('status') == CONVERGED:
+                reference_episodes(reference)
             reference['run_note'] = run.get('run_note', '')
             results.append(reference)
             check_run_budget(results)

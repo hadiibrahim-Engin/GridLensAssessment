@@ -552,16 +552,17 @@ Rechnungen; n-0 lässt sich für einen reinen n-1-Lauf abwählen (Schritt 3).
 
 1. **Contingency Analysis.** Outage Assessment legt die Fehlerfälle immer
    selbst an: `OA_<stamp>_N1` mit einem Fehlerfall je Leitung, Zweig,
-   Transformator, Drossel, Kompensation und FACTS-Element der n-1-Netze
-   (keine Generatoren, Lasten oder Sammelschienen), erhalten im Study Case.
+   Transformator, Drossel, Kompensation, FACTS-Element, Erzeuger und Last der
+   n-1-Netze (keine Sammelschienen), erhalten im Study Case.
    Ein `ComSimoutage`, der schon im Study Case liegt, wird nie verwendet:
    PowerFactory legt ihn an, oft leer, sobald sein Dialog geöffnet wurde (ein
    Lauf am 16.11.2026 fand „0 contingencies“, PowerFactory meldete „Could not
    find contingency cases“). Ein erhaltener `OA_…_N1` mit genau den
    gewünschten Fehlerfällen wird wiederverwendet statt neu angelegt.
-2. **Filter.** Die n-1-Netze (keins gewählt: jedes Netz, unabhängig vom
-   Berichtsfilter) und die ausfallenden Elemente bestimmen, welche
-   Fehlerfälle angelegt werden. Der Berichtsfilter entscheidet, welche
+2. **Filter.** Nur die n-1-Netze (keins gewählt: jedes Netz, unabhängig vom
+   Berichtsfilter) bestimmen, welche Fehlerfälle angelegt werden; einen
+   Elementfilter gibt es nicht mehr (entfernt am 16.11.2026, ein gespeicherter
+   Wert wird ignoriert). Der Berichtsfilter entscheidet, welche
    überwachten Elemente bewertet werden.
 3. **Studienzeitpunkte.** Mit n-0: die QDS-Zeitschritte in den Fenstern der
    Außerbetriebnahmen des Falls. Ohne n-0 (nur n-1): die Fenster, abgetastet
@@ -620,7 +621,6 @@ Einstellungen interpretieren Ergebnisse; Einstellungen der Kategorie B würden
 |---|---|---|
 | Network scope | Report filter: assessed equipment, grids | jedes Netz |
 | Network scope | n-1 filter: grids of the outaged equipment | jedes Netz |
-| Network scope | n-1 filter: outaged elements | jedes Element |
 | Thermal limits | Warning threshold, lines / transformers | 80 % |
 | Thermal limits | Maximum loading for n-0, lines / transformers | 100 % |
 | Thermal limits | Limits for n-1 and (n-1)' | use PowerFactory limits |

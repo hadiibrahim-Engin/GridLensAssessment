@@ -1,8 +1,9 @@
 # Outage Assessment – wie jede Berichtstabelle berechnet und erstellt wird
 
-Outage Assessment veröffentlicht **38 Tabellen** (Datenvertrag 7.1), die beide Berichte
-lesen: `MASTER_OUTAGE_ASSESSMENT` (Hauptbericht) und `MASTER_OUTAGE_ASSESSMENT_DETAIL`
-(technischer Detailbericht), gehalten als Pages in `designer-pages/<Bericht>/`
+Outage Assessment veröffentlicht **40 Tabellen** (Datenvertrag 7.2), die die Berichte
+lesen: `MASTER_OUTAGE_ASSESSMENT` (Hauptbericht), `MASTER_OUTAGE_ASSESSMENT_DETAIL`
+(technischer Detailbericht) und `MASTER_OUTAGE_ASSESSMENT_TABLES` (Tabellenbericht, nur n-0,
+soll beide ersetzen), gehalten als Pages in `designer-pages/<Bericht>/`
 (ein `.dct`-Dictionary und je Seite eine `.pg`-Datei). Für dieselbe Run-ID
 drucken beide Berichte dieselbe Statistik. Dieses Dokument beschreibt Tabelle
 für Tabelle, woher jede Zeile kommt, wie jedes Feld berechnet wird und welches
@@ -339,9 +340,51 @@ Detailbericht zeigt die n-0-Zeilen). Jeder Planungsfall behält seine Zeilen,
 auch wenn seine QDS oder sein n-1 gescheitert ist; `ScriptedQualityRegister`
 enthält auch NOT APPLICABLE je Fehlerfall.
 
+### 3.35 `ScriptedCaseSummary` – Fallübersicht (Tabellenbericht)
+
+Eine Zeile je Fall, Referenz zuerst (`case_order` 0), dann jeder Planungsfall in der Reihenfolge des
+Fallmanagers, auch nicht gerechnete (`_case_summary`). Jede Aussage zu einem Fall steht nur hier: Urteil
+(`assess_case`) und, wenn nicht bewertet, der Grund; höchste Auslastung mit Element, Location und Zeit; größter
+zeitgleicher Anstieg gegenüber REF mit Element und Zeit (`-`, wenn er innerhalb der n-0-Änderungstoleranz liegt);
+Differenz der Maxima; Leitungen, Trafos und Knoten über der Grenze als `new`, `exceeded` (kein REF-Wert),
+`worsened`, `pre-existing`, `de-energised`; verursachte Verletzungsdauer; Spannungsband; Abdeckung der
+Außerbetriebnahmezeit. Referenz: Urteil BASELINE, eigene Verletzungen als `exceeded`.
+
+### 3.36 `ScriptedEpisodes` – Verletzungsepisoden (Tabellenbericht)
+
+`_n0_episodes`. Eine Episode ist eine Folge direkt aufeinanderfolgender Zeitschritte, in denen ein Element
+dieselbe Grenze verletzt (`loading`, `voltage low`, `voltage high`; Knoten ohne Spannung: `de-energised`). Ein
+Schritt ohne Wert oder außerhalb der bewerteten Zeilen des Falls beendet sie. Je Episode: Beginn (erster
+Schritt), Ende (Ende des letzten Schritts: das nächste Label, nach der letzten Zeile ihre Zeit plus Schritt),
+Dauer (Summe der Schrittdauern), Spitze und ihre Zeit, REF zur Spitzenzeit und die Änderung (Fall − REF), der
+schwerste Schrittstatus. Referenz-Episoden (`reference_episodes`, ganzer Zeitraum, Status EXCEEDED) stehen
+zuerst, dann jeder Fall. Vor den Episoden jedes Abschnitts steht eine Fallzeile (`row_kind = 'case'`, nur
+`case_name` = „ID · Name“); die Vorlage zeichnet sie als grauen Balken. Innerhalb eines Abschnitts stehen die
+Elemente nach ihrer schwersten Episode, die Episoden eines Elements zeitlich. Mehr als `MAX_TABLE_ROWS` Zeilen
+werden gerecht über die Abschnitte gekürzt; die Fallzeilen bleiben.
+
+Vertrag 7.2 ergänzt außerdem `location_text` (Grid / Station, `element_location`) in den drei Anhangsmatrizen,
+`result_path` in `ScriptedCalculationRuns` und `duration_text` in `ScriptedOutageWindows`; die Knotenmatrix zeigt
+minimale / maximale Spannung.
+
 ---
 
 ## 4. Kapitel und ihre Tabellen
+
+**Tabellenbericht** (`MASTER_OUTAGE_ASSESSMENT_TABLES`, nur n-0, keine Diagramme, jede Information einmal):
+
+| Seite | Tabellen |
+|---|---|
+| Titelseite, Inhaltsverzeichnis | `ScriptedReportMeta` |
+| Case summary | `ScriptedCaseSummary` |
+| Planned outages | `ScriptedOutageWindows` (Fall, Außerbetriebnahme, Objekt, Betriebsmittel, Beginn, Ende, Dauer) |
+| Lines, Transformers, Node voltages | `ScriptedAppendixLine`, `…Transformer`, `…Voltage` mit Location |
+| Violation episodes | `ScriptedEpisodes` |
+| Model quality | `ScriptedModelQuality` ohne die Zeilen anderer Seiten (Grenzwerte, Netzumfang, Einstellungen, Aussageumfang, gescheiterte Rechnungen, n-1) |
+| Calculation evidence | `ScriptedCalculationRuns` mit Pfad des Ergebnisobjekts |
+| Settings and limits | `ScriptedAssessmentSettings` |
+| Method | Text |
+
 
 **Hauptbericht** (`MASTER_OUTAGE_ASSESSMENT`):
 

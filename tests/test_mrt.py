@@ -9,7 +9,8 @@ import pytest
 
 from _paths import delivered, report_files, report_folder, report_text, report_tree
 # The two reports as the repository keeps them: a .dct dictionary and one .pg file per page each.
-TEMPLATES = {"main": "MASTER_OUTAGE_ASSESSMENT", "detail": "MASTER_OUTAGE_ASSESSMENT_DETAIL"}
+TEMPLATES = {"main": "MASTER_OUTAGE_ASSESSMENT", "detail": "MASTER_OUTAGE_ASSESSMENT_DETAIL",
+             "tables": "MASTER_OUTAGE_ASSESSMENT_TABLES"}
 SCRIPT = delivered("main.py")
 SPEC = importlib.util.spec_from_file_location("outage_assessment_report_mrt", SCRIPT)
 gl = importlib.util.module_from_spec(SPEC)
@@ -95,7 +96,10 @@ CHAPTER_PAGES = {
              "PageMetrics", "PageCritical", "PageContingency", "PageTime", "PageEvidence"],
     "detail": ["PageCover", "PageContents", "PageScope", "PageRegister", "PageBasefindings", "PageLines", "PageTransformers",
                "PageVoltagelow", "PageVoltagehigh", "PageClassification", "PageContingencies", "PageEvents", "PageEpisodes",
-               "PageQualityregister", "PageProvenance", "PageMethod", "PageAppendix", "PageAppa", "PageAppb", "PageAppc"]}
+               "PageQualityregister", "PageProvenance", "PageMethod", "PageAppendix", "PageAppa", "PageAppb", "PageAppc"],
+    # The tabular report (contract 7.2): n-0 only, no chart, every fact once.
+    "tables": ["PageCover", "PageContents", "PageCasesummary", "PageOutages", "PageLines", "PageTransformers", "PageVoltages",
+               "PageEpisodes", "PageQuality", "PageEvidence", "PageSettings", "PageMethod"]}
 
 
 @both
@@ -123,8 +127,9 @@ def test_the_report_has_one_landscape_page_per_chapter_in_the_order_of_the_templ
 def test_the_two_reports_share_one_contract_and_split_its_chapters():
     main, detail = _sources_used(_root("main")), _sources_used(_root("detail"))
     tables = set(dict(gl.TABLES))
-    # Every table is shown by at least one report.
-    assert tables - main - detail == set()
+    # Every table is shown by at least one report; the case summary and the n-0 episodes only by the tabular one.
+    assert tables - main - detail == {"ScriptedCaseSummary", "ScriptedEpisodes"}
+    assert {"ScriptedCaseSummary", "ScriptedEpisodes"} <= _sources_used(_root("tables"))
     assert not {name for name in main if name.startswith(("ScriptedDetail", "ScriptedClassification"))}
     assert not {"ScriptedContingencyEpisodes", "ScriptedQualityRegister", "ScriptedScope", "ScriptedContingencyRegister"} & main
     assert not {name for name in detail if name.startswith(("ScriptedCritical", "ScriptedTime", "ScriptedPie"))}
@@ -260,7 +265,10 @@ MATRICES = {
     "detail": [("Lines", "ScriptedDetailLines", 3), ("Transformers", "ScriptedDetailTransformers", 3),
                ("Voltagelow", "ScriptedDetailVoltageLow", 3), ("Voltagehigh", "ScriptedDetailVoltageHigh", 3),
                ("Classification", "ScriptedClassificationMatrix", 3), ("TopCase", "ScriptedTopLinesByCase", 6),
-               ("Appa", "ScriptedAppendixLine", 6), ("Appb", "ScriptedAppendixTransformer", 6), ("Appc", "ScriptedAppendixVoltage", 6)]}
+               ("Appa", "ScriptedAppendixLine", 6), ("Appb", "ScriptedAppendixTransformer", 6), ("Appc", "ScriptedAppendixVoltage", 6)],
+    # The matrices of the tabular report carry one more column: the location of the element.
+    "tables": [("Appa", "ScriptedAppendixLine", 6, 1), ("Appb", "ScriptedAppendixTransformer", 6, 1),
+               ("Appc", "ScriptedAppendixVoltage", 6, 1)]}
 
 
 @both
@@ -270,7 +278,7 @@ def test_matrix_tables_have_a_band_pair_per_block_and_filter_on_it(report):
     # each header reads the case names of the first row of its band.
     assert gl.CASE_SLOTS == 6 and gl.DETAIL_SLOTS == 3 and gl.MAX_PLANNING_CASES == 20
     root = _root(report)
-    for key, source, slots in MATRICES[report]:
+    for key, source, slots, *extra in MATRICES[report]:
         full = -(-gl.MAX_PLANNING_CASES // slots)
         expected = [(slots, block) for block in range(1, full + 1)] + [(n, None) for n in range(slots - 1, -1, -1)]
         data = [item for item in _bands_of(root, key) if item.tag.endswith("_DataBand")]
@@ -281,7 +289,7 @@ def test_matrix_tables_have_a_band_pair_per_block_and_filter_on_it(report):
             filters = [_decode(value.text) for value in band.find("Filters")]
             assert filters == ["{}.col_count == {}".format(source, count)] + (
                 ["{}.block == {}".format(source, block)] if block else [])
-            assert len(list(band.find("Components"))) == 2 + count
+            assert len(list(band.find("Components"))) == 2 + count + sum(extra)
         headers = [item for item in _bands_of(root, key) if item.tag.endswith("_HeaderBand")]
         # Stimulsoft leaves default values out of a page file: no PrintOnAllPages means True (repeated on every sheet).
         assert len(headers) == len(expected) and all(item.findtext("PrintOnAllPages") in (None, "True") for item in headers)
@@ -364,6 +372,10 @@ def test_evidence_table_names_the_result_objects(report):
     evidence = [root.find(".//Evidence_H{}".format(i)).findtext("Text") for i in range(8)]
     assert "Result object in PowerFactory" in evidence
     assert root.find(".//Evidence_DataBand").findtext("DataSourceName") == "ScriptedCalculationRuns"
+    if report == "tables":
+        # One table: the run and the path of its kept result object (no separate provenance table).
+        assert "PowerFactory path" in evidence and root.find(".//Provenance_H0") is None
+        return
     provenance = [root.find(".//Provenance_H{}".format(i)).findtext("Text") for i in range(6)]
     assert "PowerFactory path" in provenance
 
@@ -596,3 +608,53 @@ def test_the_pages_are_the_only_source_of_the_reports():
         folder = report_folder(name)
         assert len(list(folder.glob("*.dct"))) == 1 and len(list(folder.glob("*.pg"))) == len(CHAPTER_PAGES[report])
         assert not list(folder.glob("*.mrt")) and not delivered(name + ".mrt").exists()
+
+
+# ---------------------------------------------------------------------------
+# The tabular report: every fact once, no chart, n-0 only
+# ---------------------------------------------------------------------------
+def test_the_tabular_report_prints_every_field_on_one_page_only():
+    # Hadi, 16 Nov 2026: the same information twice looks unprofessional. Header, footer and cover repeat the run
+    # (ScriptedReportMeta) by design; every other table field is printed by exactly one page.
+    root = _root("tables")
+    pages = {}
+    for page in root.find("Pages"):
+        for text in page.iter("Text"):
+            for table, field in re.findall(r"\b(Scripted[A-Za-z]+)\.([a-z_]+)\b", _decode(text.text or "")):
+                if table != "ScriptedReportMeta":
+                    pages.setdefault((table, field), set()).add(page.tag)
+    assert pages and {key: sorted(found) for key, found in pages.items() if len(found) > 1} == {}
+    # One table per fact: none of the overview tables the case summary and the episodes replace is read.
+    replaced = {"ScriptedCases", "ScriptedCaseStatistics", "ScriptedCaseMetrics", "ScriptedCaseComparison", "ScriptedKpis",
+                "ScriptedCaseCounts", "ScriptedCaseStatusCounts", "ScriptedLineLoadingBars", "ScriptedPieLines",
+                "ScriptedPieTransformers", "ScriptedTopLinesByCase", "ScriptedReferenceFindings", "ScriptedResultProvenance",
+                "ScriptedCoverage", "ScriptedScope"}
+    assert replaced & _sources_used(root) == set()
+
+
+def test_the_tabular_report_has_no_chart_and_no_contingency_source():
+    root = _root("tables")
+    assert _charts(root) == []
+    n1 = {name for name in dict(gl.TABLES) if name.startswith(("ScriptedContingency", "ScriptedQualityRegister",
+                                                                "ScriptedTime", "ScriptedCritical", "ScriptedDetail",
+                                                                "ScriptedClassification"))}
+    assert n1 & _sources_used(root) == set()
+
+
+def test_the_tabular_quality_page_leaves_out_what_other_pages_show():
+    root = _root("tables")
+    (expression,) = [_decode(value.text) for value in root.find(".//Quality_DataBand").find("Filters")]
+    for hidden in ("Loading limit", "Voltage limits", "Network scope", "Settings", "Assessment scope"):
+        assert 'ScriptedModelQuality.check_name != "{}"'.format(hidden) in expression
+    # n-1 rows, and the failure of a calculation, which the case summary names as the reason.
+    assert '!ScriptedModelQuality.check_name.StartsWith("n-1 ")' in expression
+    assert '!ScriptedModelQuality.check_name.StartsWith("Calculation ")' in expression
+
+
+def test_episode_case_rows_are_bars_across_the_table():
+    root = _root("tables")
+    first = root.find(".//Episodes_C0")
+    assert first.findtext("Text") == "{ScriptedEpisodes.case_name}{ScriptedEpisodes.element_name}"
+    for index in range(12):
+        conditions = [value.text for value in root.find(".//Episodes_C{}".format(index)).find("Conditions")]
+        assert conditions[0].startswith("ScriptedEpisodes.row_kind,EqualTo,case,,String,White,[120:120:120]")

@@ -288,12 +288,14 @@ res.Release()
 
 ### 7.1 The command and the contingencies
 
-- Outage Assessment uses the **one** `ComSimoutage` of the active study case. Without
-  one (e.g. in the QDS study case) it creates `OA_<stamp>_N1`
-  (`create_contingency_analysis`): one `ComOutage` per calculation-relevant
+- Outage Assessment never uses a `ComSimoutage` of the study case (PowerFactory
+  creates one, often empty, when its dialog is opened). It creates
+  `OA_<stamp>_N1` (`create_contingency_analysis`), or uses a kept one with
+  exactly the same contingencies again: one `ComOutage` per calculation-relevant
   element of the classes `ElmLne`, `ElmBranch`, `ElmZpu`, `ElmTr2`, `ElmTr3`,
-  `ElmTr4`, `ElmSind`, `ElmScap`, `ElmShnt`, `ElmSvs`, `ElmVsc`, `ElmVscmono` in
-  the chosen grids – no generators, loads or busbars. A line inside an
+  `ElmTr4`, `ElmSind`, `ElmScap`, `ElmShnt`, `ElmSvs`, `ElmVsc`, `ElmVscmono`,
+  `ElmSym`, `ElmAsm`, `ElmGenstat`, `ElmPvsys`, `ElmLod` in the n-1 grids – no
+  busbars. A line inside an
   `ElmBranch` counts through the branch.
 
 ```python
@@ -305,9 +307,9 @@ fault.SetObjs([element])                       # 0 = success
 
 - Outage Assessment reads the equipment a contingency switches with
   `ComOutage.GetObject(i)` for i = 0, 1, … until `None` (`contingency_equipment`).
-- Contingencies outside the n-1 grids, or outaging none of the elements chosen
-  in the n-1 element filter, are set to "Not analysed" for the run (`ComOutage.outserv = 1`,
-  verified 23 Oct 2026; `excluded_contingencies`). Where the filters act, also in
+- Contingencies outside the n-1 grids are not created; in a re-evaluation they
+  are left out (`excluded_contingencies`). `ComOutage.outserv = 1` ("Not
+  analysed") was verified on 23 Oct 2026. Where the filters act, also in
   a re-evaluation: [`CALCULATION_AND_EVALUATION.md`](CALCULATION_AND_EVALUATION.md).
 
 ### 7.2 Planned outages in the sweep

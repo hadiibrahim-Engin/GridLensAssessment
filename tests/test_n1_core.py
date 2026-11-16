@@ -445,15 +445,14 @@ def test_without_a_contingency_analysis_outage_assessment_defines_one_for_the_se
     others = [Obj("G1", "ElmSym", cpGrid=grid_a), Obj("Load", "ElmLod", cpGrid=grid_a), Obj("Bus", "ElmTerm", cpGrid=grid_a)]
     app = App([line, branch_line, branch, transformer, foreign] + others)
 
-    assert [obj.loc_name for obj in gl.contingency_candidates(app, ("Grid A",))] == ["L1", "Branch", "T1"]
-    assert len(gl.contingency_candidates(app, ())) == 4, "no generators, loads, busbars; the branch replaces its line"
+    assert [obj.loc_name for obj in gl.contingency_candidates(app, ("Grid A",))] == ["L1", "Branch", "T1", "G1", "Load"]
+    assert len(gl.contingency_candidates(app, ())) == 6, "generators and loads too, no busbars; the branch replaces its line"
 
     _, records, plan, _, planned = _scenario()
     study = Creating([])
     study._app, study._planned = app, list(planned)
     # The n-1 grid filter selects the contingencies; the report filter alone would not.
-    gl.activate_settings({"contingency_grids": ["Grid A"],
-                          "contingency_elements": [gl.object_key(line), gl.object_key(branch)]})
+    gl.activate_settings({"contingency_grids": ["Grid A"]})
     results = [{"id": "C1"}]
     logger = Logger()
     qds = Obj("QDS", "ComStatsim", startTime=START, endTime=START + 23 * H, stepSize=1, stepUnit=2)
@@ -462,9 +461,9 @@ def test_without_a_contingency_analysis_outage_assessment_defines_one_for_the_se
 
     created = study._children[0]
     assert created.loc_name.startswith("OA_") and created.loc_name.endswith("_N1") and created.iEnableTS == 1
-    assert [outage.loc_name for outage in created._outages] == ["L1", "Branch"], "only the selected elements"
+    assert [outage.loc_name for outage in created._outages] == ["L1", "Branch", "T1", "G1", "Load"], "only Grid A"
     assert results[0]["n1"]["status"] == "EVALUATED"
-    assert any("Outage Assessment created" in message and "2 contingencies" in message for _, message in logger.lines)
+    assert any("Outage Assessment created" in message and "5 contingencies" in message for _, message in logger.lines)
 
 
 
@@ -509,7 +508,7 @@ class Keeping(Study):
 
 
 def test_n1_results_are_kept_as_copies_and_evaluated_from_them_also_later_without_a_calculation():
-    analysis, records, plan, *_ = _scenario()
+    analysis, records, plan, *_ = _scenario(grid_b=True)
     study = Keeping([analysis])
     qds = Obj("QDS", "ComStatsim", startTime=START, endTime=START + 23 * H, stepSize=1, stepUnit=2)
     clock = {"object": Obj("time", "SetTime", cDate=1, cTime=2), "date": 1, "time": 2}
@@ -536,11 +535,10 @@ def test_n1_results_are_kept_as_copies_and_evaluated_from_them_also_later_withou
     gl.evaluate_n1(n1, request, [plan], again, Logger())
     assert again[0]["n1"]["summary"] == first and len(analysis.runs) == calls
     assert runs[0]["failed"].startswith("the run 261023-120000 kept no result object"), "no QDS object in this study"
-    assert "n-1 filter: grids every grid; outaged elements: every element" in kept[0].desc[0]
+    assert kept[0].desc[0].endswith("n-1 filter: grids every grid")
 
-    # Re-evaluated with an element selection set afterwards: only L2 and L3 are outaged, C1 is left out.
-    chosen = [gl.object_key(analysis._lines[1]), gl.object_key(analysis._lines[2])]
-    gl.activate_settings({"run_reference": False, "contingency_elements": chosen})
+    # Re-evaluated with a grid selection set afterwards: only L3 lies in Grid B, C1 and C2 are left out.
+    gl.activate_settings({"run_reference": False, "contingency_grids": ["Grid B"]})
     try:
         _, n1 = gl.kept_runs(study, "261023-120000", request, [plan], Logger())
         narrowed = [{"id": "C1"}]
@@ -550,10 +548,10 @@ def test_n1_results_are_kept_as_copies_and_evaluated_from_them_also_later_withou
         gl.reset_settings()
     assert len(analysis.runs) == calls
     notes = [message for _, message in logger.lines]
-    assert any(message.startswith("Kept n-1 result calculated with the grids every grid; outaged elements: every "
-                                  "element; now: the n-1 filter: grids every grid; outaged elements: L2, L3.")
+    assert any(message.startswith("Kept n-1 result calculated with the grids every grid; now: the n-1 filter: grids "
+                                  "Grid B.") for message in notes)
+    assert any("Left out of the evaluation by the current n-1 filters: 2 contingencies (C1, C2)" in message
                for message in notes)
-    assert any("Left out of the evaluation by the current n-1 filters: 1 contingency (C1)" in message for message in notes)
     assert narrowed[0]["n1"]["summary"] != first
 
 
@@ -600,10 +598,10 @@ def test_the_study_cases_own_contingency_analysis_is_never_used_every_line_of_th
         _run_n1(app, study, qds, request, records, [plan], [{"id": "C1"}], logger, clock)
         assert len(study._children) == 2 and any("of an earlier run again" in message for _, message in logger.lines)
 
-        # Another element selection asks for other contingencies: a new analysis, again only with those.
-        gl.activate_settings({"contingency_grids": ["Grid A"], "contingency_elements": [gl.object_key(lines[0])]})
+        # Another grid asks for other contingencies: a new analysis, again only with those.
+        gl.activate_settings({"contingency_grids": ["Grid B"]})
         _run_n1(app, study, qds, request, records, [plan], [{"id": "C1"}], Logger(), clock)
-        assert [outage.loc_name for outage in study._children[2]._outages] == ["L1"]
+        assert [outage.loc_name for outage in study._children[2]._outages] == ["L9"]
     finally:
         gl.reset_settings()
 
@@ -614,7 +612,6 @@ def test_the_case_manager_previews_the_contingencies_outage_assessment_defines()
     info = gl.defined_contingencies(app)
     assert [item["name"] for item in info["contingencies"]] == ["L1", "L2", "T1"]
     assert gl.contingency_scope_text(info, ("Grid A",)).startswith("2 contingencies in scope (Grid A), 2 of 3 in the network")
-    assert [item[1] for item in gl.contingency_element_choices(app, info)] == ["L1", "L2", "T1"]
 
 
 def test_the_contract_seven_tables_of_one_case_come_from_the_reporting_core():

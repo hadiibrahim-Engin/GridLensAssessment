@@ -77,7 +77,11 @@ can be dragged.
   - IDs (`C1`, `C2`, …) are generated, never typed. They name the result
     objects (`OA_<stamp>_C1`) and stay when a case is renamed.
 - **Calculation** (bottom left):
-  - n-0 (the QDS of REF and every case) is always calculated.
+  - *n-0 – quasi-dynamic simulation*: the QDS of REF and of every case,
+    ticked by default. Unticked, the run is **n-1 only**: no QDS runs and no
+    ComStatsim is needed; the n-1 time sweep samples the outage windows with
+    *n-1 time step without n-0* (Settings → Run, default 60 min). n-0 cannot
+    be unticked while n-1 is not ticked.
   - *n-1 – reference contingency analysis* and *(n-1)' – contingency analysis
     with planned-outage scenarios*. (n-1)' needs n-1: ticking (n-1)' ticks
     n-1, unticking n-1 unticks (n-1)'.
@@ -104,7 +108,7 @@ state of the settings) and seven sections:
 
 | Section | Content |
 |---|---|
-| Network scope | *Report filter: assessed equipment* (grids whose lines, transformers and terminals are assessed; none selected = every grid; no effect on the calculation); *n-1 filter: contingencies by grid* (*Every grid* or *Own selection*, with the number of contingencies in scope); *n-1 filter: outaged elements* (only contingencies outaging a selected element are calculated). A selection takes effect at once. |
+| Network scope | *Report filter: assessed equipment* (grids whose lines, transformers and terminals are assessed; none selected = every grid; no effect on the calculation); *n-1 filter: contingencies by grid* (*Every grid* or *Own selection*, with the number of contingencies Outage Assessment defines there: one per line, branch, transformer, reactor, compensation, FACTS element, generator and load). n-1 has no other filter. A selection takes effect at once. |
 | Limits | warning thresholds and n-0 limits (lines and transformers separately), the n-1 limit handling, the voltage band in p.u. for every voltage level, the de-energised threshold; post-fault voltage limits read only |
 | Classification | n-0 change tolerances and the n-1 / (n-1)' classification parameters |
 | Report and run | appendix thresholds, Top-N rows, points per time plot, REF on/off, the case limit, n-1 study times per case |

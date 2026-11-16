@@ -17,7 +17,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORTS = ("MASTER_OUTAGE_ASSESSMENT", "MASTER_OUTAGE_ASSESSMENT_DETAIL")
+REPORTS = ("MASTER_OUTAGE_ASSESSMENT", "MASTER_OUTAGE_ASSESSMENT_DETAIL", "MASTER_OUTAGE_ASSESSMENT_TABLES")
 RUNTIME = os.environ.get("OUTAGE_ASSESSMENT_TEST_RUNTIME", "tk")
 if RUNTIME not in ("tk", "qt"):
     raise ValueError("OUTAGE_ASSESSMENT_TEST_RUNTIME must be tk or qt")

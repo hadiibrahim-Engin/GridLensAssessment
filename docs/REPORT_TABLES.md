@@ -1,8 +1,8 @@
 # Outage Assessment – how every report table is calculated and built
 
-Outage Assessment publishes **38 tables** (data contract 7.1) that both reports read:
-`MASTER_OUTAGE_ASSESSMENT` (main report) and `MASTER_OUTAGE_ASSESSMENT_DETAIL` (technical detail
-report), kept as pages in `designer-pages/<report>/` (one `.dct` dictionary and
+Outage Assessment publishes **40 tables** (data contract 7.2) that the reports read:
+`MASTER_OUTAGE_ASSESSMENT` (main report), `MASTER_OUTAGE_ASSESSMENT_DETAIL` (technical detail
+report) and `MASTER_OUTAGE_ASSESSMENT_TABLES` (tabular report, n-0 only, meant to replace both), kept as pages in `designer-pages/<report>/` (one `.dct` dictionary and
 one `.pg` file per page). For the same run ID both reports print the same
 statistics. This document describes, table by table, where each row comes
 from, how every field is calculated and which chapter shows it. German
@@ -334,9 +334,50 @@ detail report shows the n-0 rows). Every planning case keeps its rows, also
 when its QDS or its n-1 failed; `ScriptedQualityRegister` also holds
 NOT APPLICABLE per contingency.
 
+### 3.35 `ScriptedCaseSummary` – case summary (tabular report)
+
+One row per case, Reference first (`case_order` 0), then every planning case in the order of the case manager,
+also those not calculated (`_case_summary`). Every fact about a case stands only here: verdict
+(`assess_case`) and, when it was not assessed, the reason; highest loading with element, location and time;
+largest coincident increase against Reference with element and time (`-` when it lies within the n-0 change
+tolerance); difference of the maxima; lines, transformers and nodes over the limit as `new`, `exceeded`
+(no Reference value), `worsened`, `pre-existing`, `de-energised`; caused violation time; voltage range;
+share of the outage time covered by result rows. Reference: verdict BASELINE, its own violations as `exceeded`.
+
+### 3.36 `ScriptedEpisodes` – violation episodes (tabular report)
+
+`_n0_episodes`. An episode is a run of directly consecutive time steps in which one element violates the same
+limit (`loading`, `voltage low`, `voltage high`; a node without voltage: `de-energised`). A step without a value,
+or outside the assessed rows of the case, ends it. Per episode: start (first step), end (end of the last step:
+the next label, after the last row its time plus its step), duration (sum of the step durations), peak and its
+time, Reference at the peak and the change (case − Reference), the most severe step status. Reference episodes
+(`reference_episodes`, whole period, status EXCEEDED) come first, then every case. Before the episodes of each
+section a case row (`row_kind = 'case'`, only `case_name` = "ID · name") is written; the template draws it as a
+grey bar. Within a section the elements are ordered by their most severe episode and the episodes of one element
+by time. More than `MAX_TABLE_ROWS` rows are cut fairly between the sections; the case rows stay.
+
+Contract 7.2 also adds `location_text` (grid / station, `element_location`) to the three appendix matrices,
+`result_path` to `ScriptedCalculationRuns` and `duration_text` to `ScriptedOutageWindows`; the node matrix
+shows minimum / maximum voltage.
+
 ---
 
 ## 4. Chapters and their tables
+
+**Tabular report** (`MASTER_OUTAGE_ASSESSMENT_TABLES`, n-0 only, no charts, every fact once):
+
+| Page | Tables |
+|---|---|
+| Cover, table of contents | `ScriptedReportMeta` |
+| Case summary | `ScriptedCaseSummary` |
+| Planned outages | `ScriptedOutageWindows` (case, outage, object, equipment, start, end, duration) |
+| Lines, transformers, node voltages | `ScriptedAppendixLine`, `…Transformer`, `…Voltage` with location |
+| Violation episodes | `ScriptedEpisodes` |
+| Model quality | `ScriptedModelQuality` without the rows other pages hold (limits, network scope, settings, assessment scope, calculation failures, n-1) |
+| Calculation evidence | `ScriptedCalculationRuns` with the path of the result object |
+| Settings and limits | `ScriptedAssessmentSettings` |
+| Method | text |
+
 
 **Main report** (`MASTER_OUTAGE_ASSESSMENT`):
 

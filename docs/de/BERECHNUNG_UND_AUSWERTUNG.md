@@ -142,8 +142,7 @@ Rechnungen; so lässt sich die Wirkung jeder Maßnahme an einem Lauf ablesen.
 | Filter (Settings → Network scope) | Rechnung | Auswertung | Neuauswertung eines erhaltenen Laufs |
 |---|---|---|---|
 | **Report filter: assessed equipment, grids** | keine Wirkung: PowerFactory rechnet das ganze Netz | nur Leitungen, Transformatoren und Knoten dieser Netze werden bewertet (n-0 und die in n-1 beobachteten Betriebsmittel) | wirkt vollständig |
-| **n-1 filter: grids of the outaged equipment** | Fehlerfälle außerhalb dieser Netze sind für den Lauf „Not analysed“ | – | grenzt ein: jetzt außerhalb liegende Fehlerfälle bleiben aus der Auswertung |
-| **n-1 filter: outaged elements** | nur Fehlerfälle, die mindestens ein gewähltes Betriebsmittel ausschalten, werden gerechnet; die übrigen sind für den Lauf „Not analysed“ (oder werden nicht angelegt). Keine Auswahl: jedes Betriebsmittel | die Auslastung jedes Betriebsmittels wird unter den gerechneten Fehlerfällen weiter bewertet | grenzt ebenso ein |
+| **n-1 filter: grids of the outaged equipment** | je ein Fehlerfall pro Leitung, Zweig, Transformator, Drossel, Kompensation, FACTS-Element, Erzeuger und Last in diesen Netzen wird angelegt; außerhalb keiner | – | grenzt ein: jetzt außerhalb liegende Fehlerfälle bleiben aus der Auswertung |
 | *(kein Filter auf der QDS)* | die QDS rechnet immer das ganze Netz | | |
 
 Bei einer Neuauswertung können die n-1-Filter nur **eingrenzen**: Ein

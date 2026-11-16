@@ -196,28 +196,33 @@ def _equipment():
     return gl.contingency_equipment(command)
 
 
-def test_n1_filters_leave_out_contingencies_by_grid_and_by_element():
+def test_the_n1_grid_filter_leaves_out_contingencies_outside_its_grids():
     equipment = _equipment()
     keys = {gl.object_name(outage): gl.object_key(outage) for outage, _ in equipment}
-    found = gl.excluded_contingencies(equipment, grids=("Grid A",), elements=())
+    found = gl.excluded_contingencies(equipment, grids=("Grid A",))
     assert found == {keys["Line B1"]: "outside the n-1 grids", keys["Skipped"]: "outside the n-1 grids"}
-    tie_part = next(gl.object_key(item) for outage, items in equipment for item in items if item.loc_name == "Tie part B")
-    found = gl.excluded_contingencies(equipment, grids=(), elements=(tie_part,))
-    # Only contingencies outaging a selected element stay; "Empty" has no readable equipment and stays too.
-    assert found == {keys[name]: "outages no selected element" for name in ("Line A1", "Line B1", "Skipped")}
-    assert gl.excluded_contingencies(equipment, grids=(), elements=()) == {}
+    assert gl.excluded_contingencies(equipment, grids=()) == {}
 
 
-def test_element_choices_come_from_the_contingencies_and_the_editor_keeps_them():
-    info = gl.read_contingencies(_study_case())
-    choices = gl.contingency_element_choices(None, info)
-    assert [name for _, name, _, _ in choices] == ["Line A1", "Line B1", "Line B2", "Tie A-B", "Tie part B"]
-    edit = gl.CaseEditor([], gl.empty_case_config(), PERIOD, contingencies=info, elements=choices, kept=["261024-122303"])
-    key = choices[1][0]
-    assert edit.set_elements([key]) is None and edit.selected_elements() == (key,)
-    assert edit.element_text(key) == "Line B1 (ElmLne, Grid B)"
-    assert "Outaged elements only: Line B1 (ElmLne, Grid B)." in edit.contingency_preview()
-    assert edit.set_elements([key, key]).endswith("an element is selected twice")
+def test_the_filter_note_names_what_a_re_evaluation_can_still_do():
+    edit = gl.CaseEditor([], gl.empty_case_config(), PERIOD, contingencies=gl.read_contingencies(_study_case()),
+                         kept=["261024-122303"])
     assert edit.set_evaluate_stamp("261024-122303") is None
     assert edit.filter_note().startswith("Re-evaluate the kept run of ")
     assert "cannot be added without calculating again" in edit.filter_note()
+
+
+def test_the_preview_of_a_large_model_stays_fast():
+    # 16 Nov 2026: the case manager of a European model with a contingency per element no longer opened.
+    import time
+
+    info = {"command": gl.DEFINED_CONTINGENCIES, "defined": True, "contingencies": [
+        {"name": "L{}".format(index), "number": None, "analysed": True, "elements": ["L{}".format(index)],
+         "element_items": [], "grids": ["G{}".format(index % 40)]} for index in range(50000)]}
+    editor = gl.CaseEditor([], gl.empty_case_config(), PERIOD, grids=["G{}".format(index) for index in range(40)],
+                           contingencies=info)
+    started = time.monotonic()
+    for _ in range(20):
+        text = editor.contingency_preview()
+    assert time.monotonic() - started < 2.0
+    assert text.startswith("50000 contingencies in scope (every grid)")

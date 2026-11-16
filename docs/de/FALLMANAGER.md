@@ -114,7 +114,7 @@ Zustand der Einstellungen) und sieben Bereiche:
 
 | Bereich | Inhalt |
 |---|---|
-| Network scope | *Report filter: assessed equipment* (Netze, deren Leitungen, Transformatoren und Knoten bewertet werden; keine Auswahl = jedes Netz; ohne Wirkung auf die Rechnung); *n-1 filter: contingencies by grid* (*Every grid* oder *Own selection*, mit der Zahl der Fehlerfälle im Umfang); *n-1 filter: outaged elements* (nur Fehlerfälle, die ein gewähltes Element ausfallen lassen, werden gerechnet). Eine Auswahl wirkt sofort. |
+| Network scope | *Report filter: assessed equipment* (Netze, deren Leitungen, Transformatoren und Knoten bewertet werden; keine Auswahl = jedes Netz; ohne Wirkung auf die Rechnung); *n-1 filter: contingencies by grid* (*Every grid* oder *Own selection*, mit der Zahl der Fehlerfälle, die Outage Assessment dort anlegt: je einer pro Leitung, Zweig, Transformator, Drossel, Kompensation, FACTS-Element, Erzeuger und Last). Einen anderen n-1-Filter gibt es nicht. Eine Auswahl wirkt sofort. |
 | Limits | Warnschwellen und n-0-Grenzen (Leitungen und Transformatoren getrennt), die n-1-Grenzbehandlung, das Spannungsband in p.u. für jede Spannungsebene, die Spannungslos-Schwelle; Post-Fault-Spannungsgrenzen nur lesend |
 | Classification | n-0-Änderungstoleranzen und die Klassifikationsparameter für n-1 / (n-1)' |
 | Report and run | Anhangsschwellen, Top-N-Zeilen, Punkte je Zeitplot, REF an/aus, die Fallgrenze, n-1-Studienzeitpunkte je Fall |

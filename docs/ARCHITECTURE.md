@@ -515,24 +515,32 @@ described only by REF. A case that adds nothing does not prove statement B.
 
 ## 8. n-1 and (n-1)'
 
-Ticked in the case manager (*Calculation*). n-0 is always calculated.
+Ticked in the case manager (*Calculation*). n-0 (the quasi-dynamic simulation)
+and n-1 (the contingency analysis with its own time sweep) are separate
+calculations; n-0 can be unticked for an n-1-only run (step 3).
 
 | Assessment | What is calculated | Planned outages active |
 |---|---|---|
 | n-1 | contingency analysis of the reference | only the fixed background outages |
 | (n-1)' | contingency analysis of the planning case; needs n-1 | the case's outages and the fixed ones |
 
-1. **Contingency analysis.** Outage Assessment uses the `ComSimoutage` of the study
-   case. If there is none, it defines `OA_<stamp>_N1` with one
-   contingency per branch, transformer, reactor, compensation and FACTS
-   element (no generators, loads or busbars) and keeps it. With more than one
-   `ComSimoutage` n-1 is not evaluated.
-2. **Filters.** The n-1 filters of the settings (grids of the outaged
-   equipment, outaged elements) set every other contingency to *Not analysed*
-   for the sweep; restored afterwards. The report filter decides which
-   monitored elements are assessed.
-3. **Study times.** The QDS time steps inside the case's outage windows, at
-   most *n-1 study times per case* (default 2000). One sweep calculates the
+1. **Contingency analysis.** Outage Assessment always defines the
+   contingencies itself: `OA_<stamp>_N1` with one contingency per line,
+   branch, transformer, reactor, compensation and FACTS element, generator
+   and load of the n-1 grids (no busbars), kept in the study case. A
+   `ComSimoutage` already in the study case is never used: PowerFactory
+   creates one, often empty, as soon as its dialog is opened (a run on
+   16 Nov 2026 found "0 contingencies" and PowerFactory warned "Could not
+   find contingency cases"). A kept `OA_…_N1` that holds exactly the wanted
+   contingencies is used again instead of defining another one.
+2. **Filter.** Only the n-1 grids (none selected: every grid, independent of
+   the report filter) decide which contingencies are created; there is no
+   element filter (removed 16 Nov 2026, a saved value is ignored). The report filter decides which monitored elements are assessed.
+3. **Study times.** With n-0: the QDS time steps inside the case's outage
+   windows. Without n-0 (n-1 only): the windows sampled every *n-1 time step
+   without n-0* (default 60 min) from local midnight of the first window; the
+   ComStatsim is neither read for this nor changed. At most *n-1 study times
+   per case* (default 2000). One sweep calculates the
    period from the first to the last of them with the QDS step; steps between
    windows that lie apart are calculated but not assessed.
 4. **Sweep.** Period, step and `isPlannedOutages` are written for the sweep,
@@ -580,7 +588,6 @@ PowerFactory calculates and are shown read only.
 |---|---|---|
 | Network scope | Report filter: assessed equipment, grids | every grid |
 | Network scope | n-1 filter: grids of the outaged equipment | every grid |
-| Network scope | n-1 filter: outaged elements | every element |
 | Thermal limits | Warning threshold, lines / transformers | 80 % |
 | Thermal limits | Maximum loading for n-0, lines / transformers | 100 % |
 | Thermal limits | Limits for n-1 and (n-1)' | use PowerFactory limits |

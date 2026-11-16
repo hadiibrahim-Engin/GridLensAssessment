@@ -278,13 +278,13 @@ class App:
 
 
 def test_table_contract_is_single_versioned_contract_seven():
-    assert gl.PUBLISHER_VERSION == "8.1.0"
-    assert gl.TEMPLATE_VERSION == "7.1.0"
-    assert gl.DATA_CONTRACT_VERSION == "7.1"
+    assert gl.PUBLISHER_VERSION == "8.2.0"
+    assert gl.TEMPLATE_VERSION == "7.2.0"
+    assert gl.DATA_CONTRACT_VERSION == "7.2"
     # No field name carries a digit: tables with such fields were missing from the PowerFactory report database.
     assert not [field for _, fields in gl.TABLES for field, _ in fields if any(char.isdigit() for char in field)]
     assert not [name for name, _ in gl.TABLES if any(char.isdigit() for char in name)], "nor table names"
-    assert len(gl.TABLES) == 38
+    assert len(gl.TABLES) == 40
     # Contract 7.0: the statistics of the reporting core for the main (H02-H10) and the detail report (D01-D12).
     for name in ("ScriptedCaseStatistics", "ScriptedCaseStatusCounts", "ScriptedCoverage", "ScriptedScope", "ScriptedOutageWindows",
                  "ScriptedReferenceFindings", "ScriptedCriticalLines", "ScriptedCriticalTransformers", "ScriptedCriticalNodes",
@@ -2313,3 +2313,161 @@ def test_an_empty_result_binding_gets_an_empty_result_object_when_powerfactory_b
     assert len(created) == 1 and app.qds.results is created[0], "created once, left bound for the next runs"
     assert app.qds.execute_calls == 3, "REF once more after binding, then the case"
     assert any("created the empty result object" in line for line in app.messages)
+
+
+# ---------------------------------------------------------------------------
+# n-1 only: the contingency analysis with its own time sweep, no quasi-dynamic simulation
+# ---------------------------------------------------------------------------
+class N1Sub(PFObject):
+    """One sub-result of the time sweep: rows are contingencies, columns line loadings."""
+
+    def __init__(self, moment, rows, lines, loading):
+        super().__init__("sub", "ElmRes", cnttime=moment)
+        self._rows, self._lines, self._loading = rows, lines, loading
+
+    def Load(self):
+        return None
+
+    def Release(self):
+        return None
+
+    def GetNumberOfRows(self):
+        return len(self._rows)
+
+    def GetNumberOfColumns(self):
+        return len(self._lines)
+
+    def GetObject(self, column):
+        return self._lines[column]
+
+    def GetVariable(self, column):
+        return "c:loading"
+
+    def GetObjectValue(self, row):
+        return [0, self._rows[row]]
+
+    def GetValue(self, row, column):
+        return [0, self._loading]
+
+
+class N1Folder(PFObject):
+    def __init__(self, subs):
+        super().__init__("Contingency Analysis AC", "ElmRes")
+        self._subs = subs
+
+    def GetContents(self, pattern="*", *_args):
+        return list(self._subs)
+
+    def clone(self):
+        return N1Folder(list(self._subs))
+
+
+class N1Outage(PFObject):
+    def SetObjs(self, elements):
+        self.elements = list(elements)
+        return 0
+
+    def GetObject(self, index):
+        return self.elements[index] if index < len(self.elements) else None
+
+
+class TimeSweep(PFObject):
+    """A ComSimoutage as PowerFactory 2026 runs it: with calcPeriod 4 the study times are startTime..endTime
+    (exclusive); a planned outage applies inside its window when isPlannedOutages is set and it is not Ignored."""
+
+    def __init__(self, name, planned, lines):
+        super().__init__(name, "ComSimoutage", iEnableTS=0, isPlannedOutages=0, calcPeriod=0, startTime=0, endTime=0,
+                         stepSize=1, stepUnit=2, stepNumber=1, studyTime=[0], bIgnoreTime=[0.0], loadmax=80.0,
+                         vlmin=0.95, vlmax=1.05, p_rescnt=None)
+        self._planned, self._lines, self._outages, self.runs = planned, lines, [], []
+
+    def CreateObject(self, kind, name):
+        outage = N1Outage(name, kind, outserv=0)
+        self._outages.append(outage)
+        return outage
+
+    def GetContents(self, pattern="*", *_args):
+        return list(self._outages) if pattern in ("*", "*.ComOutage") else []
+
+    def Execute(self):
+        step = self.stepSize * {0: 1, 1: 60, 2: 3600, 3: 86400}[self.stepUnit]
+        times = [float(moment) for moment in range(int(self.startTime), int(self.endTime), int(step))]
+        self.runs.append((self.isPlannedOutages, len(times)))
+        subs = []
+        for moment in times:
+            active = [fs for fs in self._planned if self.isPlannedOutages and fs.outserv == 0
+                      and fs.starttime <= moment < fs.endtime]
+            off = {id(item) for fs in active for item in fs.components}
+            rows = [outage for outage in self._outages if outage.outserv == 0 and id(outage.elements[0]) not in off]
+            lines = [line for line in self._lines if id(line) not in off]
+            subs.append(N1Sub(moment, rows, lines, 110.0 if active else 90.0))
+        self.p_rescnt = N1Folder(subs)
+        return 0
+
+
+class N1StudyCase(StudyCase):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+
+    def CreateObject(self, kind, name):
+        assert kind == "ComSimoutage"
+        command = TimeSweep(name, self.app.outages, self.app.lines)
+        self.copies.append(command)
+        return command
+
+
+def _n1_only_app(with_qds=True):
+    lines = [PFObject("Line {}".format(number), "ElmLne") for number in (1, 2, 3)]
+    outage = PlannedOutage("FS1", equipment=[lines[1]])
+    app = App((outage,))
+    app.lines = lines
+    app.study = N1StudyCase(app)
+    app.GetCalcRelevantObjects = lambda pattern, *_args: [line for line in lines if pattern == "*.ElmLne"]
+    if not with_qds:
+        app.qds = None
+    # PowerFactory's own contingency analysis, empty as after opening its dialog: it is never used.
+    app.study.copies.append(TimeSweep("Contingency Analysis", [], []))
+    return app, outage, lines
+
+
+@pytest.mark.parametrize("with_qds", [True, False], ids=["comstatsim-untouched", "no-comstatsim"])
+def test_n1_only_runs_the_time_sweep_over_the_outage_windows_without_any_qds(monkeypatch, with_qds):
+    app, outage, lines = _n1_only_app(with_qds)
+    monkeypatch.setattr(gl, "CASE_SOURCE", "saved")
+    _save_cases([{"id": "A", "name": "Case A", "outages": [_key(outage)]}], assessments=["n-1", "(n-1)'"])
+
+    counts = gl.execute_outage_assessment(app)
+
+    if with_qds:
+        assert app.qds.execute_calls == 0 and app.qds.iopt_maint == 0, "the QDS is neither run nor changed"
+        assert (app.qds.startTime, app.qds.endTime, app.qds.calcPeriod) == (PERIOD_START, PERIOD_END, 4)
+    created = [item for item in app.study.copies if item.kind == "ComSimoutage" and item.loc_name.startswith("OA_")]
+    assert len(created) == 1 and [item.loc_name for item in created[0]._outages] == ["Line 1", "Line 2", "Line 3"]
+    own = next(item for item in app.study.copies if item.loc_name == "Contingency Analysis")
+    assert own.runs == [], "the study case's own contingency analysis is not used"
+    # n-1 (no planned outage) and (n-1)' (FS1 active) over the window, every 60 min: 24 study times each.
+    assert created[0].runs == [(0, 24), (1, 24)]
+    assert outage.outserv == 0 and created[0].isPlannedOutages == 0, "everything written is restored"
+    assert counts["ScriptedCases"] == 1
+    cases = app.report.tables["Cases"]["values"]
+    assert cases[0, "case_name"] == "Case A" and cases[0, "assessment"] == gl.ASSESSMENT_SKIPPED
+    assert "n-1 only" in cases[0, "assessment_detail"]
+    meta = app.report.tables["ReportMeta"]["values"]
+    assert meta[0, "run_mode"] == "n-1 ONLY - NO QUASI-DYNAMIC SIMULATION"
+    quality = app.report.tables["ModelQuality"]["values"]
+    rows = {quality[row, "check_name"]: row for (row, field) in quality if field == "check_name"}
+    n1 = rows["n-1 A"]
+    assert quality[n1, "status"] == "FAIL" and "NEW" in quality[n1, "message"], "FS1 overloads lines 1 and 3 under n-1"
+    assert "at the n-1 time steps inside the outage windows" in quality[rows["Assessment scope"], "message"]
+    assert any("n-0 is not ticked: no quasi-dynamic simulation" in line for line in app.messages)
+
+
+def test_n0_without_a_comstatsim_stops_before_anything_is_calculated(monkeypatch):
+    app, outage, _ = _n1_only_app(with_qds=False)
+    monkeypatch.setattr(gl, "CASE_SOURCE", "saved")
+    _save_cases([{"id": "A", "name": "Case A", "outages": [_key(outage)]}], assessments=["n-0", "n-1"])
+
+    with pytest.raises(gl.OutageAssessmentError, match="n-0 \\(the quasi-dynamic simulation\\) cannot be calculated"):
+        gl.execute_outage_assessment(app)
+    assert not [item for item in app.study.copies if item.loc_name.startswith("OA_")]

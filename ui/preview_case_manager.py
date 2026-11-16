@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>
-# Outage Assessment 8.1.0: 188 definitions.
+# Outage Assessment 8.2.0: 188 definitions.
 import hashlib
 import math
 import re
@@ -92,7 +92,7 @@ MAX_N1_TIMES = 2000
 N1_STEP_MINUTES = 60
 
 
-PUBLISHER_VERSION = '8.1.0'
+PUBLISHER_VERSION = '8.2.0'
 
 
 RUN_REFERENCE_CASE = True

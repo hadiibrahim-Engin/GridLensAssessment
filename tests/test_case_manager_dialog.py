@@ -793,6 +793,28 @@ def test_run_flags_toggle_the_clicked_case_and_update_the_settings_preview(monke
     assert seen['filter_before'] == ('A', 'B') and seen['filter_after'] == ('A',)
 
 
+def test_unticking_n0_makes_the_run_n1_only_and_n0_stays_without_n1(monkeypatch, records, config):
+    def steps(dialog, root, seen):
+        seen["start"] = (dialog.n0_var.get(), list(dialog.editor.config["assessments"]))
+        dialog.n0_var.set(False)
+        dialog.apply_assessments()
+        seen["without_n1"] = (dialog.n0_var.get(), list(dialog.editor.config["assessments"]))
+        dialog.n1_var.set(True)
+        dialog.n1_prime_var.set(True)
+        dialog.apply_assessments()
+        dialog.n0_var.set(False)
+        dialog.apply_assessments()
+        seen["n1_only"] = list(dialog.editor.config["assessments"])
+        seen["preview"] = dialog.case_preview.get('1.0', 'end')
+
+    _, seen = _run(monkeypatch, records, config, steps)
+
+    assert seen["start"] == (True, ["n-0"])
+    assert seen["without_n1"] == (True, ["n-0"]), "n-0 cannot be unticked while nothing else is calculated"
+    assert seen["n1_only"] == ["n-1", "(n-1)'"]
+    assert "Assessment: n-1, (n-1)'" in seen["preview"]
+
+
 # ---------------------------------------------------------------------------
 # Settings tab
 # ---------------------------------------------------------------------------

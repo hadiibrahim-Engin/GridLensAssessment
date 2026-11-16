@@ -9,7 +9,7 @@
       <Name>SQLite</Name>
     </SQLite>
   </Databases>
-  <DataSources isList="true" count="38">
+  <DataSources isList="true" count="40">
     <ScriptedReportMeta Ref="2" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedReportMeta</Alias>
       <Columns isList="true" count="25">
@@ -221,7 +221,7 @@
     </ScriptedCaseComparison>
     <ScriptedCalculationRuns Ref="12" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedCalculationRuns</Alias>
-      <Columns isList="true" count="9">
+      <Columns isList="true" count="10">
         <value>run_order,System.Int32</value>
         <value>run_id,System.String</value>
         <value>run_kind,System.String</value>
@@ -230,6 +230,7 @@
         <value>elapsed_text,System.String</value>
         <value>status,System.String</value>
         <value>result_object,System.String</value>
+        <value>result_path,System.String</value>
         <value>note,System.String</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
@@ -271,7 +272,7 @@
     </ScriptedTopLinesByCase>
     <ScriptedAppendixLine Ref="14" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedAppendixLine</Alias>
-      <Columns isList="true" count="18">
+      <Columns isList="true" count="19">
         <value>block,System.Int32</value>
         <value>row_order,System.Int32</value>
         <value>element_name,System.String</value>
@@ -290,6 +291,7 @@
         <value>case_f_name,System.String</value>
         <value>col_count,System.Int32</value>
         <value>violation,System.Int32</value>
+        <value>location_text,System.String</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
       <Dictionary isRef="0" />
@@ -301,7 +303,7 @@
     </ScriptedAppendixLine>
     <ScriptedAppendixTransformer Ref="15" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedAppendixTransformer</Alias>
-      <Columns isList="true" count="18">
+      <Columns isList="true" count="19">
         <value>block,System.Int32</value>
         <value>row_order,System.Int32</value>
         <value>element_name,System.String</value>
@@ -320,6 +322,7 @@
         <value>case_f_name,System.String</value>
         <value>col_count,System.Int32</value>
         <value>violation,System.Int32</value>
+        <value>location_text,System.String</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
       <Dictionary isRef="0" />
@@ -331,7 +334,7 @@
     </ScriptedAppendixTransformer>
     <ScriptedAppendixVoltage Ref="16" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedAppendixVoltage</Alias>
-      <Columns isList="true" count="18">
+      <Columns isList="true" count="19">
         <value>block,System.Int32</value>
         <value>row_order,System.Int32</value>
         <value>element_name,System.String</value>
@@ -350,6 +353,7 @@
         <value>case_f_name,System.String</value>
         <value>col_count,System.Int32</value>
         <value>violation,System.Int32</value>
+        <value>location_text,System.String</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
       <Dictionary isRef="0" />
@@ -451,7 +455,7 @@
     </ScriptedScope>
     <ScriptedOutageWindows Ref="21" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedOutageWindows</Alias>
-      <Columns isList="true" count="11">
+      <Columns isList="true" count="12">
         <value>row_order,System.Int32</value>
         <value>case_order,System.Int32</value>
         <value>case_name,System.String</value>
@@ -463,6 +467,7 @@
         <value>start_hours,System.Double</value>
         <value>gantt_label,System.String</value>
         <value>duration_hours,System.Double</value>
+        <value>duration_text,System.String</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
       <Dictionary isRef="0" />
@@ -914,6 +919,67 @@
       <Parameters isList="true" count="0" />
       <SqlCommand>SELECT * FROM "ScriptedResultProvenance" ORDER BY "row_order"</SqlCommand>
     </ScriptedResultProvenance>
+    <ScriptedCaseSummary Ref="40" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedCaseSummary</Alias>
+      <Columns isList="true" count="20">
+        <value>case_order,System.Int32</value>
+        <value>case_id,System.String</value>
+        <value>case_name,System.String</value>
+        <value>assessment,System.String</value>
+        <value>assessment_reason,System.String</value>
+        <value>max_loading_text,System.String</value>
+        <value>max_loading_element,System.String</value>
+        <value>max_loading_location,System.String</value>
+        <value>max_loading_time,System.String</value>
+        <value>coincident_delta_text,System.String</value>
+        <value>coincident_delta_element,System.String</value>
+        <value>coincident_delta_time,System.String</value>
+        <value>maxima_difference_text,System.String</value>
+        <value>lines_text,System.String</value>
+        <value>transformers_text,System.String</value>
+        <value>nodes_text,System.String</value>
+        <value>violation_hours_text,System.String</value>
+        <value>voltage_range_text,System.String</value>
+        <value>coverage_text,System.String</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>58075aaab6b8ca59519996086a6b84ec</Key>
+      <Name>ScriptedCaseSummary</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedCaseSummary" ORDER BY "case_order"</SqlCommand>
+    </ScriptedCaseSummary>
+    <ScriptedEpisodes Ref="41" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedEpisodes</Alias>
+      <Columns isList="true" count="17">
+        <value>case_order,System.Int32</value>
+        <value>row_order,System.Int32</value>
+        <value>row_kind,System.String</value>
+        <value>case_name,System.String</value>
+        <value>element_name,System.String</value>
+        <value>location_text,System.String</value>
+        <value>element_type,System.String</value>
+        <value>criterion,System.String</value>
+        <value>start_text,System.String</value>
+        <value>end_text,System.String</value>
+        <value>duration_text,System.String</value>
+        <value>peak_text,System.String</value>
+        <value>peak_time,System.String</value>
+        <value>reference_text,System.String</value>
+        <value>delta_text,System.String</value>
+        <value>status,System.String</value>
+        <value>violation,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>4cfd98d533425159612d9a2e69334861</Key>
+      <Name>ScriptedEpisodes</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedEpisodes" ORDER BY "case_order", "row_order"</SqlCommand>
+    </ScriptedEpisodes>
   </DataSources>
   <Relations isList="true" count="0" />
   <Resources isList="true" count="0" />

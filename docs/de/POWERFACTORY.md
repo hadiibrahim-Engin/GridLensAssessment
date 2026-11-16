@@ -298,13 +298,14 @@ res.Release()
 
 ### 7.1 Das Kommando und die Fehlerfälle
 
-- Outage Assessment nutzt die **eine** `ComSimoutage` des aktiven Study Case. Gibt es
-  keine (z. B. im QDS-Study-Case), legt es `OA_<stamp>_N1` an
-  (`create_contingency_analysis`): je ein `ComOutage` pro rechenrelevantem
-  Betriebsmittel der Klassen `ElmLne`, `ElmBranch`, `ElmZpu`, `ElmTr2`,
-  `ElmTr3`, `ElmTr4`, `ElmSind`, `ElmScap`, `ElmShnt`, `ElmSvs`, `ElmVsc`,
-  `ElmVscmono` in den gewählten Netzen – keine Erzeuger, Lasten,
-  Sammelschienen. Eine Leitung in einem `ElmBranch` zählt über den Zweig.
+- Outage Assessment nutzt nie eine `ComSimoutage` des Study Case (PowerFactory
+  legt sie an, oft leer, sobald ihr Dialog geöffnet wurde). Es legt
+  `OA_<stamp>_N1` an (`create_contingency_analysis`) oder nutzt eine erhaltene
+  mit genau denselben Fehlerfällen wieder: je ein `ComOutage` pro
+  rechenrelevantem Betriebsmittel der Klassen `ElmLne`, `ElmBranch`, `ElmZpu`,
+  `ElmTr2`, `ElmTr3`, `ElmTr4`, `ElmSind`, `ElmScap`, `ElmShnt`, `ElmSvs`,
+  `ElmVsc`, `ElmVscmono`, `ElmSym`, `ElmAsm`, `ElmGenstat`, `ElmPvsys`, `ElmLod`
+  in den n-1-Netzen – keine Sammelschienen. Eine Leitung in einem `ElmBranch` zählt über den Zweig.
 
 ```python
 ca = study_case.CreateObject("ComSimoutage", name)
@@ -315,9 +316,9 @@ fault.SetObjs([element])                       # 0 = Erfolg
 
 - Welche Betriebsmittel ein Fehlerfall schaltet, liest Outage Assessment mit
   `ComOutage.GetObject(i)` für i = 0, 1, … bis `None` (`contingency_equipment`).
-- Fehlerfälle außerhalb der n-1-Netze oder ohne eines der im
-  n-1-Betriebsmittelfilter gewählten Betriebsmittel setzt Outage Assessment für den Lauf auf „Not analysed“
-  (`ComOutage.outserv = 1`, geprüft 23.10.2026; `excluded_contingencies`). Wo die
+- Fehlerfälle außerhalb der n-1-Netze werden nicht angelegt; bei einer
+  Neuauswertung bleiben sie aus der Auswertung (`excluded_contingencies`).
+  `ComOutage.outserv = 1` („Not analysed“) ist seit 23.10.2026 geprüft. Wo die
   Filter wirken, auch bei einer Neuauswertung:
   [`BERECHNUNG_UND_AUSWERTUNG.md`](BERECHNUNG_UND_AUSWERTUNG.md).
 
