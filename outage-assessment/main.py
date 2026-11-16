@@ -11229,12 +11229,6 @@ def _reused_result(source, plan, request):
 # ---------------------------------------------------------------------------
 
 
-def contingency_analysis(study_case):
-    """The ComSimoutage of the study case, read with GetContents (never created); None if there is not exactly one."""
-    commands = [item for item in _contents(study_case, '*.' + N1_COMMAND_CLASS) if class_name(item) == N1_COMMAND_CLASS]
-    return commands[0] if len(commands) == 1 else None
-
-
 def contingency_equipment(command):
     """[(ComOutage, [equipment])] of the contingency analysis, read with ComOutage.GetObject(line)."""
     found = []
@@ -11289,18 +11283,64 @@ def contingency_candidates(app, grids):
     return found
 
 
-def create_contingency_analysis(app, study_case, grids, name):
-    """A new contingency analysis `name` in the study case with one contingency (ComOutage) per candidate.
+def contingency_targets(app, grids=None, chosen=None):
+    """The elements Outage Assessment defines one contingency each for, in the order found.
+
+    Every candidate (contingency_candidates) in the n-1 grids (none selected:
+    every grid); with elements selected in the n-1 element filter, only those.
+    """
+    grids = contingency_grid_selection() if grids is None else tuple(grids)
+    chosen = set(current_setting('contingency_elements') if chosen is None else chosen)
+    elements = [element for element in contingency_candidates(app, grids) if not chosen or object_key(element) in chosen]
+    if not elements:
+        raise OutageAssessmentError("no branch, transformer, reactor, compensation or FACTS element is calculation relevant in "
+                            "{}{}, so no contingency can be defined".format(
+                                ', '.join(grids) if grids else 'the network',
+                                ' among the selected elements' if chosen else ''))
+    return elements
+
+
+def own_contingency_analyses(study_case):
+    """The contingency analyses earlier runs defined and kept in the study case (OA_<stamp>_N1), oldest first."""
+    return sorted((item for item in _contents(study_case, '*.' + N1_COMMAND_CLASS)
+                   if class_name(item) == N1_COMMAND_CLASS and object_name(item).startswith(SNAPSHOT_PREFIX)
+                   and object_name(item).endswith('_N1')), key=object_name)
+
+
+def defined_elements(command):
+    """The element keys of a contingency analysis in which every contingency outages exactly one element and is
+    analysed; None when one does not, or when it holds no contingency."""
+    keys = set()
+    for outage, elements in contingency_equipment(command):
+        if len(elements) != 1 or safe_attr(outage, 'outserv', 0) not in (0, False):
+            return None
+        keys.add(object_key(elements[0]))
+    return keys or None
+
+
+DEFINED_CONTINGENCIES = 'one contingency per branch, transformer, reactor, compensation and FACTS element'
+
+
+def defined_contingencies(app):
+    """The contingencies Outage Assessment would define, in the shape of read_contingencies, for the network scope
+    of the case manager: one per candidate of every grid, read only."""
+    found = []
+    for element in contingency_candidates(app, ()) if app is not None else ():
+        grid = element_grid_name(element)
+        found.append({'name': object_name(element), 'number': None, 'analysed': True,
+                      'elements': [object_name(element)],
+                      'element_items': [(object_key(element), object_name(element), class_name(element), grid)],
+                      'grids': [grid or '(no grid)']})
+    return {'command': DEFINED_CONTINGENCIES, 'contingencies': found, 'defined': True}
+
+
+def create_contingency_analysis(study_case, elements, name):
+    """A new contingency analysis `name` in the study case with one contingency (ComOutage) per element.
 
     It is kept after the run, like the QDS result objects. Every contingency
     holds one element as its interrupted component (ComOutage.SetObjs); the
     time sweep is switched on. Returns (command, contingencies, refused).
     """
-    chosen = set(current_setting('contingency_elements'))
-    elements = [element for element in contingency_candidates(app, grids) if not chosen or object_key(element) in chosen]
-    if not elements:
-        raise OutageAssessmentError("no branch, transformer, reactor, compensation or FACTS element is calculation relevant in "
-                            "{}, so no contingency can be defined".format(', '.join(grids) if grids else 'the network'))
     try:
         command = study_case.CreateObject(N1_COMMAND_CLASS, name)
     except Exception as exc:
@@ -11831,6 +11871,10 @@ def contingency_scope_text(info, contingency_grids, monitoring_grids=()):
         return 'no contingency analysis (ComSimoutage) in the active study case'
     scope = contingency_scope(info, contingency_grids, monitoring_grids)
     total = len(info['contingencies'])
+    if info.get('defined'):
+        return '{} contingencies in scope ({}), {} of {} in the network: Outage Assessment defines {}.'.format(
+            len(scope['in']), ', '.join(scope['grids']) if scope['grids'] else 'every grid', len(scope['in']), total,
+            DEFINED_CONTINGENCIES)
     parts = ['{} of {} contingencies of {!r} in scope ({})'.format(
         len(scope['in']), total, info['command'], ', '.join(scope['grids']) if scope['grids'] else 'every grid')]
     for key, label in (('partly', 'partly outside'), ('outside', 'outside'), ('unknown', 'equipment not readable'),
@@ -12107,26 +12151,45 @@ def n1_filter_text():
 
 
 def _n1_command(app, study_case, grid, logger):
-    """(contingency analysis, reason): the one of the study case, else one Outage Assessment defines and keeps."""
-    command = contingency_analysis(study_case)
-    if command is None and not _contents(study_case, '*.' + N1_COMMAND_CLASS) and grid is not None:
-        # No contingency analysis here (e.g. the QDS study case): Outage Assessment defines one and keeps it.
-        name = "{}{}_N1".format(SNAPSHOT_PREFIX, datetime.now().strftime("%y%m%d-%H%M%S"))
-        try:
-            with RUN_STATS.measure("n-1: define contingencies"):
-                command, made, refused = create_contingency_analysis(app, study_case, contingency_grid_selection(), name)
-            RUN_STATS.count("n1_created")
-            logger.write("CALCULATION", "The study case holds no contingency analysis: Outage Assessment created '{}' with {} "
-                         "contingencies (one per branch, transformer, reactor, compensation and FACTS element in {}; no "
-                         "generators, loads or busbars){}. It stays in the study case.".format(
-                             name, made, ', '.join(contingency_grid_selection()) or 'every grid',
-                             '; {} element(s) refused'.format(refused) if refused else ''), 4)
-        except OutageAssessmentError as exc:
-            return None, str(exc)
-    if command is None:
-        return None, 'the active study case holds more than one contingency analysis (ComSimoutage)'
+    """(contingency analysis, reason): always one with the contingencies of the n-1 filter, defined by Outage Assessment.
+
+    One contingency per branch, transformer, reactor, compensation and FACTS
+    element in the n-1 grids (and only the selected elements, when some are
+    selected). A contingency analysis already in the study case is not used:
+    PowerFactory creates one, often empty, as soon as its dialog is opened, and
+    its contingencies need not match the grids. A kept analysis of an earlier
+    run with exactly these contingencies is used again; otherwise a new one is
+    created and kept (OA_<stamp>_N1).
+    """
     if grid is None:
-        return None, 'the ComStatsim time step is not readable'
+        return None, 'the time grid of the n-1 study times is not known'
+    try:
+        elements = contingency_targets(app)
+    except OutageAssessmentError as exc:
+        return None, str(exc)
+    wanted = {object_key(element) for element in elements}
+    scope = ', '.join(contingency_grid_selection()) or 'every grid'
+    for command in reversed(own_contingency_analyses(study_case)):
+        if defined_elements(command) == wanted:
+            logger.write("CALCULATION", "Using the contingency analysis '{}' of an earlier run again: it holds exactly the "
+                         "{} contingencies of the n-1 filter ({} in {}).".format(
+                             object_name(command), len(wanted), DEFINED_CONTINGENCIES, scope), 4)
+            return command, None
+    others = [object_name(item) for item in _contents(study_case, '*.' + N1_COMMAND_CLASS)
+              if class_name(item) == N1_COMMAND_CLASS and not object_name(item).startswith(SNAPSHOT_PREFIX)]
+    name = "{}{}_N1".format(SNAPSHOT_PREFIX, datetime.now().strftime("%y%m%d-%H%M%S"))
+    try:
+        with RUN_STATS.measure("n-1: define contingencies"):
+            command, made, refused = create_contingency_analysis(study_case, elements, name)
+    except OutageAssessmentError as exc:
+        return None, str(exc)
+    RUN_STATS.count("n1_created")
+    logger.write("CALCULATION", "Outage Assessment created '{}' with {} contingencies ({} in {}; no generators, loads or "
+                 "busbars){}. It stays in the study case.{}".format(
+                     name, made, DEFINED_CONTINGENCIES, scope,
+                     '; {} element(s) refused'.format(refused) if refused else '',
+                     " The contingency analysis {} of the study case is not used; its contingencies are left as they "
+                     "are.".format(', '.join("'{}'".format(item) for item in others)) if others else ''), 4)
     return command, None
 
 
@@ -12494,7 +12557,8 @@ def execute_outage_assessment(app):
     # Read only, for the network scope of the case manager.
     with RUN_STATS.measure("read grids and contingencies"):
         grids = project_grids(app)
-        contingencies = read_contingencies(study_case)
+        # n-1 always defines its own contingencies from the n-1 filter (_n1_command); the preview shows those.
+        contingencies = defined_contingencies(app)
         elements = contingency_element_choices(app, contingencies) if CASE_SOURCE == "gui" else []
         kept = kept_stamps(study_case)
     with RUN_STATS.wait():

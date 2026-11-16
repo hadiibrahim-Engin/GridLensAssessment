@@ -5,7 +5,7 @@ Development tool, not part of the delivery. The PowerFactory GUI test
 does not import main.py. It carries a verbatim copy of the case
 manager window and of everything that window needs (reading the planned
 outages, checking a configuration, the preview), so that it shows exactly the
-window GridLens shows. Whoever changes the case manager in main.py
+window Outage Assessment shows. Whoever changes the case manager in main.py
 runs this script; tests/test_preview_case_manager.py fails while the copy is out of
 date.
 
@@ -80,7 +80,7 @@ def copied_block(source_text=None, tool_text=None):
         todo += [item for item in _used(definitions[name]) if item in definitions and item not in needed]
     nodes = [node for node in tree.body if any(name in needed for name in _names(node))]
     used = set().union(*(_used(node) for node in nodes))
-    lines = [BEGIN, "# GridLens {}: {} definitions.".format(_version(definitions, text), len(nodes))]
+    lines = [BEGIN, "# Outage Assessment {}: {} definitions.".format(_version(definitions, text), len(nodes))]
     for node in imports:
         bound = [alias.asname or alias.name.split(".")[0] for alias in node.names]
         if any(name in used for name in bound) and not all(name in present for name in bound):
