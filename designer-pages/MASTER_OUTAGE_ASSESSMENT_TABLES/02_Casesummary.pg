@@ -717,6 +717,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5,Bold</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_H4</Name>
           <Page isRef="0" />
@@ -735,6 +736,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5,Bold</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_H5</Name>
           <Page isRef="0" />
@@ -753,6 +755,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5,Bold</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_H6</Name>
           <Page isRef="0" />
@@ -771,6 +774,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5,Bold</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_H7</Name>
           <Page isRef="0" />
@@ -789,6 +793,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5,Bold</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_H8</Name>
           <Page isRef="0" />
@@ -807,6 +812,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5,Bold</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_H9</Name>
           <Page isRef="0" />
@@ -825,6 +831,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5,Bold</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_H10</Name>
           <Page isRef="0" />
@@ -934,6 +941,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_C4</Name>
           <Page isRef="0" />
@@ -952,6 +960,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_C5</Name>
           <Page isRef="0" />
@@ -970,6 +979,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_C6</Name>
           <Page isRef="0" />
@@ -988,6 +998,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_C7</Name>
           <Page isRef="0" />
@@ -1006,6 +1017,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_C8</Name>
           <Page isRef="0" />
@@ -1024,6 +1036,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_C9</Name>
           <Page isRef="0" />
@@ -1042,6 +1055,7 @@ BAgQIECAQEEC/we+W8zijWuN2gAAAABJRU5ErkJggg==</ImageBytes>
           <Expressions isList="true" count="0" />
           <Font>Segoe UI,8.5</Font>
           <GrowToHeight>True</GrowToHeight>
+          <HorAlignment>Center</HorAlignment>
           <Margins>0.12,0.12,0,0</Margins>
           <Name>CaseSummary_C10</Name>
           <Page isRef="0" />
