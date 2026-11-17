@@ -1801,11 +1801,15 @@ def test_every_run_ends_with_the_time_per_service_and_the_number_of_calculations
     gl.execute_outage_assessment(app)
 
     text = "\n".join(app.messages)
-    assert "RUN SUMMARY" in text and "Service" in text and "Calls" in text and "Share" in text
-    for service in ("read planned outages", "QDS calculation (PowerFactory)", "read QDS results (ElmRes)",
-                    "build report tables", "publish report tables", "total"):
-        assert service in text, service
-    assert "QDS runs (ComStatsim.Execute)" in text and "result values read" in text
+    # Hadi, 17 Nov 2026: the summary reads at working level, without script or PowerFactory internals.
+    assert "RUN SUMMARY · where the run time went" in text and "Share of the run time" in text
+    for work in ("Read the planned outages", "Quasi-dynamic simulation (QDS)", "Read the simulation results",
+                 "Build the report tables", "Hand the tables over to the report", "Total run time"):
+        assert work in text, work
+    assert "Quasi-dynamic simulations run" in text and "Result values read" in text
+    summary = text[text.index("RUN SUMMARY"):]
+    for internal in ("ElmRes", "GetColumnValues", "ComStatsim.Execute", "Calls", "(Python)"):
+        assert internal not in summary, internal
     assert gl.RUN_STATS.counts["qds_runs"] >= 1 and gl.RUN_STATS.counts["values"] > 0
 
 
@@ -1820,7 +1824,7 @@ def test_a_failed_run_also_ends_with_the_summary(monkeypatch):
     text = "\n".join(app.messages)
     assert "PowerFactory names the cause in its own message" in text, "a refused command points at PowerFactory"
     assert text.index("FAILED") < text.index("RUN SUMMARY")
-    assert "QDS calculation (PowerFactory)" in text
+    assert "Quasi-dynamic simulation (QDS)" in text
 
 
 def test_results_are_read_a_whole_column_per_call_and_the_buffer_is_deleted_after_the_run():
@@ -1834,7 +1838,7 @@ def test_results_are_read_a_whole_column_per_call_and_the_buffer_is_deleted_afte
     assert len(buffers) == 1 and buffers[0].deleted and gl.COLUMN_BUFFER is None
     assert not [item for item in app.script.created if item.kind == "IntVec"]
     assert gl.RUN_STATS.counts.get("columns_bulk", 0) > 0 and not gl.RUN_STATS.counts.get("values_cellwise")
-    assert "result columns read in one call" in "\n".join(app.messages)
+    assert "Result curves read in one go (fast)" in "\n".join(app.messages)
 
 
 def test_the_buffer_falls_back_to_the_script_when_the_study_case_refuses_it(monkeypatch):

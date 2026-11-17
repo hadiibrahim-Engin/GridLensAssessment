@@ -104,8 +104,8 @@ def test_the_summary_shows_steps_cases_and_the_window_apart():
     gl.log_run_summary(gl.RunLogger(app, "standard"), stats)
     text = "\n".join(app.lines)
     assert "STEP 1/7" in text and "STEP 4/7" in text, "time per step"
-    assert "C1" in text and "20.0" in text, "time per case and phase"
-    assert "case manager window open" in text and "not counted" in text
+    assert "C1" in text and "20 s" in text, "time per case and phase"
+    assert "case manager window stood open for 50 s" in text and "not counted" in text
 
     app = App()
     gl.log_run_summary(gl.RunLogger(app, "compact"), stats)
@@ -156,7 +156,27 @@ def test_parts_of_a_service_are_shown_below_it_and_not_counted_twice():
     stats.started -= 12.0
     rows = stats.rows()
     names = [row[0] for row in rows]
-    at = names.index(gl.READ_SERVICE)
-    assert names[at + 1:at + 3] == ["  - " + gl.READ_COLUMNS, "  - " + gl.READ_CONVERT]
-    other = next(row for row in rows if row[0].startswith("other"))
-    assert 1.5 < float(other[2]) < 2.5, "only the service counts, not its parts as well"
+    at = names.index("  Read the simulation results")
+    assert names[at - 1] == "Reading the results", "grouped by what the work is for"
+    assert names[at + 1:at + 3] == ["      of which: PowerFactory hands over the values, a whole curve at a time",
+                                    "      of which: Outage Assessment takes over the values"]
+    assert rows[at + 1][1] == "450 \u00d7"
+    other = next(row for row in rows if row[0].startswith("Not measured"))
+    assert other[2] == "2.0 s", "only the work counts, not its parts as well"
+
+
+def test_durations_and_counts_read_like_a_clock():
+    assert [gl.duration_text(value) for value in (0.04, 9.94, 12.4, 245.0, 3725.0)] == [
+        "0.0 s", "9.9 s", "12 s", "4 min 05 s", "1 h 02 min"]
+    assert gl.count_text(52800) == "52 800 \u00d7"
+    stats = gl.RunStats()
+    stats.add("QDS calculation (PowerFactory)", 30.0, 3)
+    stats.add("a new piece of work", 1.0)
+    assert stats.longest_work() == ("Quasi-dynamic simulation (QDS)", 30.0)
+    assert stats.work("a new piece of work") == ("Other work", "A new piece of work"), "unknown work keeps its name"
+    # Every measured service of the script has a plain wording.
+    source = open(gl.__file__, encoding="utf-8").read()
+    measured = set(gl.re.findall(r'RUN_STATS\.(?:measure|add)\("([^"]+)"', source)) | {gl.READ_SERVICE}
+    assert measured <= set(gl.RunStats.WORK_LABELS), measured - set(gl.RunStats.WORK_LABELS)
+    parts = {gl.READ_HEADERS, gl.READ_COLUMNS, gl.READ_CELLS, gl.READ_CONVERT, gl.READ_CHECK}
+    assert parts <= set(gl.RunStats.PART_LABELS)

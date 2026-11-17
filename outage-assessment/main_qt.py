@@ -6322,15 +6322,56 @@ def _remember_warning(message):
 class RunStats:
     """Time and calls per service and the number of calculations of one run, for the summary at its end."""
 
-    # Order of the summary; services not listed follow in the order they were first used.
+    # What was calculated, in the words of the engineer; the order of the summary.
     COUNT_LABELS = (
-        ('qds_runs', 'QDS runs (ComStatsim.Execute)'), ('qds_steps', 'QDS time steps calculated'),
-        ('reused_cases', 'cases reused without a QDS run'), ('series', 'result series read'),
-        ('values', 'result values read'), ('columns_bulk', 'result columns read in one call (GetColumnValues)'),
-        ('values_cellwise', 'result values read one by one (GetValue, slow)'), ('n1_created', 'contingency analyses created'),
-        ('n1_sweeps', 'contingency analysis runs (ComSimoutage.Execute)'), ('n1_times', 'n-1 study times calculated'),
-        ('n1_loadflows', 'contingency load flows (study time x contingency)'),
-        ('n1_classified', 'n-1 results classified'), ('report_rows', 'report table rows built'))
+        ('qds_runs', 'Quasi-dynamic simulations run'), ('qds_steps', 'Simulated time steps'),
+        ('reused_cases', "Cases that use another case's result (no simulation of their own)"),
+        ('series', 'Result curves read (one per element and quantity)'), ('values', 'Result values read'),
+        ('columns_bulk', 'Result curves read in one go (fast)'),
+        ('values_cellwise', 'Result values read one at a time (slow)'),
+        ('n1_created', 'Contingency analyses set up'), ('n1_sweeps', 'Contingency analyses run'),
+        ('n1_times', 'Points in time of the n-1 calculation'),
+        ('n1_loadflows', 'Load flows of the contingency analysis (point in time x contingency)'),
+        ('n1_classified', 'n-1 results assessed'), ('report_rows', 'Rows of the report tables'))
+    # The work of a run as the summary names it: (group, wording without script or PowerFactory internals).
+    # Work not listed here appears under 'Other work' with its own name.
+    WORK_GROUPS = ('Preparation', 'Simulation in PowerFactory', 'Reading the results', 'Assessment', 'Report',
+                   'Other work')
+    WORK_LABELS = {
+        'read planned outages': ('Preparation', 'Read the planned outages'),
+        'read grids and contingencies': ('Preparation', 'Read the grids and contingencies'),
+        'check the size of the run': ('Preparation', 'Check that the run fits into the memory'),
+        'read switch states': ('Preparation', 'Read the switch positions'),
+        'n-1: define contingencies': ('Preparation', 'Set up the contingencies for n-1'),
+        'QDS calculation (PowerFactory)': ('Simulation in PowerFactory', 'Quasi-dynamic simulation (QDS)'),
+        'n-1 contingency analysis (PowerFactory)': ('Simulation in PowerFactory', 'Contingency analysis (n-1)'),
+        'keep a copy of each QDS result': ('Simulation in PowerFactory', 'Save a copy of each simulation result'),
+        'restore PowerFactory state': ('Simulation in PowerFactory', 'Put the PowerFactory settings back'),
+        'read QDS results (ElmRes)': ('Reading the results', 'Read the simulation results'),
+        'read n-1 results': ('Reading the results', 'Read the n-1 results'),
+        'check the effect of the outages': ('Assessment', 'Check that each planned outage took effect'),
+        'compare case with REF': ('Assessment', 'Compare each case with the reference'),
+        "classify (n-1)' against n-1": ('Assessment', "Compare (n-1)' with n-1"),
+        'n-1 statistics': ('Assessment', 'Summarise the n-1 results'),
+        'critical time steps of each run for the report': ('Assessment', 'Find the critical time steps'),
+        'n-0 statistics of REF for the report': ('Assessment', 'Summarise the reference'),
+        'judge the cases': ('Assessment', 'Give each case its verdict'),
+        'log the results': ('Report', 'Write the results into this window'),
+        'build report tables': ('Report', 'Build the report tables'),
+        'publish report tables': ('Report', 'Hand the tables over to the report'),
+        'case manager: build window': ('Preparation', 'Open the case manager'),
+        'case manager: refresh after an edit': ('Preparation', 'Update the case manager after an edit'),
+    }
+    # Parts of reading the results: who does the work, PowerFactory or Outage Assessment.
+    PART_LABELS = {
+        'column headers and grids (PowerFactory calls)': 'PowerFactory lists what the result contains',
+        'GetColumnValues (PowerFactory calls)': 'PowerFactory hands over the values, a whole curve at a time',
+        'GetValue cell by cell (PowerFactory calls, slow)': 'PowerFactory hands over the values one at a time (slow)',
+        'convert values (Python)': 'Outage Assessment takes over the values',
+        'check values, gaps and statistics (Python)': 'Outage Assessment checks the values',
+    }
+    PHASE_LABELS = {'calculation': 'Simulation', 'reading': 'Reading results', 'comparison': 'Comparison',
+                    'n-1': 'n-1'}
 
     def __init__(self):
         self.started = time.monotonic()
@@ -6417,32 +6458,78 @@ class RunStats:
 
     CASE_PHASES = ('calculation', 'reading', 'comparison', 'n-1')
 
-    def step_rows(self):
+    def share(self, seconds):
+        """'38 %' of the run time; '<1 %' for a small share that is not nothing."""
         total = self.run_time()
-        return [("STEP {}/{} \u00b7 {}".format(number, TOTAL_STEPS, title), '{:.1f}'.format(seconds),
-                 '{:.0f} %'.format(100.0 * seconds / total) if total else '-') for number, title, seconds in self.steps]
+        if not total:
+            return '-'
+        share = 100.0 * seconds / total
+        return '<1 %' if 0 < share < 0.5 else '{:.0f} %'.format(share)
+
+    def step_rows(self):
+        return [("STEP {}/{} \u00b7 {}".format(number, TOTAL_STEPS, title), duration_text(seconds), self.share(seconds))
+                for number, title, seconds in self.steps]
 
     def case_rows(self):
-        return [(case_id,) + tuple('{:.1f}'.format(phases[phase]) if phase in phases else '-' for phase in self.CASE_PHASES)
-                + ('{:.1f}'.format(sum(phases.values())),) for case_id, phases in self.cases.items()]
+        return [(case_id,) + tuple(duration_text(phases[phase]) if phase in phases else '-' for phase in self.CASE_PHASES)
+                + (duration_text(sum(phases.values())),) for case_id, phases in self.cases.items()]
+
+    def work(self, service):
+        """(group, wording) of a measured piece of work."""
+        return self.WORK_LABELS.get(service, ('Other work', service[:1].upper() + service[1:]))
 
     def rows(self):
-        total = self.run_time()
-        def share(seconds):
-            return '{:.0f} %'.format(100.0 * seconds / total) if total else '-'
+        """The work grouped by what it is for: a group line, then each piece of work with how often it was done,
+        its duration and its share of the run time; the parts of reading the results indented below it."""
         rows = []
-        for service, (calls, seconds) in self.services.items():
-            rows.append((service, str(calls), '{:.1f}'.format(seconds), share(seconds)))
-            rows += [('  - ' + name, str(part_calls), '{:.1f}'.format(part_seconds), share(part_seconds))
-                     for name, (part_calls, part_seconds) in self.parts.get(service, {}).items()]
+        for group in self.WORK_GROUPS:
+            members = [(service, calls, seconds) for service, (calls, seconds) in self.services.items()
+                       if self.work(service)[0] == group]
+            if not members:
+                continue
+            rows.append((group, '', '', ''))
+            for service, calls, seconds in members:
+                rows.append(('  ' + self.work(service)[1], count_text(calls), duration_text(seconds),
+                             self.share(seconds)))
+                rows += [('      of which: ' + self.PART_LABELS.get(name, name), count_text(part_calls),
+                          duration_text(part_seconds), self.share(part_seconds))
+                         for name, (part_calls, part_seconds) in self.parts.get(service, {}).items()]
+        total = self.run_time()
         measured = sum(seconds for _, seconds in self.services.values())
-        rows.append(('other (logging, checks, waiting)', '-', '{:.1f}'.format(max(0.0, total - measured)), '-'))
-        rows.append(('total', '-', '{:.1f}'.format(total), '100 %'))
+        rows.append(('Not measured on its own (messages, small checks)', '', duration_text(max(0.0, total - measured)),
+                     self.share(max(0.0, total - measured))))
+        rows.append(('Total run time', '', duration_text(total), '100 %'))
         return rows
+
+    def longest_work(self):
+        """(wording, seconds) of the piece of work that took longest; None before any was measured."""
+        if not self.services:
+            return None
+        service, (_calls, seconds) = max(self.services.items(), key=lambda item: item[1][1])
+        return self.work(service)[1], seconds
 
     def count_rows(self):
         return [(label, '{:,}'.format(self.counts[key]).replace(',', ' ')) for key, label in self.COUNT_LABELS
                 if self.counts.get(key)]
+
+
+def count_text(count):
+    """'3 ×', '52 800 ×': how often a piece of work was done."""
+    return '{:,} \u00d7'.format(count).replace(',', ' ')
+
+
+def duration_text(seconds):
+    """'0.4 s', '12 s', '4 min 05 s', '1 h 02 min': how long, as one reads a clock."""
+    seconds = max(0.0, seconds)
+    if seconds < 10:
+        return '{:.1f} s'.format(seconds)
+    if seconds < 60:
+        return '{:.0f} s'.format(seconds)
+    if seconds < 3600:
+        minutes, rest = divmod(int(round(seconds)), 60)
+        return '{} min {:02d} s'.format(minutes, rest)
+    hours, rest = divmod(int(round(seconds)) // 60, 60)
+    return '{} h {:02d} min'.format(hours, rest)
 
 
 RUN_STATS = RunStats()
@@ -6453,31 +6540,37 @@ def log_run_summary(logger, stats=None):
     one). Run time leaves out the time the case manager window stood open; that time is named apart."""
     stats = stats or RUN_STATS
     stats.finish_step()
-    waited = "case manager window open {:.1f} s, not counted".format(stats.waited) if stats.waited else ""
+    waited = ("the case manager window stood open for {}, which is not counted".format(duration_text(stats.waited))
+              if stats.waited else "")
+    longest = stats.longest_work()
+    longest_text = "Most of the time went into: {}, {} ({} of the run time).".format(
+        longest[0], duration_text(longest[1]), stats.share(longest[1])) if longest and longest[1] > 0 else ""
     if not logger.shows(LOG_STANDARD):
-        slowest = max(stats.steps, key=lambda entry: entry[2]) if stats.steps else None
-        logger.write("SUMMARY", "Run time {:.1f} s{}{}.".format(
-            stats.run_time(), " ({})".format(waited) if waited else "",
-            "; longest step {} ({:.1f} s)".format(slowest[1], slowest[2]) if slowest else ""), verbosity=LOG_COMPACT)
+        logger.write("SUMMARY", "Run time {}{}. {}".format(
+            duration_text(stats.run_time()), " ({})".format(waited) if waited else "", longest_text).strip(),
+            verbosity=LOG_COMPACT)
         return
-    logger.section("RUN SUMMARY · time measurement and calculations")
-    logger.detail("Run time {:.1f} s{}.".format(stats.run_time(), "; " + waited if waited else ""))
+    logger.section("RUN SUMMARY · where the run time went")
+    logger.detail("Run time {}{}.".format(duration_text(stats.run_time()), "; " + waited if waited else ""))
+    if longest_text:
+        logger.detail(longest_text)
     if stats.steps:
-        logger.table(("Step", "Time [s]", "Share"), stats.step_rows())
+        logger.detail("")
+        logger.table(("Step", "Duration", "Share of the run time"), stats.step_rows())
     if stats.cases:
         logger.detail("")
-        logger.table(("Case",) + tuple(phase.capitalize() + " [s]" for phase in stats.CASE_PHASES) + ("Total [s]",),
+        logger.table(("Case",) + tuple(stats.PHASE_LABELS[phase] for phase in stats.CASE_PHASES) + ("Total",),
                      stats.case_rows())
     logger.detail("")
-    logger.table(("Service", "Calls", "Time [s]", "Share"), stats.rows())
+    logger.table(("Work", "Done", "Duration", "Share of the run time"), stats.rows())
     if stats.wait_services:
         logger.detail("While the case manager window stood open (not counted): {}.".format(", ".join(
-            "{} {:.1f} s".format(service, seconds) for service, (_calls, seconds) in stats.wait_services.items())),
-            verbosity=LOG_DETAILED)
+            "{} {}".format(stats.work(service)[1], duration_text(seconds))
+            for service, (_calls, seconds) in stats.wait_services.items())), verbosity=LOG_DETAILED)
     counted = stats.count_rows()
     if counted:
         logger.detail("")
-        logger.table(("Calculations", "Number"), counted)
+        logger.table(("What was calculated", "Number"), counted)
 
 
 def _call_without_or_with_zero(method):
