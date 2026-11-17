@@ -6347,6 +6347,7 @@ class RunStats:
         'n-1 contingency analysis (PowerFactory)': ('Simulation in PowerFactory', 'Contingency analysis (n-1)'),
         'keep a copy of each QDS result': ('Simulation in PowerFactory', 'Save a copy of each simulation result'),
         'restore PowerFactory state': ('Simulation in PowerFactory', 'Put the PowerFactory settings back'),
+        'put the study time back after a run': ('Simulation in PowerFactory', 'Put the study time back after each run'),
         'read QDS results (ElmRes)': ('Reading the results', 'Read the simulation results'),
         'read n-1 results': ('Reading the results', 'Read the n-1 results'),
         'check the effect of the outages': ('Assessment', 'Check that each planned outage took effect'),
@@ -11536,6 +11537,22 @@ def evaluate_qds(run, description, plan, logger):
     return result
 
 
+RESTORE_SERVICE = "restore PowerFactory state"
+RESTORE_STUDY_TIME = "Put the study time back"
+RESTORE_VARIABLES = "Remove the default variables added for the run"
+RESTORE_OPTION = "Switch the 'Planned Outages' option back"
+RESTORE_PERIOD = "Put the QDS period back"
+
+
+def _restore_part(name, restore):
+    """Run one restore and count its time as a part of RESTORE_SERVICE in the run summary."""
+    started = time.monotonic()
+    try:
+        return restore()
+    finally:
+        RUN_STATS.part(RESTORE_SERVICE, name, time.monotonic() - started)
+
+
 def _log_kept_results(results_store, logger):
     """The result objects stay in PowerFactory; name each one."""
     for obj in results_store:
@@ -11642,6 +11659,13 @@ def _set_scalar_attribute(obj, attribute, value):
     if left is not None and right is not None:
         return left == right
     return restored == value
+
+
+def _restore_study_time_after_run(state, logger):
+    """Put the study time back after one run (PowerFactory leaves it on the last QDS step), timed on its own: on a
+    large model PowerFactory recalculates the time-dependent data for the new time."""
+    with RUN_STATS.measure("put the study time back after a run"):
+        return _restore_study_time(state, logger, "CALCULATION", 4)
 
 
 def _restore_study_time(state, logger, stage="RESTORE", step=5):
@@ -11863,7 +11887,7 @@ def _calculate_reference(app, study_case, qds, request, records, original_result
                                     result_objects, reference_fingerprint(request), announce=False)
         result.update(description="Network state with the fixed planned outages.",
                       run_note="iopt_maint=1; " + _active_text(None, background))
-    clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
+    clock_errors = _restore_study_time_after_run(study_time_state, logger)
     if clock_errors:
         raise OutageAssessmentError("The initial Study Case time could not be restored after REF: {}. The case runs were "
                             "not started.".format("; ".join(clock_errors)))
@@ -11914,7 +11938,7 @@ def _calculate_case(app, study_case, qds, plan, request, records, original_resul
         logger.write("CALCULATION", "{} could not be calculated: {}".format(plan["id"], exc), 4, "ERROR")
         log_error_details(logger, exc)
         run = dict(info, failed=str(exc), run_note=note, result_object=result_objects.by_case.get(plan["id"], ""))
-    clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
+    clock_errors = _restore_study_time_after_run(study_time_state, logger)
     if clock_errors:
         raise OutageAssessmentError(
             "The initial Study Case time could not be restored after {}: {}. "
@@ -12984,7 +13008,7 @@ def calculate_n1(app, study_case, qds, request, records, ready, logger, study_ti
             raise
         except OutageAssessmentError as exc:
             entry = {'status': 'NOT EVALUATED', 'reason': str(exc), 'times': 0, 'error': exc}
-        clock_errors = _restore_study_time(study_time_state, logger, "CALCULATION", 4)
+        clock_errors = _restore_study_time_after_run(study_time_state, logger)
         if clock_errors:
             raise OutageAssessmentError("The initial Study Case time could not be restored after the n-1 run of {}: {}.".format(
                 plan['id'], "; ".join(clock_errors)))
@@ -13415,18 +13439,21 @@ def execute_outage_assessment(app):
     finally:
         logger.step(5, "Restore and clean-up")
         restoring = time.monotonic()
-        logger.write("RESTORE", "Restoring the original PowerFactory state.", 5, verbosity=LOG_DETAILED)
-        state_errors.extend(_restore_study_time(study_time_state, logger))
-        state_errors.extend(restore_default_variables(default_monitors, logger))
+        # Each write is timed on its own: PowerFactory may take long or wait for a dialog on one of them.
+        logger.write("RESTORE", "Restoring the original PowerFactory state.", 5)
+        state_errors.extend(_restore_part(RESTORE_STUDY_TIME, lambda: _restore_study_time(study_time_state, logger)))
+        if default_monitors:
+            state_errors.extend(_restore_part(RESTORE_VARIABLES, lambda: restore_default_variables(default_monitors,
+                                                                                                    logger)))
         if qds is not None:
-            state_errors.extend(
-                _restore_planned_outage_option(qds, original_option, logger))
-            state_errors.extend(_restore_qds_span(qds_guard, qds, span, logger))
+            state_errors.extend(_restore_part(RESTORE_OPTION, lambda: _restore_planned_outage_option(
+                qds, original_option, logger)))
+            state_errors.extend(_restore_part(RESTORE_PERIOD, lambda: _restore_qds_span(qds_guard, qds, span, logger)))
             _log_results_binding(qds, original_result, logger)
         _log_kept_results(result_objects, logger)
         RUN_CONTEXT['restore'] = ("NOT fully restored: " + "; ".join(state_errors)) if state_errors else (
             "restored and verified (Study Case time, 'Planned Outages' option, QDS period, every value Outage Assessment wrote)")
-        RUN_STATS.add("restore PowerFactory state", time.monotonic() - restoring)
+        RUN_STATS.add(RESTORE_SERVICE, time.monotonic() - restoring)
     if state_errors:
         raise OutageAssessmentError(
             "Outage Assessment could not fully restore PowerFactory state: {}. Stop and "

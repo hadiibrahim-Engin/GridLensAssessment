@@ -1820,6 +1820,20 @@ def test_every_run_ends_with_the_time_per_service_and_the_number_of_calculations
     assert gl.RUN_STATS.counts["qds_runs"] >= 1 and gl.RUN_STATS.counts["values"] > 0
 
 
+def test_every_restore_write_is_timed_on_its_own():
+    # Hadi, 17 Nov 2026: "restore PowerFactory state" took hours; the summary must say which write took the time.
+    app = App((PlannedOutage("FS1"),))
+
+    gl.execute_outage_assessment(app)
+
+    parts = gl.RUN_STATS.parts[gl.RESTORE_SERVICE]
+    assert set(parts) == {gl.RESTORE_STUDY_TIME, gl.RESTORE_OPTION, gl.RESTORE_PERIOD}
+    assert gl.RUN_STATS.services["put the study time back after a run"][0] == 2, "after REF and after the case"
+    text = "\n".join(app.messages)
+    assert "of which: Put the study time back" in text and "Put the study time back after each run" in text
+    assert "Restoring the original PowerFactory state." in text, "shown with its time when the restore begins"
+
+
 def test_a_failed_run_also_ends_with_the_summary(monkeypatch):
     import sys
     import types

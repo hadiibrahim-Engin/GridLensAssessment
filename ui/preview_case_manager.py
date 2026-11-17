@@ -825,6 +825,7 @@ class RunStats:
         'n-1 contingency analysis (PowerFactory)': ('Simulation in PowerFactory', 'Contingency analysis (n-1)'),
         'keep a copy of each QDS result': ('Simulation in PowerFactory', 'Save a copy of each simulation result'),
         'restore PowerFactory state': ('Simulation in PowerFactory', 'Put the PowerFactory settings back'),
+        'put the study time back after a run': ('Simulation in PowerFactory', 'Put the study time back after each run'),
         'read QDS results (ElmRes)': ('Reading the results', 'Read the simulation results'),
         'read n-1 results': ('Reading the results', 'Read the n-1 results'),
         'check the effect of the outages': ('Assessment', 'Check that each planned outage took effect'),
