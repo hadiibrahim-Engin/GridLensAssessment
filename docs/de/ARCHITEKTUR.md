@@ -204,12 +204,15 @@ Phase 1 rechnet und erhält nur; gelesen wird noch nichts.
    Fingerabdruck in die Beschreibung der Kopie. Die Kopien bleiben; Outage Assessment
    löscht sie nie.
 5. **Aufzeichnungsprüfung.** Vor der ersten QDS liest Outage Assessment die
-   Variablenauswahl (IntMon) des gebundenen Ergebnisobjekts
-   (`check_variable_selection`): ohne bewertete Variable startet kein Lauf (ein
-   Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und `b:number` auf). Direkt
-   nach dem ersten Lauf prüft es noch einmal, dass die Kopie mindestens eine
-   bewertete Variable enthält (`check_recording`), für eine Auswahl, die es vorher
-   nicht lesen konnte.
+   Variablenauswahl (IntMon) des gebundenen Ergebnisobjekts. Nennt sie keine
+   bewertete Variable (ein Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und
+   `b:number` auf), legt Outage Assessment für den Lauf die Standardvariablen von
+   PowerFactory an – je ein klassenweiter IntMon: `c:loading` von `ElmLne`, `ElmTr2`,
+   `ElmTr3`, `m:u` von `ElmTerm` (`ensure_default_variables`) –, liest sie zurück und
+   entfernt sie in Schritt 5 wieder (`restore_default_variables`). Lassen sie sich
+   nicht anlegen, startet kein Lauf. Direkt nach dem ersten Lauf prüft es noch
+   einmal, dass die Kopie mindestens eine bewertete Variable enthält
+   (`check_recording`).
 6. **Nach jedem Lauf** werden die *Ignored*-Flags zurückgesetzt und
    zurückgelesen, die Studienzeit wird zurückgesetzt, und Schalter, die anders
    stehen als vor dem Lauf, werden protokolliert (Outage Assessment ändert keine

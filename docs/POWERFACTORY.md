@@ -236,9 +236,14 @@ copy.loc_name = "OA_<stamp>_<case>"
 - If `ComStatsim.results` is bound to a kept Outage Assessment object, Outage Assessment stops
   before any calculation: the QDS would overwrite it.
 - Before the first QDS Outage Assessment reads the variable selection (IntMon) of the
-  bound result object (`check_variable_selection`): if it selects none of
-  `c:loading`, `m:loading`, `m:u`, `m:u1`, no run starts (`RecordingError`). A result
-  object without IntMon records only `b:noconv` and `b:number` (seen 17 Nov 2026).
+  bound result object. If it selects none of `c:loading`, `m:loading`, `m:u`, `m:u1`
+  – a result object without IntMon records only `b:noconv` and `b:number` (seen
+  17 Nov 2026) – Outage Assessment adds the default variables for the run, as
+  *Add default variables* does in the dialog: `result.CreateObject("IntMon", …)`,
+  `classnm` = class, `AddVar("c:loading")` / `AddVar("m:u")`
+  (`ensure_default_variables`); it reads them back and deletes them after the run.
+  If PowerFactory refuses that, no run starts (`RecordingError`). Not yet verified
+  in PowerFactory: that `classnm` and `AddVar` take effect as in the dialog.
   Right after the first run Outage Assessment checks again that the copy records
   loading or voltage (`check_recording`).
 - Outage Assessment writes version, case and a fingerprint of the outages into the

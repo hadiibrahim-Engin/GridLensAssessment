@@ -2170,55 +2170,95 @@ def test_a_failing_comparison_fails_only_its_own_case(monkeypatch):
     assert [item.outserv for item in outages] == [0, 0] and app.qds.iopt_maint == 0
 
 
-class MonitoredResult(ElmRes):
-    """A bound result object whose variable selection (IntMon objects) can be read."""
+class Monitor(PFObject):
+    """An IntMon as PowerFactory has it: AddVar appends to vars; Delete takes it out of its result object."""
 
-    def __init__(self, monitors):
+    def __init__(self, name, owner=None, **attributes):
+        attributes.setdefault("vars", [])
+        super().__init__(name, "IntMon", **attributes)
+        self.owner = owner
+
+    def AddVar(self, variable):
+        self.vars = list(self.vars) + [variable]
+
+    def Delete(self):
+        self.owner.monitors.remove(self)
+
+
+class MonitoredResult(ElmRes):
+    """A bound result object whose variable selection (IntMon objects) can be read and extended."""
+
+    def __init__(self, monitors, writable=True):
         super().__init__()
-        self.monitors = monitors
+        self.monitors = list(monitors)
+        self.writable = writable
 
     def GetContents(self, pattern="*", *_recursive):
         return list(self.monitors) if pattern == "*.IntMon" else []
 
+    def CreateObject(self, kind, name):
+        if not self.writable:
+            raise RuntimeError("Object cannot be modified, no write access!")
+        monitor = Monitor(name, self)
+        self.monitors.append(monitor)
+        return monitor
 
-def test_a_result_object_without_assessed_variables_stops_before_any_calculation():
-    # Hadi, 17 Nov 2026: a run stopped only after its first QDS because the result object had no variable selection.
+
+def test_without_assessed_variables_the_default_variables_are_added_for_the_run_and_removed_afterwards():
+    # Hadi, 17 Nov 2026: the script adds PowerFactory's default variables itself; the engineer does nothing.
     app = App((PlannedOutage("FS1"),))
-    app.original_result = app.qds.results = MonitoredResult([])
+    result = app.original_result = app.qds.results = MonitoredResult([])
+    selections = []
+    execute = app.qds.Execute
 
-    with pytest.raises(gl.RecordingError, match="No calculation was started") as error:
-        gl.execute_outage_assessment(app)
-
-    assert "no variable selection (no IntMon inside)" in "\n".join(error.value.details)
-    assert "c:loading" in error.value.hint
-    assert app.qds.execute_calls == 0 and app.study.copies == []
-    assert app.qds.iopt_maint == 0 and app.qds.results is app.original_result
-
-    app = App((PlannedOutage("FS1"),))
-    app.original_result = app.qds.results = MonitoredResult([PFObject("Bus", "IntMon", classnm="ElmTerm", vars=["m:P"])])
-    with pytest.raises(gl.RecordingError, match="selects none of the variables"):
-        gl.execute_outage_assessment(app)
-    assert app.qds.execute_calls == 0
-
-
-def test_a_result_object_that_selects_an_assessed_variable_is_calculated():
-    app = App((PlannedOutage("FS1"),))
-    app.original_result = app.qds.results = MonitoredResult(
-        [PFObject("Lines", "IntMon", classnm="ElmLne", vars=["c:loading", "m:P:bus1"])])
+    def watched():
+        selections.append(sorted((monitor.classnm, tuple(monitor.vars)) for monitor in result.monitors))
+        return execute()
+    app.qds.Execute = watched
 
     gl.execute_outage_assessment(app)
 
+    assert selections[0] == [("ElmLne", ("c:loading",)), ("ElmTerm", ("m:u",)), ("ElmTr2", ("c:loading",)),
+                             ("ElmTr3", ("c:loading",))], "every run records loading and voltage"
+    assert result.monitors == [], "the result object is as before the run"
+    text = "\n".join(app.messages)
+    assert "added the default variables for this run" in text
     assert app.qds.execute_calls == 2
 
 
+def test_default_variables_that_cannot_be_added_stop_before_any_calculation():
+    app = App((PlannedOutage("FS1"),))
+    app.original_result = app.qds.results = MonitoredResult([Monitor("Bus", classnm="ElmTerm", vars=["m:P"])],
+                                                            writable=False)
+
+    with pytest.raises(gl.RecordingError, match="could not add the default variables") as error:
+        gl.execute_outage_assessment(app)
+
+    assert "Add default variables" in error.value.hint
+    assert app.qds.execute_calls == 0 and app.study.copies == []
+    assert app.qds.iopt_maint == 0 and app.qds.results is app.original_result
+
+
+def test_a_result_object_that_selects_an_assessed_variable_is_left_alone():
+    app = App((PlannedOutage("FS1"),))
+    lines = Monitor("Lines", classnm="ElmLne", vars=["c:loading", "m:P:bus1"])
+    result = app.original_result = app.qds.results = MonitoredResult([lines])
+
+    gl.execute_outage_assessment(app)
+
+    assert result.monitors == [lines] and app.qds.execute_calls == 2
+
+
 def test_an_unreadable_variable_selection_is_left_to_the_check_after_the_first_run():
-    gl.check_variable_selection(None)
-    gl.check_variable_selection(ElmRes())
-    gl.check_variable_selection(MonitoredResult([PFObject("Odd", "IntMon", vars=None)]))
+    logger = gl.RunLogger(App(()), "standard")
+    assert gl.ensure_default_variables(None, logger) == []
+    assert gl.ensure_default_variables(ElmRes(), logger) == []
+    odd = MonitoredResult([Monitor("Odd", vars=None)])
+    assert gl.ensure_default_variables(odd, logger) == [] and len(odd.monitors) == 1
 
     class NoContents:
         loc_name = "Result"
-    gl.check_variable_selection(NoContents())
+    assert gl.selected_variables(NoContents()) is None
 
 
 def test_a_run_too_large_for_the_free_memory_stops_before_any_calculation(monkeypatch):

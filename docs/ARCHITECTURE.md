@@ -194,11 +194,14 @@ Phase 1 only calculates and keeps; nothing is read yet.
    `…_REF`) and writes case and fingerprint into the copy's description. The
    copies stay; Outage Assessment never deletes them.
 5. **Recording check.** Before the first QDS Outage Assessment reads the variable
-   selection (IntMon objects) of the bound result object (`check_variable_selection`):
-   without any assessed variable no run is started (a result object without IntMon
-   records only `b:noconv` and `b:number`). Right after the first run it checks
-   again that the copy records at least one assessed variable (`check_recording`)
-   for a selection it could not read beforehand.
+   selection (IntMon objects) of the bound result object. When it names no assessed
+   variable (a result object without IntMon records only `b:noconv` and `b:number`),
+   Outage Assessment adds PowerFactory's default variables for the run – one
+   class-wide IntMon each: `c:loading` of `ElmLne`, `ElmTr2`, `ElmTr3`, `m:u` of
+   `ElmTerm` (`ensure_default_variables`) – reads them back and removes them in step 5
+   (`restore_default_variables`). If they cannot be added, no run starts. Right after
+   the first run it checks again that the copy records at least one assessed
+   variable (`check_recording`).
 6. **After every run** the *Ignored* flags are restored and read back, the
    study time is put back, and switches that are in another state than before
    the run are logged (Outage Assessment does not change switches).
