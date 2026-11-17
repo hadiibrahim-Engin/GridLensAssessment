@@ -203,9 +203,13 @@ Phase 1 rechnet und erhält nur; gelesen wird noch nichts.
    `OA_<yymmdd-HHMMSS>_<Fall>` (REF: `…_REF`) und schreibt Fall und
    Fingerabdruck in die Beschreibung der Kopie. Die Kopien bleiben; Outage Assessment
    löscht sie nie.
-5. **Aufzeichnungsprüfung.** Direkt nach dem ersten Lauf prüft Outage Assessment, dass
-   die Kopie mindestens eine bewertete Variable enthält. Wenn nicht, stoppt der
-   Lauf sofort, statt die übrigen Fälle umsonst zu rechnen.
+5. **Aufzeichnungsprüfung.** Vor der ersten QDS liest Outage Assessment die
+   Variablenauswahl (IntMon) des gebundenen Ergebnisobjekts
+   (`check_variable_selection`): ohne bewertete Variable startet kein Lauf (ein
+   Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und `b:number` auf). Direkt
+   nach dem ersten Lauf prüft es noch einmal, dass die Kopie mindestens eine
+   bewertete Variable enthält (`check_recording`), für eine Auswahl, die es vorher
+   nicht lesen konnte.
 6. **Nach jedem Lauf** werden die *Ignored*-Flags zurückgesetzt und
    zurückgelesen, die Studienzeit wird zurückgesetzt, und Schalter, die anders
    stehen als vor dem Lauf, werden protokolliert (Outage Assessment ändert keine

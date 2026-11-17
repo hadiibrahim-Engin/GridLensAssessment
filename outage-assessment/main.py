@@ -10683,6 +10683,34 @@ def monitor_text(elmres, limit=6):
         len(found), text, " and {} more".format(len(found) - limit) if len(found) > limit else "")
 
 
+def check_variable_selection(result):
+    """Before the first QDS: stop when the bound result object selects none of the assessed variables.
+
+    PowerFactory records into the bound result object exactly its variable selection (its IntMon objects); without
+    one it records only its own status columns (b:noconv, b:number). Every run would then be calculated in vain and
+    the run would stop only after the first QDS (check_recording). Nothing is checked when no result object is bound
+    (PowerFactory then binds its own with its default selection) or when the selection cannot be read; the check after
+    the first run stays in place for those.
+    """
+    if result is None or not callable(safe_attr(result, 'GetContents')):
+        return
+    selected = set()
+    for monitor in _contents(result, '*.IntMon'):
+        variables = safe_attr(monitor, 'vars')
+        if not isinstance(variables, (list, tuple)):
+            return
+        selected.update(str(variable).strip() for variable in variables)
+    if selected & ASSESSED_VARIABLES:
+        return
+    raise RecordingError(
+        "The result object '{}' of the quasi-dynamic simulation selects none of the variables Outage Assessment "
+        "assesses ({}): every run would record nothing to assess. No calculation was started.".format(
+            object_name(result), ", ".join(sorted(ASSESSED_VARIABLES))),
+        details=["Bound result object: " + object_key(result), "Its variable selection: " + monitor_text(result)],
+        hint="Open ComStatsim > Result Variables and select c:loading for lines and transformers and m:u for "
+             "terminals, then run Outage Assessment again.")
+
+
 def recorded_variables(elmres):
     """{variable: columns} a result object holds, or None when it cannot be loaded."""
     try:
@@ -12811,6 +12839,7 @@ def execute_outage_assessment(app):
                 n1_runs = calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state,
                                        result_objects, grid=n1_grid)
         else:
+            check_variable_selection(original_result)
             check_run_size(app, span_grid(qds, ready), len({plan["fingerprint"] for plan in ready}), logger)
             span = set_qds_span(qds_guard, qds, ready, logger)
             request["qds_run_period"] = (

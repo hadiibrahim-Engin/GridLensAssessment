@@ -193,9 +193,12 @@ Phase 1 only calculates and keeps; nothing is read yet.
    copies it into the study case as `OA_<yymmdd-HHMMSS>_<case>` (REF:
    `…_REF`) and writes case and fingerprint into the copy's description. The
    copies stay; Outage Assessment never deletes them.
-5. **Recording check.** Right after the first run Outage Assessment checks that the
-   copy records at least one assessed variable. If not, the run stops at once
-   instead of calculating the remaining cases for nothing.
+5. **Recording check.** Before the first QDS Outage Assessment reads the variable
+   selection (IntMon objects) of the bound result object (`check_variable_selection`):
+   without any assessed variable no run is started (a result object without IntMon
+   records only `b:noconv` and `b:number`). Right after the first run it checks
+   again that the copy records at least one assessed variable (`check_recording`)
+   for a selection it could not read beforehand.
 6. **After every run** the *Ignored* flags are restored and read back, the
    study time is put back, and switches that are in another state than before
    the run are logged (Outage Assessment does not change switches).

@@ -235,9 +235,12 @@ copy.loc_name = "OA_<stamp>_<case>"
   The binding PowerFactory sets is left as after a run by hand.
 - If `ComStatsim.results` is bound to a kept Outage Assessment object, Outage Assessment stops
   before any calculation: the QDS would overwrite it.
-- Right after the first run Outage Assessment checks that the copy records loading or
-  voltage (`check_recording`); otherwise it stops with `RecordingError` and
-  names what is recorded.
+- Before the first QDS Outage Assessment reads the variable selection (IntMon) of the
+  bound result object (`check_variable_selection`): if it selects none of
+  `c:loading`, `m:loading`, `m:u`, `m:u1`, no run starts (`RecordingError`). A result
+  object without IntMon records only `b:noconv` and `b:number` (seen 17 Nov 2026).
+  Right after the first run Outage Assessment checks again that the copy records
+  loading or voltage (`check_recording`).
 - Outage Assessment writes version, case and a fingerprint of the outages into the
   description (`desc`) of every copy; a kept run can thus be re-evaluated later
   without calculating (`kept_runs`).

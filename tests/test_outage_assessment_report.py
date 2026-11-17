@@ -82,6 +82,13 @@ class ElmRes(PFObject):
     def clone(self):
         return ElmRes(self.loc_name)
 
+    def GetContents(self, pattern="*", *_recursive):
+        """As in PowerFactory, the result object holds its variable selection: one IntMon per class."""
+        if pattern != "*.IntMon":
+            return []
+        return [PFObject("Lines", "IntMon", classnm="ElmLne", vars=["c:loading"]),
+                PFObject("Nodes", "IntMon", classnm="ElmTerm", vars=["m:u"])]
+
     def Load(self):
         return None
 
@@ -2161,6 +2168,57 @@ def test_a_failing_comparison_fails_only_its_own_case(monkeypatch):
     runs = app.report.tables["CalculationRuns"]["values"]
     assert runs[1, "result_object"].endswith("_A"), "the ElmRes of the failed comparison is kept"
     assert [item.outserv for item in outages] == [0, 0] and app.qds.iopt_maint == 0
+
+
+class MonitoredResult(ElmRes):
+    """A bound result object whose variable selection (IntMon objects) can be read."""
+
+    def __init__(self, monitors):
+        super().__init__()
+        self.monitors = monitors
+
+    def GetContents(self, pattern="*", *_recursive):
+        return list(self.monitors) if pattern == "*.IntMon" else []
+
+
+def test_a_result_object_without_assessed_variables_stops_before_any_calculation():
+    # Hadi, 17 Nov 2026: a run stopped only after its first QDS because the result object had no variable selection.
+    app = App((PlannedOutage("FS1"),))
+    app.original_result = app.qds.results = MonitoredResult([])
+
+    with pytest.raises(gl.RecordingError, match="No calculation was started") as error:
+        gl.execute_outage_assessment(app)
+
+    assert "no variable selection (no IntMon inside)" in "\n".join(error.value.details)
+    assert "c:loading" in error.value.hint
+    assert app.qds.execute_calls == 0 and app.study.copies == []
+    assert app.qds.iopt_maint == 0 and app.qds.results is app.original_result
+
+    app = App((PlannedOutage("FS1"),))
+    app.original_result = app.qds.results = MonitoredResult([PFObject("Bus", "IntMon", classnm="ElmTerm", vars=["m:P"])])
+    with pytest.raises(gl.RecordingError, match="selects none of the variables"):
+        gl.execute_outage_assessment(app)
+    assert app.qds.execute_calls == 0
+
+
+def test_a_result_object_that_selects_an_assessed_variable_is_calculated():
+    app = App((PlannedOutage("FS1"),))
+    app.original_result = app.qds.results = MonitoredResult(
+        [PFObject("Lines", "IntMon", classnm="ElmLne", vars=["c:loading", "m:P:bus1"])])
+
+    gl.execute_outage_assessment(app)
+
+    assert app.qds.execute_calls == 2
+
+
+def test_an_unreadable_variable_selection_is_left_to_the_check_after_the_first_run():
+    gl.check_variable_selection(None)
+    gl.check_variable_selection(ElmRes())
+    gl.check_variable_selection(MonitoredResult([PFObject("Odd", "IntMon", vars=None)]))
+
+    class NoContents:
+        loc_name = "Result"
+    gl.check_variable_selection(NoContents())
 
 
 def test_a_run_too_large_for_the_free_memory_stops_before_any_calculation(monkeypatch):

@@ -244,9 +244,12 @@ copy.loc_name = "OA_<stamp>_<Fall>"
   PowerFactory setzt, bleibt wie nach einem Lauf von Hand.
 - Ist `ComStatsim.results` an ein erhaltenes Outage Assessment-Objekt gebunden, stoppt
   Outage Assessment vor jeder Rechnung: die QDS würde es überschreiben.
-- Direkt nach dem ersten Lauf prüft Outage Assessment, ob die Kopie Auslastung oder
-  Spannung aufzeichnet (`check_recording`); sonst stoppt es mit
-  `RecordingError` und nennt, was aufgezeichnet ist.
+- Vor der ersten QDS liest Outage Assessment die Variablenauswahl (IntMon) des
+  gebundenen Ergebnisobjekts (`check_variable_selection`): wählt sie keine von
+  `c:loading`, `m:loading`, `m:u`, `m:u1`, startet kein Lauf (`RecordingError`). Ein
+  Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und `b:number` auf (gesehen
+  17.11.2026). Direkt nach dem ersten Lauf prüft Outage Assessment noch einmal, ob
+  die Kopie Auslastung oder Spannung aufzeichnet (`check_recording`).
 - In die Beschreibung (`desc`) jeder Kopie schreibt Outage Assessment Version, Fall und
   einen Fingerabdruck der Außerbetriebnahmen; damit kann ein erhaltener Lauf
   später ohne Rechnung neu ausgewertet werden (`kept_runs`).
