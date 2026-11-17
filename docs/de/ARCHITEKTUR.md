@@ -206,8 +206,9 @@ Phase 1 rechnet und erhält nur; gelesen wird noch nichts.
 5. **Aufzeichnungsprüfung.** Vor der ersten QDS liest Outage Assessment die
    Variablenauswahl (IntMon) des gebundenen Ergebnisobjekts. Nennt sie keine
    bewertete Variable (ein Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und
-   `b:number` auf), legt Outage Assessment für den Lauf die Standardvariablen von
-   PowerFactory an – je ein klassenweiter IntMon: `c:loading` von `ElmLne`, `ElmTr2`,
+   `b:number` auf), drückt Outage Assessment zuerst PowerFactorys *Add default
+   variables* (Attribut `butdefault`) und legt sonst die Standardvariablen selbst
+   an – je ein klassenweiter IntMon: `c:loading` von `ElmLne`, `ElmTr2`,
    `ElmTr3`, `m:u` von `ElmTerm` (`ensure_default_variables`) –, liest sie zurück und
    entfernt sie in Schritt 5 wieder (`restore_default_variables`). Lassen sie sich
    nicht anlegen, startet kein Lauf. Direkt nach dem ersten Lauf prüft es noch

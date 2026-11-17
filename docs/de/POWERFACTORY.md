@@ -247,12 +247,16 @@ copy.loc_name = "OA_<stamp>_<Fall>"
 - Vor der ersten QDS liest Outage Assessment die Variablenauswahl (IntMon) des
   gebundenen Ergebnisobjekts. Wählt sie keine von `c:loading`, `m:loading`, `m:u`,
   `m:u1` – ein Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und `b:number` auf
-  (gesehen 17.11.2026) –, legt Outage Assessment für den Lauf die Standardvariablen
-  an, wie es *Add default variables* im Dialog tut: `result.CreateObject("IntMon", …)`,
-  `classnm` = Klasse, `AddVar("c:loading")` / `AddVar("m:u")`
-  (`ensure_default_variables`); es liest sie zurück und löscht sie nach dem Lauf.
-  Verweigert PowerFactory das, startet kein Lauf (`RecordingError`). Noch nicht in
-  PowerFactory geprüft: dass `classnm` und `AddVar` wie im Dialog wirken. Direkt nach dem ersten Lauf prüft Outage Assessment noch einmal, ob
+  (gesehen 17.11.2026) –, drückt Outage Assessment zuerst PowerFactorys eigenes
+  *Add default variables*: es schreibt 1 in das Attribut `butdefault` der ComStatsim
+  (sonst des Ergebnisobjekts). Kommt dadurch keine bewertete Variable hinzu, legt es
+  sie selbst an: `result.CreateObject("IntMon", …)`, `classnm` = Klasse,
+  `IntMon.AddVar("c:loading")` / `AddVar("m:u")` (`ensure_default_variables`). In
+  beiden Fällen liest es die Auswahl zurück und löscht das Angelegte nach dem Lauf.
+  Geht beides nicht, startet kein Lauf (`RecordingError`). `butdefault` ist ein
+  Attribut und steht deshalb nicht in der Python-Funktionsreferenz (nur Methoden);
+  dort stehen `IntMon.AddVar` und `ElmRes.AddVariable(element, varname)` (je Objekt,
+  nicht je Klasse). Noch nicht in PowerFactory geprüft: die Wirkung von `butdefault`. Direkt nach dem ersten Lauf prüft Outage Assessment noch einmal, ob
   die Kopie Auslastung oder Spannung aufzeichnet (`check_recording`).
 - In die Beschreibung (`desc`) jeder Kopie schreibt Outage Assessment Version, Fall und
   einen Fingerabdruck der Außerbetriebnahmen; damit kann ein erhaltener Lauf

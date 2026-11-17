@@ -238,12 +238,16 @@ copy.loc_name = "OA_<stamp>_<case>"
 - Before the first QDS Outage Assessment reads the variable selection (IntMon) of the
   bound result object. If it selects none of `c:loading`, `m:loading`, `m:u`, `m:u1`
   – a result object without IntMon records only `b:noconv` and `b:number` (seen
-  17 Nov 2026) – Outage Assessment adds the default variables for the run, as
-  *Add default variables* does in the dialog: `result.CreateObject("IntMon", …)`,
-  `classnm` = class, `AddVar("c:loading")` / `AddVar("m:u")`
-  (`ensure_default_variables`); it reads them back and deletes them after the run.
-  If PowerFactory refuses that, no run starts (`RecordingError`). Not yet verified
-  in PowerFactory: that `classnm` and `AddVar` take effect as in the dialog.
+  17 Nov 2026) – Outage Assessment first presses PowerFactory's own *Add default
+  variables*: it writes 1 to the attribute `butdefault` of the ComStatsim (else of
+  the result object). Where that adds no assessed variable it creates them itself:
+  `result.CreateObject("IntMon", …)`, `classnm` = class, `IntMon.AddVar("c:loading")`
+  / `AddVar("m:u")` (`ensure_default_variables`). Either way it reads the selection
+  back and deletes what was added after the run. If nothing works, no run starts
+  (`RecordingError`). `butdefault` is an attribute and therefore not in the Python
+  function reference (methods only), which documents `IntMon.AddVar` and
+  `ElmRes.AddVariable(element, varname)` (per object, not per class). Not yet
+  verified in PowerFactory: the effect of writing `butdefault`.
   Right after the first run Outage Assessment checks again that the copy records
   loading or voltage (`check_recording`).
 - Outage Assessment writes version, case and a fingerprint of the outages into the

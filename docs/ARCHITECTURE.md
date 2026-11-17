@@ -196,7 +196,8 @@ Phase 1 only calculates and keeps; nothing is read yet.
 5. **Recording check.** Before the first QDS Outage Assessment reads the variable
    selection (IntMon objects) of the bound result object. When it names no assessed
    variable (a result object without IntMon records only `b:noconv` and `b:number`),
-   Outage Assessment adds PowerFactory's default variables for the run – one
+   Outage Assessment first presses PowerFactory's *Add default variables* (attribute
+   `butdefault`) and otherwise adds the default variables itself – one
    class-wide IntMon each: `c:loading` of `ElmLne`, `ElmTr2`, `ElmTr3`, `m:u` of
    `ElmTerm` (`ensure_default_variables`) – reads them back and removes them in step 5
    (`restore_default_variables`). If they cannot be added, no run starts. Right after
