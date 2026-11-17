@@ -227,16 +227,19 @@ Case ist dann von Hand zu prüfen.
 ### Schritt 6 – Phase 2: Auswertung
 
 1. Ergebnisse werden spaltenweise in einen temporären `IntVec` gelesen
-   (`OutageAssessment_column_buffer`, im laufenden ComPython angelegt und am Ende des
-   Schritts gelöscht). Ohne ihn ist jeder Wert ein Aufruf (langsam); die
+   (`OutageAssessment_column_buffer`, im aktiven Study Case angelegt – im laufenden
+   ComPython nur, wenn der Study Case ihn verweigert – und am Ende des Schritts
+   gelöscht). Ohne ihn ist jeder Wert ein Aufruf (langsam); die
    Laufzusammenfassung zeigt, welcher Weg genutzt wurde.
 2. Zuerst wird REF gelesen, dann jeder Fall aus seiner Kopie, dann mit REF
    verglichen (Abschnitt 7).
 3. Für jede Außerbetriebnahme prüft Outage Assessment, ob sie gewirkt hat und ob sie
    nach ihrem Fenster weiterwirkt (Abschnitt 7.6).
 4. n-1-Ergebnisse werden gelesen und klassifiziert (Abschnitt 8).
-5. Ein Speicherbudget (`MAX_RUN_CELLS`) stoppt die Auswertung vor dem nächsten
-   Fall, nicht nach dem letzten; alles Gerechnete bleibt erhalten.
+5. Vor dem Lesen eines Ergebnisobjekts wird seine Größe (Elemente × Zeitschritte ×
+   8 Byte plus rund 2 KB je Element) gegen den freien Speicher geprüft
+   (`memory_problem`); ein Lauf, der nicht auswertbar ist, stoppt schon in Schritt 4
+   vor seiner ersten QDS (`check_run_size`, siehe Abschnitt 6).
 6. Jeder Fall wird **einmal** beurteilt; Log, Falltabelle und Zusammenfassung
    verwenden dieses Urteil.
 
@@ -390,13 +393,13 @@ kein Lauf wird verkürzt.
 | bewertete Elemente | Leitungen `ElmLne`, Transformatoren `ElmTr2`/`ElmTr3` (Auslastung), Knoten `ElmTerm` (Spannung) |
 | Variablen | die erste aufgezeichnete von `c:loading`, `m:loading` für Zweige; `m:u`, `m:u1` für Knoten; Winkel werden nicht gelesen |
 | Zeitachse | Spalte −1 des `ElmRes`, absolute Epoch-Sekunden; sie muss streng steigen, sonst scheitert der Fall |
-| Berichtsfilter | optionale Netzauswahl (Settings → Network scope); das Netz eines Elements kommt aus `cpGrid`, sonst aus dem `ElmNet` in seinem Pfad. Ohne Auswahl wird jedes Netz bewertet (bzw. `GRID_NAME_FILTER`, wenn im Skript gesetzt) |
+| Berichtsfilter | optionale Netzauswahl (Settings → Network scope); das Netz eines Elements kommt aus `cpGrid`, sonst aus dem `ElmNet` in seinem Pfad. Ohne Auswahl wird jedes Netz bewertet |
 | DC-Knoten | `ElmTerm.systype == 1` werden nicht bewertet und auf der Qualitätsseite gezählt |
 | spannungslos | eine Spannung unter *De-energised below* (Standard 0,1 p.u.) oder NaN ist kein Messwert; der Knoten gilt in diesem Schritt als spannungslos |
 | ungültige Werte | NaN, ±∞, `None`, Booleans und unlesbare Zellen sind keine Messwerte; eine Auslastungszelle ohne Wert ist in diesem Schritt *kein Wert* (Abschnitt 6.1), eine Spannungszelle ohne Wert zählt als spannungslos |
 | fehlende Reihen | ausgeschaltete oder nicht aufgezeichnete Betriebsmittel erhalten keine Reihe; keine künstlichen Nullen |
 | Namen | der Bericht zeigt nur `loc_name`; vollständige Pfade sind interne Identitäten |
-| Größengrenzen | höchstens 35 040 Zeilen (`MAX_RESULT_ROWS`) und 20 000 000 Zellen je Ergebnisobjekt (`MAX_RESULT_CELLS`), 120 000 000 Zellen je Lauf (`MAX_RUN_CELLS`) |
+| Größengrenzen | geprüft **vor der ersten QDS** (`check_run_size`): der Speicher der Auswertung – Elemente im Netzumfang × (2 × 8 Byte × Zeitschritte + 2 KB + 4 KB je Planungsfall), gemessen am 17.11.2026 – muss in 80 % (`MEMORY_SHARE`) des freien Arbeitsspeichers passen (`available_memory_bytes`; Windows `GlobalMemoryStatusEx`). Dieselbe Speicherprüfung steht vor dem Lesen jedes Ergebnisobjekts. Ist der freie Speicher unbekannt, wird nur die Schätzung protokolliert. Keine festen Zellgrenzen mehr seit 17.11.2026 |
 
 
 ### 6.1 Betriebsmittel, die zeitweise nicht in Betrieb sind
@@ -633,7 +636,6 @@ Einstellungen interpretieren Ergebnisse; Einstellungen der Kategorie B würden
 | Classification | WORSENED / IMPROVED versus PRE_EXISTING, loading | 0,1 %-Punkte |
 | Classification | WORSENED / IMPROVED versus PRE_EXISTING, voltage | 0,001 p.u. |
 | Classification | Reduced margin warning from, loading | 80 % |
-| Report | Appendix: also list a loading / voltage change from | 1,0 %-Punkte / 0,005 p.u. |
 | Report | Rows of the Top-N lists | 10 (höchstens 50) |
 | Report | Points per time plot, at most | 200 (höchstens 2000) |
 | Run | Reference case (REF) | an |

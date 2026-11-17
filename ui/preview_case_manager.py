@@ -46,7 +46,7 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>
-# Outage Assessment 8.3.0: 186 definitions.
+# Outage Assessment 8.3.0: 184 definitions.
 import hashlib
 import math
 import re
@@ -116,19 +116,13 @@ N1_REFERENCE, N1_PRIME = 'n-1', "(n-1)'"
 ASSESSMENTS = ('n-0', N1_REFERENCE, N1_PRIME)
 
 
-ALLOW_OUTAGE_TIME_OVERRIDE = False
-
-
-GRID_NAME_FILTER = ''
-
-
 SNAPSHOT_PREFIX = 'OA_'
 
 
-MAX_LABEL_LENGTH = 80
-
-
 MAX_DIAGNOSTIC_LENGTH = 4000
+
+
+LOG_VALUE_LENGTH = 80
 
 
 def safe_attr(obj, name, default=None):
@@ -278,7 +272,7 @@ def _contingency_setting(key, label):
 SETTINGS = (
     _setting('monitoring_grids', 'Network scope', 'Report filter: assessed equipment, grids', '', (), 'grids',
              applies="n-0, n-1, (n-1)'",
-             note='evaluation only, also in a re-evaluation; no grid selected: every grid (or GRID_NAME_FILTER)'),
+             note='evaluation only, also in a re-evaluation; no grid selected: every grid'),
     _setting('contingency_grids', 'Network scope', 'n-1 filter: grids of the outaged equipment', '', None, 'grids',
              CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
              note='calculation: one contingency per branch element in these grids; none: every grid'),
@@ -960,7 +954,7 @@ def _declared_attributes(obj):
         if callable(value):
             continue
         described.append("{}={}".format(
-            name, clip_text(value, MAX_LABEL_LENGTH) if value is not None else ""))
+            name, clip_text(value, LOG_VALUE_LENGTH) if value is not None else ""))
     return described
 
 
@@ -1592,9 +1586,9 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
                 plan['overridden'].append(record)
         if not plan['members']:
             errors.append('no planned outage is assigned')
-        if plan['overridden'] and not ALLOW_OUTAGE_TIME_OVERRIDE:
-            errors.append('own dates for {} are not applied: writing IntPlannedout start and end times is not verified '
-                          '(ALLOW_OUTAGE_TIME_OVERRIDE is off); create a planned outage with these dates instead'.format(
+        if plan['overridden']:
+            errors.append('own dates for {} are not applied: Outage Assessment does not write the start and end times '
+                          'of a planned outage; create a planned outage with these dates instead'.format(
                               ', '.join(record['name'] for record in plan['overridden'])))
         windows = plan['windows']
         for rule in config.get('rules') or ():
@@ -2420,16 +2414,6 @@ class CaseEditor:
         return 'from the first to the last planned outage of the calculated cases, plus one QDS step after ' \
                '(ComStatsim: {})'.format(self._qds_text)
 
-    def settings_rows(self):
-        """(key, label, unit, value text, source, category, editable) of every setting, in SETTINGS order."""
-        overrides = self.settings_overrides()
-        values = default_settings()
-        values.update({key: value for key, value in overrides.items() if key in values})
-        return [(setting['key'], setting['label'], setting['unit'],
-                 setting_text(setting['key'], values.get(setting['key'], setting['default'])),
-                 setting_source(setting['key'], overrides), setting['category'], setting['editable'])
-                for setting in SETTINGS]
-
     def set_settings(self, values):
         """Take the edited values of the Settings tab; [(key, problem)] and nothing changes when one is invalid."""
         parsed, problems = {}, []
@@ -2515,7 +2499,7 @@ class CaseEditor:
         grids = self.selected_grids('monitoring_grids')
         if grids:
             return ', '.join(grids)
-        return 'every grid' + (' named *{}*'.format(GRID_NAME_FILTER) if GRID_NAME_FILTER else '')
+        return 'every grid'
 
     # --- assessment and preview ------------------------------------------------
     def set_log_level(self, level):
@@ -4218,9 +4202,6 @@ class CaseManagerDialog:
                 _counted(len(overrides), 'settings override', 'settings overrides') if overrides else 'default settings'),
             foreground=self.PROBLEM if problems else self.MUTED)
         self.refresh_settings_state()
-
-    def refresh_preview(self):
-        self.refresh_overview()
 
     def draw_timeline(self):
         canvas = self.canvas

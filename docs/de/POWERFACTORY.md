@@ -271,13 +271,13 @@ cols = res.GetNumberOfColumns()
 var = res.GetVariable(col)               # "c:loading"
 obj = res.GetObject(col)                 # das Betriebsmittel der Spalte
 err, value = res.GetValue(row, col)      # eine Zelle; err != 0: kein Wert
-vec = script.CreateObject("IntVec", "OutageAssessment_column_buffer")
+vec = study_case.CreateObject("IntVec", "OutageAssessment_column_buffer")
 res.GetColumnValues(vec, col)            # eine ganze Spalte nach vec.V
 res.Release()
 ```
 
 - Spalte für Spalte liest Outage Assessment mit `GetColumnValues` in einen `IntVec`,
-  den es im laufenden ComPython anlegt und am Ende wieder löscht
+  den es im aktiven Study Case (sonst im laufenden ComPython) anlegt und am Ende wieder löscht
   (`open_column_buffer`, `read_column`); geht das nicht, Zelle für Zelle mit
   `GetValue` (langsam, im Laufbericht gezählt).
 - Die Zeitspalte liefert die absolute Zeitachse; Outage Assessment prüft, dass REF und

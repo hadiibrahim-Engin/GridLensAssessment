@@ -9,7 +9,7 @@
       <Name>SQLite</Name>
     </SQLite>
   </Databases>
-  <DataSources isList="true" count="40">
+  <DataSources isList="true" count="41">
     <ScriptedReportMeta Ref="2" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedReportMeta</Alias>
       <Columns isList="true" count="25">
@@ -272,7 +272,7 @@
     </ScriptedTopLinesByCase>
     <ScriptedAppendixLine Ref="14" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedAppendixLine</Alias>
-      <Columns isList="true" count="19">
+      <Columns isList="true" count="20">
         <value>block,System.Int32</value>
         <value>row_order,System.Int32</value>
         <value>element_name,System.String</value>
@@ -292,6 +292,7 @@
         <value>col_count,System.Int32</value>
         <value>violation,System.Int32</value>
         <value>location_text,System.String</value>
+        <value>rank,System.Int32</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
       <Dictionary isRef="0" />
@@ -303,7 +304,7 @@
     </ScriptedAppendixLine>
     <ScriptedAppendixTransformer Ref="15" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedAppendixTransformer</Alias>
-      <Columns isList="true" count="19">
+      <Columns isList="true" count="20">
         <value>block,System.Int32</value>
         <value>row_order,System.Int32</value>
         <value>element_name,System.String</value>
@@ -323,6 +324,7 @@
         <value>col_count,System.Int32</value>
         <value>violation,System.Int32</value>
         <value>location_text,System.String</value>
+        <value>rank,System.Int32</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
       <Dictionary isRef="0" />
@@ -334,7 +336,7 @@
     </ScriptedAppendixTransformer>
     <ScriptedAppendixVoltage Ref="16" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
       <Alias>ScriptedAppendixVoltage</Alias>
-      <Columns isList="true" count="19">
+      <Columns isList="true" count="20">
         <value>block,System.Int32</value>
         <value>row_order,System.Int32</value>
         <value>element_name,System.String</value>
@@ -354,6 +356,7 @@
         <value>col_count,System.Int32</value>
         <value>violation,System.Int32</value>
         <value>location_text,System.String</value>
+        <value>rank,System.Int32</value>
       </Columns>
       <CommandTimeout>30</CommandTimeout>
       <Dictionary isRef="0" />
@@ -980,6 +983,24 @@
       <Parameters isList="true" count="0" />
       <SqlCommand>SELECT * FROM "ScriptedEpisodes" ORDER BY "case_order", "row_order"</SqlCommand>
     </ScriptedEpisodes>
+    <ScriptedTimeShare Ref="42" type="Stimulsoft.Report.Dictionary.StiSQLiteSource" isKey="true">
+      <Alias>ScriptedTimeShare</Alias>
+      <Columns isList="true" count="6">
+        <value>case_order,System.Int32</value>
+        <value>case_name,System.String</value>
+        <value>share_low,System.Int32</value>
+        <value>share_mid,System.Int32</value>
+        <value>share_high,System.Int32</value>
+        <value>share_top,System.Int32</value>
+      </Columns>
+      <CommandTimeout>30</CommandTimeout>
+      <Dictionary isRef="0" />
+      <Key>a0034894487cd4255ddb6ace4275f9ac</Key>
+      <Name>ScriptedTimeShare</Name>
+      <NameInSource>SQLite</NameInSource>
+      <Parameters isList="true" count="0" />
+      <SqlCommand>SELECT * FROM "ScriptedTimeShare" ORDER BY "case_order"</SqlCommand>
+    </ScriptedTimeShare>
   </DataSources>
   <Relations isList="true" count="0" />
   <Resources isList="true" count="0" />

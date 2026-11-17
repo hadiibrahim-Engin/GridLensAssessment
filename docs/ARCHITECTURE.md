@@ -216,16 +216,19 @@ value; the study case must then be checked by hand.
 ### Step 6 – Phase 2: evaluation
 
 1. Results are read column by column into a temporary `IntVec`
-   (`OutageAssessment_column_buffer`, created in the running ComPython and deleted at
-   the end of the step). Without it every value is one call (slow); the run
-   summary shows which way was used.
+   (`OutageAssessment_column_buffer`, created in the active study case – the running
+   ComPython only when the study case refuses it – and deleted at the end of the
+   step). Without it every value is one call (slow); the run summary shows which way
+   was used.
 2. REF is read first, then every case from its kept object, then compared
    with REF (section 7).
 3. For every outage Outage Assessment checks whether it took effect and whether it
    stays in effect after its window (section 7.6).
 4. n-1 results are read and classified (section 8).
-5. A memory budget (`MAX_RUN_CELLS`) stops the evaluation before the next
-   case, not after the last; everything calculated stays kept.
+5. Before a result object is read, its size (elements × time steps × 8 bytes plus
+   about 2 KB per element) is checked against the free memory (`memory_problem`);
+   a run that cannot be evaluated is already stopped in step 4, before its first
+   QDS (`check_run_size`, see section 6).
 6. Every case is judged **once**; log, case table and summary use that verdict.
 
 ### Step 7 – Report
@@ -372,13 +375,13 @@ shortened.
 | assessed elements | lines `ElmLne`, transformers `ElmTr2`/`ElmTr3` (loading), terminals `ElmTerm` (voltage) |
 | variables | first recorded of `c:loading`, `m:loading` for branches; `m:u`, `m:u1` for terminals; angles are not read |
 | time axis | column −1 of the `ElmRes`, absolute epoch seconds; it must increase strictly, otherwise the case fails |
-| report filter | optional grid selection (Settings → Network scope); the grid of an element comes from `cpGrid`, else from the `ElmNet` in its path. Without a selection every grid is assessed (or `GRID_NAME_FILTER`, if set in the script) |
+| report filter | optional grid selection (Settings → Network scope); the grid of an element comes from `cpGrid`, else from the `ElmNet` in its path. Without a selection every grid is assessed |
 | DC terminals | `ElmTerm.systype == 1` are not assessed and counted on the quality page |
 | de-energised | a voltage below *De-energised below* (default 0.1 p.u.) or NaN is no measured value; the node counts as de-energised at that step |
 | invalid values | NaN, ±∞, `None`, booleans and unreadable cells are no measured values; a loading cell without a value is *no value* at that step (section 6.1), a voltage cell without a value counts as de-energised |
 | missing series | equipment switched off or not recorded gets no series; no artificial zeros |
 | element names | the report shows `loc_name` only; full paths are internal identities |
-| size limits | at most 35 040 rows (`MAX_RESULT_ROWS`) and 20 000 000 cells per result object (`MAX_RESULT_CELLS`), 120 000 000 cells per run (`MAX_RUN_CELLS`) |
+| size limits | checked **before the first QDS** (`check_run_size`): the memory the evaluation needs – elements in the network scope × (2 × 8 bytes × time steps + 2 KB + 4 KB per planning case), measured on 17 Nov 2026 – must fit into 80 % (`MEMORY_SHARE`) of the free physical memory (`available_memory_bytes`; Windows `GlobalMemoryStatusEx`). The same memory check precedes the reading of every result object. Without a known free memory only the estimate is logged. No fixed cell limits since 17 Nov 2026 |
 
 ### 6.1 Equipment not in operation over time
 
@@ -600,7 +603,6 @@ PowerFactory calculates and are shown read only.
 | Classification | WORSENED / IMPROVED versus PRE_EXISTING, loading | 0.1 %-points |
 | Classification | WORSENED / IMPROVED versus PRE_EXISTING, voltage | 0.001 p.u. |
 | Classification | Reduced margin warning from, loading | 80 % |
-| Report | Appendix: also list a loading / voltage change from | 1.0 %-points / 0.005 p.u. |
 | Report | Rows of the Top-N lists | 10 (at most 50) |
 | Report | Points per time plot, at most | 200 (at most 2000) |
 | Run | Reference case (REF) | on |

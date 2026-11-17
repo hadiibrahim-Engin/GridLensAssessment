@@ -1,6 +1,6 @@
 # Outage Assessment – how every report table is calculated and built
 
-Outage Assessment publishes **40 tables** (data contract 7.2) that the reports read:
+Outage Assessment publishes **41 tables** (data contract 7.3) that the reports read:
 `MASTER_OUTAGE_ASSESSMENT` (main report), `MASTER_OUTAGE_ASSESSMENT_DETAIL` (technical detail
 report) and `MASTER_OUTAGE_ASSESSMENT_TABLES` (tabular report, n-0 only, meant to replace both), kept as pages in `designer-pages/<report>/` (one `.dct` dictionary and
 one `.pg` file per page). For the same run ID both reports print the same
@@ -35,12 +35,12 @@ flowchart LR
 3. **`validate_payload`** checks every row: only declared fields (`TABLES`),
    the right type (string, integer, finite number), every required field
    (`REQUIRED_FIELDS`) filled, exactly one row in `ScriptedReportMeta`. Names
-   are shortened to 80 characters, other texts to 500, and end with "…".
+   and texts are published complete, never shortened.
 4. **`publish_report`** (only below an `IntReport`): `Reset()` exactly once,
    then per table `CreateTable(name)` with the name **without** the prefix
    `Scripted` (PowerFactory adds it), `CreateField` per field and `SetValue`
-   per filled cell. A table with more than 5000 rows (`MAX_TABLE_ROWS`) is cut
-   and the cut is reported on the quality page.
+   per filled cell. Every row is published: no table, register or list of
+   single n-1 findings is cut (Hadi, 17 Nov 2026: "ich brauche alle Daten").
 
 **Only what is printed is published.** Fields the script computes for itself
 (summaries, log, checks) and no report shows are listed in
@@ -161,7 +161,6 @@ engine does not apply relations to charts.
 | `outages_<case>` | did each outage take effect (`APPLIED`, `EFFECT SEEN`, `NO EFFECT`, `NOT CHECKABLE`) |
 | `outages_after_<case>` | an outage that stays in effect after its window |
 | `n1_<case>` | (n-1)' against n-1: counts per status; FAIL when the case causes `NEW` or `WORSENED`, WARNING when results are missing |
-| `table_limit_<table>` | FAIL when a table was cut at 5000 rows |
 
 `affected_element` names the case or element concerned, `-` otherwise.
 
@@ -223,9 +222,10 @@ on `class_label`.
 
 ### 3.7 `ScriptedCaseCounts` – critical elements per case
 
-**Main 9** (chart). **Rows:** REF and every calculated case (`_case_counts`).
-`line_count`, `transformer_count`, `node_count`: elements critical over the
-whole period in this run.
+**Main 9** and the first histogram of the tabular report (chart). **Rows:** REF
+and every calculated case (`_case_counts`). `line_count`, `transformer_count`,
+`node_count`: elements over their limit (strictly) in the whole period of this
+run; a case does not count the equipment it switches off itself.
 
 ### 3.8 `ScriptedLineLoadingBars` – top lines over all runs
 
@@ -280,21 +280,26 @@ line.
 
 ### 3.12 `ScriptedAppendixLine` and `ScriptedAppendixTransformer` – appendices A and B
 
-**Detail**, appendices A (lines) and B (transformers). Matrix tables with one
-row per element that matters (`_loading_appendix`): its maximum in any run is
-at or above the warning threshold, **or** its maximum differs from REF by at
-least *Appendix: also list a loading change from* in a case. The cell is the
-maximum of the element in that run. Sorted by the highest maximum, then name.
-`violation`: 1 when a case causes a violation of the element, 2 when it
-already exists in REF.
+**Detail** appendices A (lines) and B (transformers), and the tabular report.
+Matrix tables with one row per element **over its limit** (strictly above
+100 %) in REF or in a case (`_loading_appendix`); there is no warning threshold
+and no change threshold (since 16 Nov 2026). The cell is the maximum of the
+element over the whole calculated period of that run and, when it violates the
+limit, the share of the period over it (`112.4 % · 18 %`, `hours_over` /
+`period_hours`). In the case that switches the element off itself (one of its
+planned outages) the cell reads `switched off` and the case counts nothing for
+it. Ranked by the highest maximum (`rank` 1, 2, …), then name. `violation`: 1
+when a case causes a violation of the element, 2 when it already exists in REF.
 
 ### 3.13 `ScriptedAppendixVoltage` – appendix C
 
-**Detail**, appendix C (node voltages). One row per node that matters
-(`_voltage_appendix`): a status other than `OK` in a case, **or** a minimum
-that differs from REF by at least *Appendix: also list a voltage change from*.
-The cell is the minimum voltage in that run (p.u.). Sorted by the largest
-excess beyond the band, then name.
+**Detail** appendix C (node voltages), and the tabular report. One row per node
+**outside its band** in REF or in a case (`_voltage_appendix`). The cell is the
+voltage furthest from the band over the whole calculated period (p.u.,
+`worst_voltage`) and the share of the period outside the band. Ranked by the
+largest excess beyond the band, then name. Internal station nodes (`ElmTerm`
+with usage *internal node*, `iUsage` 2) carry the voltage of their busbar and
+are not assessed at all (`is_internal_node`; counted on the quality page).
 
 ### 3.14–3.34 Statistics per level, element, contingency and time
 
@@ -325,12 +330,9 @@ distinct equipment.
 | 3.33 | `ScriptedTimeCriticality`, `ScriptedTimeMatrix` | main 12 | per study time | `_time_criticality` | with n-1: distinct critical elements in n-1 and in (n-1)' over every case (two series), per case E = critical elements, C = critical contingencies. Without n-1: Reference and all cases per QDS time step (the chart takes the largest count since the previous plot point); the table lists the steps where a case has other critical elements than Reference |
 | 3.34 | `ScriptedAssessmentSettings`, `ScriptedResultProvenance` | main 13, detail 15 | per setting; per result object | `_assessment_settings`, `_result_provenance` | value, unit, origin, status; object name and PowerFactory path where known |
 
-**Cuts.** No register is cut in case order. When a table would exceed 5000
-rows, `_fair_cut` shares the rows between the cases (each keeps its most severe
-rows) and `_block_rows` keeps the same, most severe rows in every case block;
-the cut is named on the quality page and every count still includes the rows
-left out. Only the top rows of the n-1 reference findings are published (the
-detail report shows the n-0 rows). Every planning case keeps its rows, also
+**No cuts.** Every table holds every row: the registers, the episodes, every
+critical element of the main report and every n-1 reference finding (`main_rank`
+only marks the top rows the main report prints). Every planning case keeps its rows, also
 when its QDS or its n-1 failed; `ScriptedQualityRegister` also holds
 NOT APPLICABLE per contingency.
 
@@ -354,28 +356,35 @@ time, Reference at the peak and the change (case − Reference), the most severe
 (`reference_episodes`, whole period, status EXCEEDED) come first, then every case. Before the episodes of each
 section a case row (`row_kind = 'case'`, only `case_name` = "ID · name") is written; the template draws it as a
 grey bar. Within a section the elements are ordered by their most severe episode and the episodes of one element
-by time. More than `MAX_TABLE_ROWS` rows are cut fairly between the sections; the case rows stay.
+by time. Every episode is published.
 
 Contract 7.2 also adds `location_text` (grid / station, `element_location`) to the three appendix matrices,
-`result_path` to `ScriptedCalculationRuns` and `duration_text` to `ScriptedOutageWindows`; the node matrix
-shows minimum / maximum voltage.
+`result_path` to `ScriptedCalculationRuns` and `duration_text` to `ScriptedOutageWindows`. Contract 7.3 adds
+`rank` to the three appendix matrices.
+
+### 3.37 `ScriptedTimeShare` – share of the period over the limit (tabular report)
+
+`_time_share`. One row per run, Reference first (`case_order` 0). Lines and transformers over their limit in the
+run (without the equipment a case switches off itself), counted by the share of the calculated period they are
+over it: `share_low` up to 10 %, `share_mid` over 10 to 25 %, `share_high` over 25 to 50 %, `share_top` over
+50 % (upper bounds inclusive). The second histogram of the tabular report stacks the four counts per run.
 
 ---
 
 ## 4. Chapters and their tables
 
-**Tabular report** (`MASTER_OUTAGE_ASSESSMENT_TABLES`, n-0 only, no charts, every fact once):
+**Tabular report** (`MASTER_OUTAGE_ASSESSMENT_TABLES`, n-0 only, every fact once, two histograms):
 
 | Page | Tables |
 |---|---|
 | Cover, table of contents | `ScriptedReportMeta` |
 | Case summary | `ScriptedCaseSummary` |
+| Overloads per scenario | `ScriptedCaseCounts` (count per scenario), `ScriptedTimeShare` (share of the period) |
 | Planned outages | `ScriptedOutageWindows` (case, outage, object, equipment, start, end, duration) |
-| Lines, transformers, node voltages | `ScriptedAppendixLine`, `…Transformer`, `…Voltage` with location |
+| Lines, transformers, nodes over the limit | `ScriptedAppendixLine`, `…Transformer`, `…Voltage` with rank and location |
 | Violation episodes | `ScriptedEpisodes` |
 | Model quality | `ScriptedModelQuality` without the rows other pages hold (limits, network scope, settings, assessment scope, calculation failures, n-1) |
 | Calculation evidence | `ScriptedCalculationRuns` with the path of the result object |
-| Settings and limits | `ScriptedAssessmentSettings` |
 | Method | text |
 
 

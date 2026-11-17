@@ -70,15 +70,13 @@ def test_grid_selection_is_parsed_sorted_and_checked():
     assert gl.setting_text("contingency_grids", None) == gl.SAME_AS_ASSESSMENT
 
 
-def test_selected_grids_decide_the_assessed_equipment_and_take_precedence(monkeypatch):
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "B")
-    assert gl.element_in_scope(line("L1", GB)) and not gl.element_in_scope(line("L2", GA))
+def test_selected_grids_decide_the_assessed_equipment():
     gl.activate_settings({"monitoring_grids": ["Grid A"]})
     assert gl.element_in_scope(line("L2", GA)) and not gl.element_in_scope(line("L1", GB))
     assert gl.grid_scope_text() == "elements in the grid Grid A"
     gl.reset_settings()
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "")
     assert gl.element_in_scope(line("L1", GB)) and gl.grid_scope_text() == "all elements"
+    assert not hasattr(gl, "GRID_NAME_FILTER"), "the network scope is chosen in the case manager only"
 
 
 def test_project_grids_lists_every_grid_of_the_model_and_marks_inactive_ones():

@@ -15,11 +15,6 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(gl)
 
 
-@pytest.fixture(autouse=True)
-def _assess_every_element(monkeypatch):
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "")
-
-
 class Obj:
     def __init__(self, name, kind="ElmLne", **attributes):
         self.loc_name = name
@@ -183,7 +178,7 @@ def test_case_counts_follow_the_whole_period_of_each_case():
 
 
 def test_matrix_tables_continue_in_blocks_of_six_cases():
-    payload, *_ = _payload(cases=8, shifts=[{"L-380 Rhein": 20}] * 8)
+    payload, *_ = _payload(cases=8, shifts=[{"L-380 Rhein": 30}] * 8)
 
     rows = payload["ScriptedAppendixLine"]
     assert {row["block"] for row in rows} == {1, 2}
@@ -196,7 +191,7 @@ def test_matrix_tables_continue_in_blocks_of_six_cases():
 
 
 def test_more_than_six_cases_are_all_assessed_and_compared():
-    payload, *_ = _payload(cases=8, shifts=[{"L-380 Rhein": 20}] * 8)
+    payload, *_ = _payload(cases=8, shifts=[{"L-380 Rhein": 30}] * 8)
 
     assert len([row for row in payload["ScriptedCases"] if not row["is_reference"]]) == 8
     comparison = payload["ScriptedCaseComparison"]
@@ -207,19 +202,20 @@ def test_more_than_six_cases_are_all_assessed_and_compared():
 def test_matrix_without_outage_cases_shows_reference_only():
     payload, *_ = _payload(cases=0)
 
-    rows = payload["ScriptedAppendixLine"]
+    rows = payload["ScriptedAppendixTransformer"]
     assert rows and all(row["col_count"] == 0 and row.get("case_a_name") is None for row in rows)
 
 
 def test_out_of_service_elements_read_n_a():
     _, results, request = _payload()
-    results[1] = _result("OUT01", "Outage 1", {"L-380 Rhein": 18}, request["cases"][0], results[0], drop=("L-110 Hafen",))
+    results[1] = _result("OUT01", "Outage 1", {"L-110 Hafen": 11}, request["cases"][0], results[0], drop=("L-380 Rhein",))
     gl.apply_reference(results)
 
     payload = gl.build_cases_payload(Obj("Europe", "IntCase"), results, "BDS", "Result", request, "operator", "RUN")
 
-    hafen = [row for row in payload["ScriptedAppendixLine"] if row["element_name"] == "L-110 Hafen"][0]
-    assert hafen["case_a_text"] == "n/a"
+    # L-380 Rhein is over the limit in Outage 2; Outage 1 has no series of it.
+    rhein = [row for row in payload["ScriptedAppendixLine"] if row["element_name"] == "L-380 Rhein"][0]
+    assert rhein["case_a_text"] == "n/a"
 
 
 def test_switched_equipment_is_reported_out_of_service_not_resolved():

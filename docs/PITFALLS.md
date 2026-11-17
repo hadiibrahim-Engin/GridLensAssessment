@@ -196,10 +196,12 @@ flowchart TD
 ## 8. Reading results fast
 
 `ElmRes.GetColumnValues` reads a whole column in one call, but needs an
-`IntVec`. The tool creates it in the running script and deletes it at the end
-of the evaluation. When PowerFactory refuses that (*cannot create IntVec*,
-e.g. a script in a read-only place), every value is read on its own: the same
-results, much slower. The run summary counts both ways.
+`IntVec`. The tool creates it in the active study case (where the run writes its
+result objects anyway), else in the running script, and deletes it at the end of
+the evaluation. A script in a read-only place (*Object cannot be modified, no write
+access*) therefore no longer forces the slow way. Only when both refuse is every
+value read on its own: the same results, much slower. The run summary counts both
+ways.
 
 ---
 

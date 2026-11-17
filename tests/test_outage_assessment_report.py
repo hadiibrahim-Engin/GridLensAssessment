@@ -20,8 +20,7 @@ SPEC.loader.exec_module(gl)
 
 @pytest.fixture(autouse=True)
 def _assess_every_element(monkeypatch, tmp_path):
-    """Fake elements belong to no grid; only the scope tests use D7. No dialog opens."""
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "")
+    """Fake elements belong to no grid; only the scope tests choose D7. No dialog opens."""
     # Log content of every level is checked here; the filter itself is tested in test_log_levels.py.
     monkeypatch.setattr(gl, "LOG_LEVEL", "diagnostic")
     monkeypatch.setattr(gl, "CASE_SOURCE", "per_outage")
@@ -157,6 +156,15 @@ class StudyCase(PFObject):
         self.copies.append(copy)
         return copy
 
+    def CreateObject(self, kind, name):
+        """Only the column buffer (IntVec) is created here; anything else must use AddCopy."""
+        assert kind == "IntVec", kind
+        vector = PFObject(name, kind)
+        vector.deleted = False
+        vector.Delete = lambda: setattr(vector, "deleted", True)
+        self.buffers = getattr(self, "buffers", []) + [vector]
+        return vector
+
     def GetContents(self, pattern="*", *_recursive):
         return [copy for copy in self.copies if pattern in ("*", "*." + copy.kind)]
 
@@ -273,18 +281,18 @@ class App:
             return self.study_time
         return None
 
-    def GetCalcRelevantObjects(self, _pattern, *_args):
-        return []
+    def GetCalcRelevantObjects(self, pattern, *_args):
+        return list(getattr(self, "relevant", {}).get(pattern[2:], []))
 
 
 def test_table_contract_is_single_versioned_contract_seven():
-    assert gl.PUBLISHER_VERSION == "8.2.0"
-    assert gl.TEMPLATE_VERSION == "7.2.0"
-    assert gl.DATA_CONTRACT_VERSION == "7.2"
+    assert gl.PUBLISHER_VERSION == "8.3.0"
+    assert gl.TEMPLATE_VERSION == "7.3.0"
+    assert gl.DATA_CONTRACT_VERSION == "7.3"
     # No field name carries a digit: tables with such fields were missing from the PowerFactory report database.
     assert not [field for _, fields in gl.TABLES for field, _ in fields if any(char.isdigit() for char in field)]
     assert not [name for name, _ in gl.TABLES if any(char.isdigit() for char in name)], "nor table names"
-    assert len(gl.TABLES) == 40
+    assert len(gl.TABLES) == 41
     # Contract 7.0: the statistics of the reporting core for the main (H02-H10) and the detail report (D01-D12).
     for name in ("ScriptedCaseStatistics", "ScriptedCaseStatusCounts", "ScriptedCoverage", "ScriptedScope", "ScriptedOutageWindows",
                  "ScriptedReferenceFindings", "ScriptedCriticalLines", "ScriptedCriticalTransformers", "ScriptedCriticalNodes",
@@ -1342,8 +1350,17 @@ class ScopedElmRes(ElmRes):
         return super().GetColumnValues(vector, column)
 
 
+def _scope(monkeypatch, grid):
+    """The grid chosen in Settings -> Network scope, for direct calls and for a whole run; undone after the test."""
+    monkeypatch.setattr(gl, "_ACTIVE_SETTINGS", gl._ACTIVE_SETTINGS)
+    gl.activate_settings({"monitoring_grids": [grid]})
+    original = gl.obtain_case_request
+    monkeypatch.setattr(gl, "obtain_case_request", lambda *args, **kwargs: dict(
+        original(*args, **kwargs), settings={"monitoring_grids": [grid]}))
+
+
 def test_scope_is_decided_by_the_grid_not_the_name(monkeypatch):
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "D7")
+    _scope(monkeypatch, "D7 Westnetz")
 
     assert gl.element_in_scope(PFObject("Ltg Bollenacker", "ElmLne", cpGrid=D7_GRID))
     assert not gl.element_in_scope(PFObject("D7_L12", "ElmLne", cpGrid=FOREIGN_GRID))
@@ -1351,7 +1368,7 @@ def test_scope_is_decided_by_the_grid_not_the_name(monkeypatch):
 
 
 def test_grid_falls_back_to_the_elmnet_in_the_element_path(monkeypatch):
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "D7")
+    _scope(monkeypatch, "D7 Westnetz")
     element = PFObject("Ltg 5", "ElmLne")
     element.GetFullName = lambda: ("\\User\\Model.IntPrj\\Network Model.IntPrjfolder\\"
                                    "Network Data.IntPrjfolder\\D7 Westnetz.ElmNet\\Ltg 5.ElmLne")
@@ -1361,20 +1378,19 @@ def test_grid_falls_back_to_the_elmnet_in_the_element_path(monkeypatch):
 
 
 def test_element_without_any_grid_is_out_of_scope(monkeypatch):
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "D7")
+    _scope(monkeypatch, "D7 Westnetz")
 
     assert gl.element_grid_name(PFObject("D7 orphan", "ElmLne")) == ""
     assert not gl.element_in_scope(PFObject("D7 orphan", "ElmLne"))
 
 
 def test_empty_grid_filter_assesses_every_element(monkeypatch):
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "")
 
     assert gl.element_in_scope(PFObject("Line 380", "ElmLne", cpGrid=FOREIGN_GRID))
 
 
 def test_foreign_elements_are_neither_assessed_nor_read(monkeypatch):
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "D7")
+    _scope(monkeypatch, "D7 Westnetz")
     result = ScopedElmRes()
     counters = {}
 
@@ -1387,16 +1403,16 @@ def test_foreign_elements_are_neither_assessed_nor_read(monkeypatch):
 
 
 def test_no_element_in_scope_names_the_filter(monkeypatch):
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "D9")
+    _scope(monkeypatch, "D9")
 
-    with pytest.raises(RuntimeError, match="GRID_NAME_FILTER") as failure:
+    with pytest.raises(RuntimeError, match="Settings -> Network scope") as failure:
         gl.collect_series(ScopedElmRes())
     # The message says which grids the result file does hold.
     assert "Grids in the result:" in str(failure.value)
 
 
 def test_report_states_which_elements_were_assessed(monkeypatch):
-    monkeypatch.setattr(gl, "GRID_NAME_FILTER", "D7")
+    _scope(monkeypatch, "D7 Westnetz")
     app = App(())
     app.original_result = ScopedElmRes()
     app.qds.results = app.original_result
@@ -1406,8 +1422,8 @@ def test_report_states_which_elements_were_assessed(monkeypatch):
     gl.execute_outage_assessment(app)
 
     scope = app.report.tables["ReportMeta"]["values"][0, "assessment_scope"]
-    assert "grids named *D7*" in scope
-    assert any("Grid scope (elements in grids named *D7*): 2 series assessed, 1 out of scope" in line
+    assert "the grid D7 Westnetz" in scope
+    assert any("Grid scope (elements in the grid D7 Westnetz): 2 series assessed, 1 out of scope" in line
                for line in app.messages)
 
 
@@ -1448,10 +1464,11 @@ def test_report_states_which_elements_were_assessed(monkeypatch):
 
 
 
-def test_long_text_is_shortened_with_an_ellipsis_not_a_hash():
+def test_log_text_is_shortened_with_an_ellipsis_but_report_text_never():
     assert gl.clip_text('x' * 90, 80) == 'x' * 79 + '…'
-    # A list of switched equipment keeps every name readable.
-    assert gl.text_limit('equipment_name') == gl.MAX_TEXT_LENGTH
+    # Hadi, 17 Nov 2026: names and texts of the report are published complete.
+    long_name = 'Leitung ' + 'x' * 300
+    assert gl.coerce_value(long_name, 'string', 'test', 'element_name') == long_name
 
 
 
@@ -1490,6 +1507,30 @@ def test_zero_and_dc_voltages_are_not_counted_as_violations():
     assert counters['dc_nodes'] == 1
     assert counters['deenergized_nodes'] == 1
     assert counters['deenergized_steps'] == 3
+
+
+class InternalNodeElmRes(ElmRes):
+    """A busbar, a junction node and an internal node of the station (an imported connectivity node)."""
+
+    def __init__(self):
+        super().__init__()
+        self.busbar = PFObject("Busbar", "ElmTerm", uknom=110, systype=0, iUsage=0)
+        self.junction = PFObject("Junction", "ElmTerm", uknom=110, systype=0, iUsage=1)
+        self.internal = PFObject("1_CN", "ElmTerm", uknom=110, systype=0, iUsage=2)
+        self.variables = ("b:tnow", "m:u", "m:u", "m:u")
+        self.objects = (self.time, self.busbar, self.junction, self.internal)
+        self.units = ("h", "p.u.", "p.u.", "p.u.")
+        self.columns = ([0.0, 1.0], [0.93, 0.94], [0.93, 0.94], [0.93, 0.94])
+
+
+def test_internal_station_nodes_are_not_assessed_on_their_own():
+    # Hadi, 16 Nov 2026: the *_CN nodes repeated their busbar's voltage violations.
+    counters = {}
+
+    series = gl.collect_series(InternalNodeElmRes(), counters=counters)[0]
+
+    assert [item['element_name'] for item in series] == ['Busbar', 'Junction']
+    assert counters['internal_nodes'] == 1
 
 
 def test_run_output_is_structured_in_steps_cases_and_tables(monkeypatch):
@@ -1725,9 +1766,8 @@ def test_cancel_says_that_the_report_is_not_generated(monkeypatch):
         raise gl.OutageAssessmentCancelled("Cancelled in the case manager. Nothing was calculated and nothing was changed.")
     monkeypatch.setattr(gl, "execute_outage_assessment", cancelled)
 
-    # The cancellation reaches PowerFactory as an error, so an IntReport stops before it renders.
-    with pytest.raises(gl.OutageAssessmentCancelled):
-        gl.main()
+    # Hadi, 16 Nov 2026: a cancel ends the script quietly (main() returns False); the log says no report is made.
+    assert gl.main() is False
     line = [message for message in app.messages if "CANCELLED" in message][-1]
     assert "Report generation cancelled" in line
     assert app.report.tables == {}
@@ -1789,10 +1829,25 @@ def test_results_are_read_a_whole_column_per_call_and_the_buffer_is_deleted_afte
 
     gl.execute_outage_assessment(app)
 
-    buffers = [item for item in app.script.created if item.kind == "IntVec"]
+    # Hadi, 17 Nov 2026: the script may lie in a folder without write access; the study case takes the buffer.
+    buffers = app.study.buffers
     assert len(buffers) == 1 and buffers[0].deleted and gl.COLUMN_BUFFER is None
+    assert not [item for item in app.script.created if item.kind == "IntVec"]
     assert gl.RUN_STATS.counts.get("columns_bulk", 0) > 0 and not gl.RUN_STATS.counts.get("values_cellwise")
     assert "result columns read in one call" in "\n".join(app.messages)
+
+
+def test_the_buffer_falls_back_to_the_script_when_the_study_case_refuses_it(monkeypatch):
+    app = App((PlannedOutage("FS1"),))
+
+    def refused(kind, name):
+        raise RuntimeError("Object cannot be modified, no write access!")
+    monkeypatch.setattr(app.study, "CreateObject", refused)
+
+    buffer = gl.open_column_buffer(app)
+    gl.close_column_buffer()
+
+    assert buffer is not None and buffer in app.script.created and buffer.deleted
 
 
 def test_without_a_buffer_every_value_is_read_alone_and_the_summary_says_so():
@@ -1988,7 +2043,7 @@ def test_v30_cancel_in_the_case_manager_changes_and_calculates_nothing(monkeypat
 
 
 @pytest.mark.parametrize("previous_report", [False, True])
-def test_cancel_reaches_the_report_caller_instead_of_returning_success(monkeypatch, previous_report):
+def test_cancel_returns_false_and_changes_nothing(monkeypatch, previous_report):
     import sys
     import types
     from copy import deepcopy
@@ -2005,8 +2060,7 @@ def test_cancel_reaches_the_report_caller_instead_of_returning_success(monkeypat
     monkeypatch.setattr(gl, "CASE_SOURCE", "gui")
     monkeypatch.setattr(gl, "run_case_manager", lambda *args, **kwargs: None)
 
-    with pytest.raises(gl.OutageAssessmentCancelled):
-        gl.main()
+    assert gl.main() is False
 
     assert app.qds.execute_calls == execute_calls
     assert app.study.copies == copies
@@ -2105,18 +2159,48 @@ def test_a_failing_comparison_fails_only_its_own_case(monkeypatch):
     assert [item.outserv for item in outages] == [0, 0] and app.qds.iopt_maint == 0
 
 
-def test_memory_budget_stops_the_evaluation_and_the_calculated_results_stay(monkeypatch):
+def test_a_run_too_large_for_the_free_memory_stops_before_any_calculation(monkeypatch):
+    # Hadi, 17 Nov 2026: a run failed on a fixed cell limit only after its QDS had run for 40 minutes.
     app = App((PlannedOutage("FS1"), PlannedOutage("FS2")))
-    monkeypatch.setattr(gl, "MAX_RUN_CELLS", 1)
+    app.relevant = {"ElmLne": [PFObject("L{}".format(n), "ElmLne") for n in range(100)],
+                    "ElmTerm": [PFObject("B", "ElmTerm", systype=0, iUsage=0),
+                                PFObject("1_CN", "ElmTerm", systype=0, iUsage=2)]}
+    monkeypatch.setattr(gl, "available_memory_bytes", lambda: 1000)
 
-    with pytest.raises(gl.OutageAssessmentError, match="MAX_RUN_CELLS"):
+    with pytest.raises(gl.OutageAssessmentError, match="needs about .* of memory, but only 0 MB of memory are free") as error:
         gl.execute_outage_assessment(app)
 
-    # Phase 1 calculates every run into its kept result object; phase 2 stops before reading the next one.
-    assert app.qds.execute_calls == 3 and len(app.study.copies) == 3
-    assert not any(copy.deleted for copy in app.study.copies), "kept result objects are never deleted"
+    assert "Equipment in the network scope: 101 (100 lines, 1 nodes)" in "\n".join(error.value.details)
+    assert app.qds.execute_calls == 0 and app.study.copies == []
     assert app.qds.iopt_maint == 0 and app.qds.results is app.original_result
     assert (app.study_time.cDate, app.study_time.cTime) == (20140501, 0)
+
+
+def test_a_run_that_fits_logs_its_size_and_is_calculated(monkeypatch):
+    app = App((PlannedOutage("FS1"),))
+    app.relevant = {"ElmLne": [PFObject("L", "ElmLne")]}
+    monkeypatch.setattr(gl, "available_memory_bytes", lambda: 16 * 10 ** 9)
+
+    gl.execute_outage_assessment(app)
+
+    assert any("Size of the run: 1 elements in the network scope (1 lines)" in line and "of 16.0 GB free" in line
+               for line in app.messages)
+    assert app.qds.execute_calls == 2
+
+
+def test_reading_a_result_object_checks_the_free_memory_instead_of_a_cell_limit(monkeypatch):
+    monkeypatch.setattr(gl, "available_memory_bytes", lambda: 10)
+    with pytest.raises(RuntimeError, match="Reading this result object needs about .* series x 2 time steps"):
+        gl.collect_series(ElmRes())
+    monkeypatch.setattr(gl, "available_memory_bytes", lambda: None)
+    assert gl.collect_series(ElmRes())[0], "without a known free memory the read goes ahead"
+
+
+def test_the_memory_estimate_holds_two_value_arrays_and_the_cases():
+    assert gl.run_memory_estimate(1000, 100, 3) == 1000 * (2 * 8 * 100 + gl.RESULT_SERIES_BYTES + 3 * gl.CASE_SERIES_BYTES)
+    assert gl.memory_text(2.5e9) == "2.5 GB" and gl.memory_text(3.5e8) == "350 MB"
+    free = gl.available_memory_bytes()
+    assert free is None or (isinstance(free, int) and free > 0)
 
 
 def test_reused_case_names_the_result_object_it_shares(monkeypatch):

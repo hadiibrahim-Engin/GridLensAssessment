@@ -41,7 +41,6 @@ from datetime import datetime
 HOST_TABLE_PREFIX = 'Scripted'
 TOP_N = 10
 MAX_PLOT_POINTS = 200
-MAX_VOLTAGE_ROWS = 30
 # Defaults of the Settings tab (SETTINGS); a run uses the active settings
 # through loading_limit(), voltage_band(), setting_value() and the other
 # helpers, never these names directly (a constant is the default of its setting).
@@ -61,7 +60,6 @@ MAX_N1_TIMES = 2000
 # Time step of the n-1 study times when no quasi-dynamic simulation runs (n-1 only): the windows of the planned
 # outages are sampled every N1_STEP_MINUTES; with n-0 the n-1 study times are the QDS steps instead.
 N1_STEP_MINUTES = 60
-TIME_UNIT_FALLBACK = 'h'
 PUBLISHER_VERSION = '8.3.0'
 TEMPLATE_NAME = 'MASTER_OUTAGE_ASSESSMENT'
 TEMPLATE_VERSION = '7.3.0'
@@ -88,20 +86,11 @@ CASE_CONFIG_SCHEMA_VERSION = 2
 # Available assessments; (n-1)' requires the n-1 reference.
 N1_REFERENCE, N1_PRIME = 'n-1', "(n-1)'"
 ASSESSMENTS = ('n-0', N1_REFERENCE, N1_PRIME)
-AVAILABLE_ASSESSMENTS = ASSESSMENTS
 # The time base is the active ComStatsim: every run covers its complete period
 # with its own time step. Outage Assessment shortens no window, adds no time step and
 # never changes the time step (there is no time optimisation).
-# A case may give a planned outage a date of its own. Applying it means
-# writing IntPlannedout.starttime / endtime for the run; this is off until it
-# is verified in PowerFactory, and such a case is reported NOT EVALUATED.
-ALLOW_OUTAGE_TIME_OVERRIDE = False
-# Optional. An empty string (the default) assesses every element. With a text,
-# only elements whose grid (PowerFactory attribute "Grid", cpGrid) has a name
-# containing it are assessed and every other element is ignored as foreign
-# network, e.g. 'D7' for the Europe model. Grids chosen in the case manager
-# (Settings -> Network scope) take precedence over this text.
-GRID_NAME_FILTER = ''
+# A case may give a planned outage a date of its own; Outage Assessment does not write IntPlannedout.starttime /
+# endtime, so such a case is reported NOT EVALUATED.
 VARIABLES = {
     'line': ('c:loading', 'm:loading'),
     'transformer': ('c:loading', 'm:loading'),
@@ -113,41 +102,27 @@ CLASS_CATEGORIES = {
     'ElmTr3': ('transformer',),
     'ElmTerm': ('voltage',),
 }
-MAX_RESULT_ROWS = 35040
-MAX_RESULT_CELLS = 20000000
-MAX_RUN_CELLS = 120000000
-MAX_TABLE_ROWS = 5000
+# Memory a run may use, as a share of the physical memory free when it is checked: before any calculation from the
+# equipment in the network scope, and again before each result object is read.
+MEMORY_SHARE = 0.8
+# Measured memory per assessed element besides its values (8 bytes per time step): REF (item, statistics, keys)
+# and every compared case (its statistics and the comparison record with episodes).
+RESULT_SERIES_BYTES = 2048
+CASE_SERIES_BYTES = 4096
 PUBLICATION_LOG_INTERVAL_SECONDS = 5.0
 SNAPSHOT_PREFIX = 'OA_'
 
 FIELD_TYPES = {'string': 0, 'integer': 1, 'number': 2}
-MAX_LABEL_LENGTH = 80
-MAX_TEXT_LENGTH = 500
+# Report tables and texts are published complete (Hadi, 17 Nov 2026: "ich brauche alle Daten"). Only the log
+# shortens: a diagnostic block, and a value in an object description.
 MAX_DIAGNOSTIC_LENGTH = 4000
+LOG_VALUE_LENGTH = 80
 ABSOLUTE_TIME_THRESHOLD_HOURS = 87600.0
-_LABEL_SUFFIXES = ('_id', '_name', '_label', '_type', '_level', '_time')
-_LABEL_FIELDS = (
-    'unit', 'variable', 'status', 'reason', 'action', 'timestamp', 'metric_name',
-    'check_name', 'ranking_type', 'simulation_status', 'simulation_start',
-    'simulation_end', 'simulation_time_step', 'generation_date', 'assessment_status',
-)
-
-# Lists of names that must stay readable in full.
-_LONG_LABEL_FIELDS = ('equipment_name',)
-
-
-def text_limit(field):
-    if field in _LONG_LABEL_FIELDS:
-        return MAX_TEXT_LENGTH
-    if field in _LABEL_FIELDS or field.endswith(_LABEL_SUFFIXES):
-        return MAX_LABEL_LENGTH
-    return MAX_TEXT_LENGTH
 
 
 CASE_SLOTS = 6
 # The detail report shows three scenarios per block (repeated element and n-1 columns).
 DETAIL_SLOTS = 3
-SERIES_SLOTS = CASE_SLOTS + 1
 
 
 # Slot names use letters to keep the tables visible in the PowerFactory report
@@ -427,14 +402,12 @@ def safe_attr(obj, name, default=None):
         return default
 
 
-
 def clip_text(value, limit):
     """Shorten to `limit` characters with a visible ellipsis, nothing else."""
     text = str(value)
     if len(text) <= limit:
         return text
     return text[:max(0, limit - 1)] + '\u2026'
-
 
 
 def object_key(obj):
@@ -447,16 +420,13 @@ def object_key(obj):
     return str(safe_attr(obj, 'loc_name', 'unknown'))
 
 
-
 def object_name(obj):
     value = safe_attr(obj, 'loc_name', '')
     return str(value) if value else object_key(obj).rsplit('\\', 1)[-1]
 
 
-
 def object_id(obj):
     return object_name(obj)
-
 
 
 def object_description(obj):
@@ -466,13 +436,11 @@ def object_description(obj):
     return str(value or '')
 
 
-
 def class_name(obj):
     try:
         return str(obj.GetClassName())
     except Exception:
         return ''
-
 
 
 def element_grid_name(obj):
@@ -490,7 +458,6 @@ def element_grid_name(obj):
         if part.endswith('.ElmNet'):
             return part[:-len('.ElmNet')]
     return ''
-
 
 
 # PowerFactory classes that hold equipment as a station: the nearest one in an element's path names its station.
@@ -519,11 +486,9 @@ def element_location(obj):
 
 
 def grid_in_scope(grid_name):
-    """Whether equipment of this grid is assessed: the grids chosen in Settings, else GRID_NAME_FILTER."""
+    """Whether equipment of this grid is assessed: the grids chosen in Settings -> Network scope, else every grid."""
     grids = current_setting('monitoring_grids')
-    if grids:
-        return grid_name in grids
-    return not GRID_NAME_FILTER or GRID_NAME_FILTER in grid_name
+    return grid_name in grids if grids else True
 
 
 def grid_scope_text():
@@ -531,15 +496,11 @@ def grid_scope_text():
     grids = current_setting('monitoring_grids')
     if grids:
         return 'elements in the grid{} {}'.format('s' if len(grids) > 1 else '', ', '.join(grids))
-    if GRID_NAME_FILTER:
-        return 'elements in grids named *{}*'.format(GRID_NAME_FILTER)
     return 'all elements'
-
 
 
 def element_in_scope(obj):
     return grid_in_scope(element_grid_name(obj))
-
 
 
 def result_category(obj, variable):
@@ -547,7 +508,6 @@ def result_category(obj, variable):
         if variable in VARIABLES[category]:
             return category
     return None
-
 
 
 def finite_number(value):
@@ -569,7 +529,6 @@ def finite_number(value):
     return result if math.isfinite(result) else None
 
 
-
 def return_code(value):
     """Normalize a PowerFactory return code; None means success, invalid codes remain unknown."""
     if value is None:
@@ -581,7 +540,6 @@ def return_code(value):
     if isinstance(value, (tuple, list)):
         return None
     return finite_number(value)
-
 
 
 def result_value(elmres, row, column):
@@ -598,7 +556,6 @@ def result_value(elmres, row, column):
             return None
         raw = raw[1]
     return finite_number(raw)
-
 
 
 def normalize_time_unit(unit):
@@ -619,8 +576,7 @@ def normalize_time_unit(unit):
         'day': 'd',
         'days': 'd',
     }
-    return aliases.get(text, text or TIME_UNIT_FALLBACK)
-
+    return aliases.get(text, text)
 
 
 def time_in_hours(value, unit, row):
@@ -629,7 +585,6 @@ def time_in_hours(value, unit, row):
         return float(row)
     factor = {'s': 1.0 / 3600.0, 'min': 1.0 / 60.0, 'h': 1.0, 'd': 24.0}.get(normalize_time_unit(unit), 1.0)
     return numeric * factor
-
 
 
 def format_clock(hours):
@@ -646,7 +601,6 @@ def format_clock(hours):
     return sign + clock
 
 
-
 def is_absolute_time_axis(hours):
     """True when the axis holds absolute epoch time instead of elapsed time.
 
@@ -657,13 +611,11 @@ def is_absolute_time_axis(hours):
     return bool(hours) and hours[0] >= ABSOLUTE_TIME_THRESHOLD_HOURS
 
 
-
 def format_absolute_time(hours):
     try:
         return time.strftime('%Y-%m-%d %H:%M', time.localtime(hours * 3600.0))
     except (ValueError, OverflowError, OSError):
         return format_clock(hours)
-
 
 
 def format_time(value, row, unit):
@@ -676,7 +628,6 @@ def format_time(value, row, unit):
     return 'Time step {}'.format(row)
 
 
-
 def format_time_step(hours):
     if hours < 1.0 / 60.0:
         return '{:g} s'.format(hours * 3600.0)
@@ -685,7 +636,6 @@ def format_time_step(hours):
     if hours < 24.0:
         return '{:g} h'.format(hours)
     return '{:g} d'.format(hours / 24.0)
-
 
 
 def time_column(elmres, column_count, row_count):
@@ -718,7 +668,6 @@ def time_column(elmres, column_count, row_count):
         'variables: {}.'.format(variables))
 
 
-
 def nominal_voltage(obj):
     """Nominal voltage in kV of the element or of the terminal it connects to."""
     candidates = [obj]
@@ -734,11 +683,9 @@ def nominal_voltage(obj):
     return None
 
 
-
 def voltage_level(obj):
     nominal = nominal_voltage(obj)
     return '{:g} kV'.format(nominal) if nominal is not None else ''
-
 
 
 def is_dc_terminal(obj):
@@ -760,15 +707,36 @@ COLUMN_BUFFER_NAME = 'OutageAssessment_column_buffer'
 
 
 def open_column_buffer(app):
-    """Create the IntVec for column reads in the running script; None (cell by cell) when that is not possible."""
+    """Create the IntVec for column reads; None (cell by cell) when that is not possible.
+
+    In the active study case first: the run writes its result objects there anyway, while the script may lie in a
+    folder without write access (a shared or read-only project). The running script is the fallback.
+    """
     global COLUMN_BUFFER
-    try:
-        script = app.GetCurrentScript()
-        vector = script.CreateObject('IntVec', COLUMN_BUFFER_NAME) if script is not None else None
-    except Exception:
-        vector = None
-    COLUMN_BUFFER = vector if class_name(vector) == 'IntVec' else None
+    COLUMN_BUFFER = None
+    for owner in (_active_study_case(app), _current_script(app)):
+        try:
+            vector = owner.CreateObject('IntVec', COLUMN_BUFFER_NAME) if owner is not None else None
+        except Exception:
+            vector = None
+        if class_name(vector) == 'IntVec':
+            COLUMN_BUFFER = vector
+            break
     return COLUMN_BUFFER
+
+
+def _active_study_case(app):
+    try:
+        return app.GetActiveStudyCase()
+    except Exception:
+        return None
+
+
+def _current_script(app):
+    try:
+        return app.GetCurrentScript()
+    except Exception:
+        return None
 
 
 def close_column_buffer():
@@ -816,10 +784,8 @@ def read_column(elmres, column, rows, buffer=None):
     return found
 
 
-
 def _is_sequence(value):
     return isinstance(value, (list, tuple))
-
 
 
 def collect_series(elmres, counters=None):
@@ -835,15 +801,14 @@ def collect_series(elmres, counters=None):
         raise RuntimeError('ElmRes contains no result rows.')
     if columns <= 0:
         raise RuntimeError('ElmRes contains no result columns.')
-    if rows > MAX_RESULT_ROWS:
-        raise RuntimeError('ElmRes has {} rows and exceeds the limit of {} (MAX_RESULT_ROWS).'.format(rows, MAX_RESULT_ROWS))
     t_column = time_column(elmres, columns, rows)
     try:
         time_unit = normalize_time_unit(elmres.GetUnit(t_column))
     except Exception as exc:
         raise RuntimeError('The ElmRes time-column unit could not be read: {}'.format(exc)) from exc
     if time_unit not in {'s', 'min', 'h', 'd'}:
-        raise RuntimeError('Unsupported ElmRes time-column unit: {}'.format(time_unit or TIME_UNIT_FALLBACK))
+        raise RuntimeError('The ElmRes time column has {}; Outage Assessment reads s, min, h or d only and does not '
+                           'guess one.'.format("the unit '{}'".format(time_unit) if time_unit else 'no unit'))
     raw_times = []
     hours = []
     for row, raw in enumerate(read_column(elmres, t_column, rows)):
@@ -868,7 +833,7 @@ def collect_series(elmres, counters=None):
     internal_nodes = set()
     recorded = {}  # what the result object records that Outage Assessment does not assess, for the error message
     # Without a grid selection every element is assessed, so its grid is not read at all.
-    filtered = bool(current_setting('monitoring_grids') or GRID_NAME_FILTER)
+    filtered = bool(current_setting('monitoring_grids'))
     by_class, by_variable = {}, {}
     scanning = time.monotonic()
     for column in range(columns):
@@ -924,14 +889,16 @@ def collect_series(elmres, counters=None):
     if not chosen and out_of_scope:
         raise RuntimeError(
             'No result series belongs to the assessed equipment ({}; {} series were out of scope). Grids in the '
-            'result: {}. Choose one of these grids in Settings -> Network scope, or clear the selection (and '
-            'GRID_NAME_FILTER) to assess every element.'.format(grid_scope_text(), out_of_scope, _grid_listing(grids)))
-    cells = rows * len(chosen)
-    if cells > MAX_RESULT_CELLS:
-        raise RuntimeError('ElmRes contains {} evaluated cells ({} rows x {} series) and exceeds the limit of {} (MAX_RESULT_CELLS).'.format(cells, rows, len(chosen), MAX_RESULT_CELLS))
+            'result: {}. Choose one of these grids in Settings -> Network scope, or clear the selection to assess '
+            'every element.'.format(grid_scope_text(), out_of_scope, _grid_listing(grids)))
+    needed = len(chosen) * (8 * rows + RESULT_SERIES_BYTES)
+    problem = memory_problem(needed)
+    if problem:
+        raise RuntimeError('Reading this result object needs about {} for {} series x {} time steps, {}. Choose fewer '
+                           'grids in Settings -> Network scope, or a shorter period or larger QDS step.'.format(
+                               memory_text(needed), len(chosen), rows, problem))
     series = []
     dark_series = 0
-    plot_rows = sample_rows(rows)
     energized = setting_value('energized_min_pu')
     # Rows where at least one line or transformer has a loading value; a row without any means a failed load flow.
     valued = bytearray(rows)
@@ -1000,7 +967,6 @@ def collect_series(elmres, counters=None):
             'variable_id': variable,
             'variable': 'Voltage magnitude' if category == 'voltage' else 'Loading',
             'unit': unit,
-            'points': [(labels[row], plot_times[row], values[row]) for row in plot_rows],
             'statistics': array_statistics(array_values, labels),
             'values': array_values,
             'gaps': gaps,
@@ -1036,41 +1002,105 @@ def missing_series_message(recorded, dark_series=0):
                 needed, found or 'no result variables at all'))
 
 
-
 def _grid_listing(grids):
     ordered = sorted(grids.items(), key=lambda entry: (-entry[1][0], entry[0]))
     return '; '.join('{!r} ({} series)'.format(name, value[0]) for name, value in ordered[:8]) or 'none'
 
 
+def available_memory_bytes():
+    """Physical memory free for this process in bytes; None when the system does not tell (no memory check then)."""
+    try:
+        if os.name == 'nt':
+            import ctypes
 
-def check_run_budget(results):
-    """Cells held in memory; a reused case shares its source's data and costs nothing."""
-    cells = 0
-    for result in results:
-        if str(result.get('provenance', '')).startswith('REUSED'):
-            continue
-        rows = len(result['labels'])
-        for category in result['by_category']:
-            cells += rows * len(result['by_category'][category])
-    if cells > MAX_RUN_CELLS:
-        raise OutageAssessmentError('The run contains {} result cells across {} cases and exceeds the limit of {} (MAX_RUN_CELLS). Reduce cases, time range or model scope.'.format(cells, len(results), MAX_RUN_CELLS))
-    return cells
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong),
+                            ('ullTotalPhys', ctypes.c_ulonglong), ('ullAvailPhys', ctypes.c_ulonglong),
+                            ('ullTotalPageFile', ctypes.c_ulonglong), ('ullAvailPageFile', ctypes.c_ulonglong),
+                            ('ullTotalVirtual', ctypes.c_ulonglong), ('ullAvailVirtual', ctypes.c_ulonglong),
+                            ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
+            status = MemoryStatus()
+            status.dwLength = ctypes.sizeof(MemoryStatus)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return None
+            # The address space bounds a 32-bit process; on 64 bit the physical memory is the limit.
+            return int(min(status.ullAvailPhys, status.ullAvailVirtual))
+        return int(os.sysconf('SC_AVPHYS_PAGES') * os.sysconf('SC_PAGE_SIZE'))
+    except (AttributeError, ValueError, OSError, TypeError):
+        return None
 
 
+def memory_text(size):
+    """'1.4 GB', '350 MB'."""
+    return '{:.1f} GB'.format(size / 1e9) if size >= 1e9 else '{:.0f} MB'.format(max(size, 0) / 1e6)
 
-def sampled_plot_points(item):
-    """Every point up to MAX_PLOT_POINTS, otherwise an evenly spaced grid.
 
-    The grid depends only on the number of points, so REF and OUTAGE on the
-    same time axis are sampled at identical times. Per-series extremes are not
-    added: they differ between the cases and gave the two lines different
-    axes. Exact extremes remain in the statistics.
-    """
-    points = item['points']
-    if len(points) <= setting_value('max_plot_points'):
-        return points
-    return [points[index] for index in sample_rows(len(points))]
+def memory_problem(needed):
+    """Why `needed` bytes do not fit into MEMORY_SHARE of the free memory; '' when they fit or nothing is known."""
+    free = available_memory_bytes()
+    if free is None or needed <= MEMORY_SHARE * free:
+        return ''
+    return 'but only {} of memory are free (the run uses at most {:.0f} %)'.format(memory_text(free), 100 * MEMORY_SHARE)
 
+
+def run_memory_estimate(series, rows, cases):
+    """Peak memory of the evaluation: the values of REF and of the case being compared (8 bytes per time step),
+    REF's elements and every compared case's statistics and comparison."""
+    return series * (2 * 8 * rows + RESULT_SERIES_BYTES + CASE_SERIES_BYTES * cases)
+
+
+def assessed_element_counts(app):
+    """{class: number} of the equipment the QDS results will be assessed for: lines, transformers and AC nodes
+    (without DC and internal station nodes) in the network scope."""
+    filtered = bool(current_setting('monitoring_grids'))
+    counts = {}
+    for kind in CLASS_CATEGORIES:
+        try:
+            objects = app.GetCalcRelevantObjects('*.' + kind) or []
+        except Exception:
+            objects = []
+        for obj in objects:
+            if kind == 'ElmTerm' and (is_dc_terminal(obj) or is_internal_node(obj)):
+                continue
+            if filtered and not grid_in_scope(element_grid_name(obj)):
+                continue
+            counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+SIZE_LABELS = {'ElmLne': 'lines', 'ElmTr2': 'two-winding transformers', 'ElmTr3': 'three-winding transformers',
+               'ElmTerm': 'nodes'}
+
+
+def check_run_size(app, grid, cases, logger):
+    """Before any calculation: stop when the evaluation of this run would need more than MEMORY_SHARE of the free
+    memory. `grid` is (start, end, step) or None."""
+    if grid is None or not grid[2] or grid[1] is None:
+        logger.write("CALCULATION", "The size of the run is not checked beforehand: the QDS period or step is not "
+                     "readable.", 4, "WARNING")
+        return None
+    start, end, step = grid
+    rows = int((end - start) // step) + 1
+    started = time.monotonic()
+    counts = assessed_element_counts(app)
+    series = sum(counts.values())
+    needed = run_memory_estimate(series, rows, cases)
+    RUN_STATS.add("check the size of the run", time.monotonic() - started)
+    sizes = ', '.join('{} {}'.format(counts[kind], SIZE_LABELS.get(kind, kind)) for kind in sorted(counts)) or 'none'
+    problem = memory_problem(needed)
+    if problem:
+        raise OutageAssessmentError(
+            "The evaluation of this run needs about {} of memory, {}; no run was started.".format(memory_text(needed), problem),
+            details=["Equipment in the network scope: {} ({}).".format(series, sizes),
+                     "QDS time steps per run: {}; planning cases: {}.".format(rows, cases),
+                     "Network scope: {}.".format(grid_scope_text())],
+            hint="Choose fewer grids in Settings -> Network scope, fewer planning cases or a larger QDS step.")
+    free = available_memory_bytes()
+    logger.write("CALCULATION", "Size of the run: {} elements in the network scope ({}), {} time steps, {} case(s); "
+                 "the evaluation needs about {}{}.".format(
+                     series, sizes, rows, cases, memory_text(needed),
+                     "" if free is None else " of {} free".format(memory_text(free))), 4, verbosity=LOG_DETAILED)
+    return needed
 
 
 def sample_rows(count):
@@ -1079,7 +1109,6 @@ def sample_rows(count):
     if count <= limit:
         return list(range(count))
     return sorted({int(round(sample * (count - 1) / float(max(limit - 1, 1)))) for sample in range(limit)})
-
 
 
 def unique_time_labels(hours):
@@ -1101,7 +1130,6 @@ MISSING = float('-inf')
 
 def value_array(values):
     return array('d', (MISSING if value is None else value for value in values))
-
 
 
 def array_value(values, row):
@@ -1143,11 +1171,10 @@ def operation_changes(series, labels):
             for row, (on, off) in sorted(found.items())]
 
 
-def _names_text(names, width=140):
+def _names_text(names):
     if not names:
         return '-'
-    text = ', '.join(names)
-    return '{} elements: {}'.format(len(names), clip_text(text, width)) if len(names) > 1 and len(text) > width else text
+    return ', '.join(names) if len(names) == 1 else '{} elements: {}'.format(len(names), ', '.join(names))
 
 
 def operation_change_rows(series, labels):
@@ -1176,7 +1203,6 @@ def offline_at(element, moment):
     return any(first - 1.0 <= moment <= last + 1.0 for first, last in OFFLINE.get(element, ()))
 
 
-
 def merge_intervals(intervals):
     """Sorted, non-overlapping union of half-open (start, end) intervals."""
     merged = []
@@ -1186,7 +1212,6 @@ def merge_intervals(intervals):
         else:
             merged.append((start, end))
     return merged
-
 
 
 def window_rows(hours, windows):
@@ -1203,12 +1228,10 @@ def window_rows(hours, windows):
     return sorted(rows)
 
 
-
 def row_steps(hours):
     """Duration in hours each time step stands for: up to the next step; the last repeats the one before."""
     steps = [later - earlier for earlier, later in zip(hours, hours[1:])]
     return steps + steps[-1:] if steps else [0.0]
-
 
 
 def window_coverage(hours, steps, windows):
@@ -1229,7 +1252,6 @@ def window_coverage(hours, steps, windows):
     return min(1.0, covered / total)
 
 
-
 def row_statistics(values, labels, rows):
     """min, max, mean and their times over the given rows; None without a value."""
     chunk = [(labels[row], values[row]) for row in rows if values[row] != MISSING]
@@ -1240,7 +1262,6 @@ def row_statistics(values, labels, rows):
     return {'min': minimum, 'max': maximum, 'mean': sum(value for _, value in chunk) / len(chunk),
             'time_min': next(label for label, value in chunk if value == minimum),
             'time_max': next(label for label, value in chunk if value == maximum)}
-
 
 
 def statistics(series):
@@ -1259,7 +1280,6 @@ def statistics(series):
     }
 
 
-
 def array_statistics(values, labels):
     """statistics() of a value array: the same numbers and first times of the extremes, at C speed."""
     present = [value for value in values if value != MISSING]
@@ -1271,10 +1291,8 @@ def array_statistics(values, labels):
             'time_min': labels[values.index(minimum)], 'time_max': labels[values.index(maximum)]}
 
 
-
 def format_limit(value):
     return '{:g}'.format(value)
-
 
 
 def has_time_variation(item):
@@ -1290,10 +1308,8 @@ def has_time_variation(item):
     return spread > tolerance
 
 
-
 def empty_payload():
     return {name: [] for name, _ in TABLES}
-
 
 
 def voltage_band(nominal_kv=None):
@@ -1301,10 +1317,8 @@ def voltage_band(nominal_kv=None):
     return default_voltage_limits()
 
 
-
 def voltage_limits(item):
     return item.get('limits') or default_voltage_limits()
-
 
 
 def is_critical(item, stats):
@@ -1341,8 +1355,6 @@ QDS_SPAN_CHOICES = ((QDS_SPAN_OUTAGES, 'first to last planned outage of the case
                     (QDS_SPAN_CONFIGURED, 'as set in ComStatsim'))
 # Upper bounds of the count settings: beyond them a run takes hours or the report gets unreadable.
 COUNT_LIMITS = {'top_n': 50, 'max_plot_points': 2000, 'max_n1_times': 20000, 'max_cases': 20, 'n1_step': 1440}
-# The most planning cases a run can have: the templates hold a band pair for every block up to this number.
-MAX_PLANNING_CASES = COUNT_LIMITS['max_cases']
 NOT_VERIFIED = 'not verified yet'
 CONTINGENCY_SETTINGS_NOTE = (
     'Read only: set in the contingency analysis (ComSimoutage) of the study case; Outage Assessment reads it '
@@ -1367,7 +1379,7 @@ def _contingency_setting(key, label):
 SETTINGS = (
     _setting('monitoring_grids', 'Network scope', 'Report filter: assessed equipment, grids', '', (), 'grids',
              applies="n-0, n-1, (n-1)'",
-             note='evaluation only, also in a re-evaluation; no grid selected: every grid (or GRID_NAME_FILTER)'),
+             note='evaluation only, also in a re-evaluation; no grid selected: every grid'),
     _setting('contingency_grids', 'Network scope', 'n-1 filter: grids of the outaged equipment', '', None, 'grids',
              CATEGORY_CALCULATION, applies="n-1, (n-1)'", source=SOURCE_OUTAGE_ASSESSMENT,
              note='calculation: one contingency per branch element in these grids; none: every grid'),
@@ -1435,8 +1447,6 @@ SETTINGS = (
     _contingency_setting('remedial_actions', 'Remedial actions'),
 )
 SETTINGS_BY_KEY = {setting['key']: setting for setting in SETTINGS}
-SETTING_SECTIONS = ('Network scope', 'Thermal limits', 'Voltage limits', 'Classification', 'Report', 'Run',
-                    'Contingency analysis')
 SAME_AS_ASSESSMENT = 'every grid (no n-1 grid filter)'
 # (lower, upper) pairs that must keep lower < upper; (warning, limit) pairs that must keep warning <= limit.
 _ORDERED_PAIRS = (('energized_min_pu', 'voltage_min_pu'), ('voltage_min_pu', 'voltage_max_pu'))
@@ -2479,7 +2489,7 @@ class ScenarioAggregate:
     """
 
     def __init__(self, run_id, scenario_id, meta, contingencies, requested_times, switched_off=(),
-                 contingency_elements=None, recording=None, parameters=None, event_limit=500):
+                 contingency_elements=None, recording=None, parameters=None, event_limit=None):
         self.run_id, self.scenario_id = run_id, scenario_id
         self.meta = meta
         self._contingencies = list(contingencies or ())
@@ -2698,7 +2708,8 @@ class ScenarioAggregate:
         priority = (-STATUS_RANK[status], violation or 0.0, abs(change or 0.0))
         item = (priority, self.events_listed, (moment, contingency, element, criterion, threshold, ref_value, scen_value,
                                                status, violation, change))
-        if len(self._top) < self.event_limit:
+        # Every finding is kept (event_limit None); a limit is only used by tests of the ordering.
+        if self.event_limit is None or len(self._top) < self.event_limit:
             heapq.heappush(self._top, item)
         elif item > self._top[0]:
             heapq.heapreplace(self._top, item)
@@ -2844,7 +2855,7 @@ def element_counters(statistics, element, criterion):
 
 
 def compare_scenario(run_id, scenario_id, reference, scenario, requested_times, switched_off=(), contingency_elements=None,
-                     contingencies=None, parameters=None, event_limit=500):
+                     contingencies=None, parameters=None, event_limit=None):
     """Stream one (n-1)' scenario against the n-1 reference over the requested study times; the statistics.
 
     `reference` and `scenario` are SweepReader-like sources: `times`,
@@ -3007,11 +3018,9 @@ def hours_beyond_limit(item, stats, steps):
     return sum(step for value, step in zip(values, steps) if value != MISSING and (value < lower or value > upper))
 
 
-
 def period_hours(result):
     """Length of the calculated period in hours: the sum of the steps every row stands for."""
     return sum(row_steps(result['hours'])) if result.get('hours') else 0.0
-
 
 
 def case_result(case, series, labels, plot_times, time_unit):
@@ -3056,7 +3065,6 @@ def case_result(case, series, labels, plot_times, time_unit):
     }
 
 
-
 # The status of a planning case whose n-0 QDS was not calculated because the run is n-1 only.
 CASE_N0_SKIPPED = 'NOT SIMULATED'
 N0_SKIPPED_TEXT = 'n-0 not calculated: n-1 only, no quasi-dynamic simulation in this run.'
@@ -3073,13 +3081,11 @@ def failed_case(case, message):
     return result
 
 
-
 def find_reference(results, reference_id=REFERENCE_ID):
     for result in results:
         if result['id'] == reference_id and result['status'] == CONVERGED:
             return result
     return None
-
 
 
 def _same_time_axis(anchor, result):
@@ -3090,7 +3096,6 @@ def _same_time_axis(anchor, result):
     left = anchor['plot_times']
     right = result['plot_times']
     return len(left) == len(right) and all((abs(a - b) <= 1e-09 for a, b in zip(left, right)))
-
 
 
 def enforce_common_time_axis(results, reference_id=REFERENCE_ID):
@@ -3106,7 +3111,6 @@ def enforce_common_time_axis(results, reference_id=REFERENCE_ID):
         result['error_code'] = -4
         result['message'] = 'Time axis differs from case {}; metrics and deltas were not evaluated.'.format(anchor['id'])
     return results
-
 
 
 def apply_reference(results, reference_id=REFERENCE_ID):
@@ -3128,10 +3132,8 @@ def apply_reference(results, reference_id=REFERENCE_ID):
     return results
 
 
-
 def converged(results):
     return [result for result in results if result['status'] == CONVERGED]
-
 
 
 def outage_cases(results):
@@ -3139,11 +3141,9 @@ def outage_cases(results):
     return [result for result in converged(results) if result['id'] != REFERENCE_ID]
 
 
-
 def case_blocks(cases):
     """Cases in groups of CASE_SLOTS; always at least one (possibly empty) block."""
     return [cases[start:start + CASE_SLOTS] for start in range(0, len(cases), CASE_SLOTS)] or [[]]
-
 
 
 def critical_keys(results, category):
@@ -3153,7 +3153,6 @@ def critical_keys(results, category):
             if is_critical(item, stats):
                 keys.add((category, item['key']))
     return keys
-
 
 
 def evaluated_keys(results, category):
@@ -3200,11 +3199,9 @@ def paired(results, category, case=None, windowed=False):
     return list(records.values())
 
 
-
 def primary(record):
     """The case where it was calculated, otherwise REF."""
     return record['outage'] if record['outage'] is not None else record['ref']
-
 
 
 def excess_function(item):
@@ -3216,16 +3213,13 @@ def excess_function(item):
     return lambda value: lower - value if value < lower else value - upper if value > upper else 0.0
 
 
-
 def excess(item, value):
     """How far a value lies beyond its limit; 0 on or inside the limit."""
     return excess_function(item)(value)
 
 
-
 def _tolerance(item):
     return change_tolerance(item['category'])
-
 
 
 def step_status(item, ref_value, case_value):
@@ -3233,7 +3227,6 @@ def step_status(item, ref_value, case_value):
     measure = excess_function(item)
     return _classify(item['category'] == 'voltage', None if ref_value is None else measure(ref_value),
                      None if case_value is None else measure(case_value), _tolerance(item))
-
 
 
 def _classify(is_voltage, in_ref, in_case, tolerance):
@@ -3254,11 +3247,9 @@ def _classify(is_voltage, in_ref, in_case, tolerance):
     return STATUS_RESOLVED if in_ref > 0 else STATUS_OK
 
 
-
 def _worst_status(statuses):
     present = set(statuses)
     return next((status for status in STATUS_PRECEDENCE if status in present), STATUS_OK)
-
 
 
 def compare_element(item, case_values, ref_values, rows, steps, labels, out_of_service=False):
@@ -3318,7 +3309,6 @@ def compare_element(item, case_values, ref_values, rows, steps, labels, out_of_s
             'episodes': [] if status == STATUS_OUT_OF_SERVICE else build_episodes(item, findings, steps)}
 
 
-
 def _spill_rows(case_items, ref_items, inside, row_count):
     """Rows outside the outage windows where the case differs from the reference.
 
@@ -3351,7 +3341,6 @@ def _spill_rows(case_items, ref_items, inside, row_count):
                 if (left == MISSING) != (right == MISSING) or (left != MISSING and abs(left - right) > tolerance):
                     spill.add(row)
     return sorted(spill)
-
 
 
 def compare_case(result, reference, windows, out_of_service_keys=()):
@@ -3443,7 +3432,7 @@ def outage_effects(result, reference, plan):
                and max((_magnitude(ref_item['values'][row]) for row in rows), default=0.0) > OFF_LOADING
                for name in [case_item['element_name']]]
         if off:
-            checks.append((record['name'], OUTAGE_APPLIED, 'without load in its window: ' + clip_text(', '.join(off), 120)))
+            checks.append((record['name'], OUTAGE_APPLIED, 'without load in its window: ' + ', '.join(off)))
             continue
         changed = any(
             any(case_item['values'][row] != ref_items[key]['values'][row] for row in rows)
@@ -3530,7 +3519,6 @@ def release_values(result):
         item.pop('values', None)
 
 
-
 def _worse(item, ref, outage):
     tolerance = change_tolerance(item['category'])
     if item['category'] in LOADING_CATEGORIES:
@@ -3540,14 +3528,12 @@ def _worse(item, ref, outage):
             or (outage['max'] > upper and outage['max'] > ref['max'] + tolerance))
 
 
-
 def _better(item, ref, outage):
     tolerance = change_tolerance(item['category'])
     if item['category'] in LOADING_CATEGORIES:
         return ref['max'] - outage['max'] > tolerance
     lower, upper = voltage_limits(item)
     return max(lower - outage['min'], outage['max'] - upper) < max(lower - ref['min'], ref['max'] - upper) - tolerance
-
 
 
 def limit_status(record):
@@ -3572,16 +3558,13 @@ def limit_status(record):
     return STATUS_RESOLVED if in_ref else STATUS_OK
 
 
-
 def highlight(status):
     """1 marks a violation caused or worsened by the case, 2 one already in REF."""
     return 1 if status in CAUSED_STATUSES else 2 if status in (STATUS_PREEXISTING, STATUS_IMPROVED) else 0
 
 
-
 def _by_name(record):
     return record['item']['element_name'].casefold()
-
 
 
 def _loading_delta(record):
@@ -3593,7 +3576,6 @@ def _loading_delta(record):
     return record['outage']['max'] - record['ref']['max']
 
 
-
 def _maxima_difference(record):
     if record.get('maxima_difference') is not None:
         return record['maxima_difference']
@@ -3602,10 +3584,8 @@ def _maxima_difference(record):
     return record['outage']['max'] - record['ref']['max']
 
 
-
 def hours_text(value):
     return '-' if value is None else '{:.2f} h'.format(value) if value < 10 else '{:.1f} h'.format(value)
-
 
 
 def percent_text(fraction):
@@ -3619,25 +3599,20 @@ def percent_text(fraction):
     return '{:.1f} %'.format(min(99.9, max(0.1, 100.0 * fraction)))
 
 
-
 def loading_text(value):
     return 'n/a' if value is None else '{:.1f} %'.format(value)
-
 
 
 def voltage_text(value):
     return 'n/a' if value is None else '{:.3f}'.format(value)
 
 
-
 def delta_text(value):
     return '-' if value is None else '{:+.1f} pp'.format(value)
 
 
-
 def _counted(count, singular, plural):
     return '{} {}'.format(count, singular if count == 1 else plural)
-
 
 
 def _status_breakdown(statuses, both_cases):
@@ -3653,18 +3628,15 @@ def _status_breakdown(statuses, both_cases):
     return ': ' + ', '.join(parts) if parts else ''
 
 
-
 def _voltage_excess(record):
     lower, upper = voltage_limits(record['item'])
     stats = primary(record)
     return max(lower - stats['min'], stats['max'] - upper)
 
 
-
 def _primary_counters(results):
     reference = find_reference(results)
     return reference.get('counters', {}) if reference else {}
-
 
 
 def loading_classes(category):
@@ -3685,10 +3657,8 @@ def voltage_limits_text():
             'limit are no violation.'.format(format_limit(lower), format_limit(upper)))
 
 
-
 def _result_name(result):
     return REFERENCE_NAME if result['id'] == REFERENCE_ID else result['name']
-
 
 
 def _matrix_tables(payload, results, table, entries):
@@ -3714,12 +3684,10 @@ def _matrix_tables(payload, results, table, entries):
             payload[table].append(row)
 
 
-
 def _stats_by_result(results, category):
     """{result id: {element key: (item, stats)}} for REF and every calculated case."""
     ok = converged(results)
     return {result['id']: {item['key']: (item, stats) for item, stats in result['by_category'][category]} for result in ok}
-
 
 
 def _violation_flag(item, ref_stats, case_stats_list):
@@ -3727,7 +3695,6 @@ def _violation_flag(item, ref_stats, case_stats_list):
     if not flags:
         flags = [highlight(limit_status({'item': item, 'ref': ref_stats, 'outage': None}))]
     return 1 if 1 in flags else 2 if 2 in flags else 0
-
 
 
 # A case cell of an element the case switches off itself (one of its planned outages): no value, no finding.
@@ -3740,7 +3707,6 @@ def switched_off_keys(result, category):
             if record.get('out_of_service')}
 
 
-
 def share_text(stats, result):
     """' · 18 %': the share of the calculated period beyond the limit; '' when the element never violates it."""
     period = period_hours(result)
@@ -3749,7 +3715,6 @@ def share_text(stats, result):
         return ''
     share = min(1.0, hours / period)
     return ' \u00b7 {} %'.format('<1' if share < 0.005 else '{:.0f}'.format(100 * share))
-
 
 
 def _element_rows(results, category):
@@ -3769,7 +3734,6 @@ def _element_rows(results, category):
     return rows, off
 
 
-
 def _matrix_cells(results, key, found, off, text):
     """REF text and {case id: text} of one element; 'switched off' in the case that switches it off."""
     reference = find_reference(results)
@@ -3781,7 +3745,6 @@ def _matrix_cells(results, key, found, off, text):
         else:
             texts[case['id']] = text(found[case['id']], case) if case['id'] in found else 'n/a'
     return ref_text, texts
-
 
 
 def _loading_appendix(payload, results, category, table):
@@ -3799,12 +3762,10 @@ def _loading_appendix(payload, results, category, table):
     _matrix_tables(payload, results, table, [entry[2:] for entry in sorted(listed, key=lambda entry: entry[:2])])
 
 
-
 def worst_voltage(item, stats):
     """The extreme of a node that lies furthest from its band (outside it, or nearest to a limit inside it)."""
     lower, upper = voltage_limits(item)
     return stats['min'] if lower - stats['min'] >= stats['max'] - upper else stats['max']
-
 
 
 def _voltage_appendix(payload, results):
@@ -3820,7 +3781,6 @@ def _voltage_appendix(payload, results):
         listed.append((-excess, item['element_name'].casefold(), item['element_name'], ref_text, texts,
                        _violation_flag(item, found.get(REFERENCE_ID), case_stats), item.get('location') or '-'))
     _matrix_tables(payload, results, 'ScriptedAppendixVoltage', [entry[2:] for entry in sorted(listed, key=lambda entry: entry[:2])])
-
 
 
 def _top_lines_by_case(payload, results):
@@ -3840,14 +3800,12 @@ def _top_lines_by_case(payload, results):
     _matrix_tables(payload, results, 'ScriptedTopLinesByCase', rows)
 
 
-
 def _violation_counts(result):
     """Lines, transformers and nodes over their limit in the calculated period; a case's own switched-off
     equipment is no finding of it."""
     return tuple(sum(1 for item, stats in result['by_category'][category]
                      if is_critical(item, stats) and item['key'] not in switched_off_keys(result, category))
                  for category in ('line', 'transformer', 'voltage'))
-
 
 
 # Bands of the share of the calculated period a line or transformer is over its limit (upper bound inclusive).
@@ -3873,7 +3831,6 @@ def _time_share(payload, results):
         payload['ScriptedTimeShare'].append(row)
 
 
-
 def _case_counts(payload, results):
     reference = find_reference(results)
     ordered = ([reference] if reference else []) + outage_cases(results)
@@ -3888,7 +3845,6 @@ def _case_counts(payload, results):
         })
 
 
-
 def _pies(payload, results):
     reference = find_reference(results)
     for category, table in (('line', 'ScriptedPieLines'), ('transformer', 'ScriptedPieTransformers')):
@@ -3899,7 +3855,6 @@ def _pies(payload, results):
                 counts[next(index for index, (_, fits) in enumerate(classes) if fits(stats['max']))] += 1
         for order, ((label, _), count) in enumerate(zip(classes, counts), 1):
             payload[table].append({'sort_order': order, 'class_label': label, 'element_count': count})
-
 
 
 def _line_bars(payload, results):
@@ -3920,10 +3875,8 @@ def _line_bars(payload, results):
             'value_over': value if value > limit else 0.0})
 
 
-
 def _line_pairs(results, case):
     return [record for record in paired(results, 'line', case, True) if record['ref'] is not None and record['outage'] is not None]
-
 
 
 def _case_metrics(payload, results):
@@ -3989,12 +3942,10 @@ def _case_metrics(payload, results):
         })
 
 
-
 def _quality(payload, check_id, check_name, status, message, affected_element='-'):
     """One row of the model quality page."""
     payload['ScriptedModelQuality'].append({'check_id': check_id, 'check_name': check_name, 'status': status,
                                             'message': message, 'affected_element': affected_element})
-
 
 
 def _model_quality(payload, results, request=None):
@@ -4117,7 +4068,6 @@ def qds_mode_text(request=None):
     return '{} {}'.format(period, QDS_TIME_BASE_TEXT) if period else QDS_TIME_BASE_TEXT
 
 
-
 def _key_discriminator(key):
     digest = hashlib.sha256(str(key).encode('utf-8')).hexdigest()
     return digest[:6]
@@ -4192,7 +4142,6 @@ def assess_case(results, case):
     }
 
 
-
 def judge_cases(results):
     """Store the verdict of every calculated case once, so log, case table and summary agree."""
     for case in outage_cases(results):
@@ -4200,11 +4149,9 @@ def judge_cases(results):
     return results
 
 
-
 def judged(results, case):
     """The stored verdict of a case, or a fresh one where none is stored."""
     return case['judged'] if 'judged' in case else assess_case(results, case)
-
 
 
 def _violation_text(statuses, singular, plural, both):
@@ -4212,7 +4159,6 @@ def _violation_text(statuses, singular, plural, both):
     if not exceeded:
         return 'no {}'.format(singular)
     return _counted(len(exceeded), singular, plural) + _status_breakdown(statuses, both)
-
 
 
 def assessment_detail(values):
@@ -4250,7 +4196,6 @@ def assessment_detail(values):
     return ". ".join(parts) + "." if parts else ""
 
 
-
 def _reference_detail(reference):
     lines = reference['by_category']['line']
     nodes = [stats for _, stats in reference['by_category']['voltage']]
@@ -4263,7 +4208,6 @@ def _reference_detail(reference):
     return '; '.join(parts) + '.' if parts else ''
 
 
-
 def period_text(start, end):
     """'2026-10-15 00:00 - 05:00' when both ends lie on the same day."""
     if not start and not end:
@@ -4271,7 +4215,6 @@ def period_text(start, end):
     if start[:10] and start[:10] == end[:10] and len(end) > 11:
         return '{} - {}'.format(start, end[11:])
     return '{} - {}'.format(start, end)
-
 
 
 def _plan_period(plan):
@@ -4282,10 +4225,8 @@ def _plan_period(plan):
     return '; '.join(texts)
 
 
-
 def _plan_equipment(plan):
     return '; '.join(record.get('equipment_name') or '-' for record in plan['members']) or '-'
-
 
 
 def states_text(plan):
@@ -4303,10 +4244,8 @@ def states_text(plan):
     return ' | '.join(parts)
 
 
-
 def _windows_text(plan, request):
     return 'QDS: complete ComStatsim period'
-
 
 
 def _reference_text(request):
@@ -4314,7 +4253,6 @@ def _reference_text(request):
     if not background:
         return 'R0: no planned outage'
     return 'Rfix: fixed outages ' + ', '.join(record['name'] for record in background)
-
 
 
 def _case_rows(payload, results, request):
@@ -4460,7 +4398,6 @@ def _case_comparison(payload, results):
     _matrix_tables(payload, results, 'ScriptedCaseComparison', entries)
 
 
-
 def _calculation_runs(payload, results, request):
     """Evidence of every calculation: what ran, against which reference, for how long, and what was reused."""
     order = 0
@@ -4507,29 +4444,11 @@ def _calculation_runs(payload, results, request):
         })
 
 
-
-def n1_value_text(quantity, value):
-    if value is None:
-        return 'inside recording limits'
-    return '{:.1f} %'.format(value) if quantity == 'loading' else '{:.3f} p.u.'.format(value)
-
-
-def n1_limit_text(limit):
-    if not isinstance(limit, dict):
-        return '-'
-    if limit.get('quantity') == 'loading':
-        return 'max {} %'.format(format_limit(limit['max'])) if limit.get('max') is not None else '-'
-    if limit.get('min') is None or limit.get('max') is None:
-        return '-'
-    return '{}-{} p.u.'.format(format_limit(limit['min']), format_limit(limit['max']))
-
-
 # ---------------------------------------------------------------------------
 # Main and detail report tables
 # ---------------------------------------------------------------------------
 # Both templates read the same tables; each shows its chapters. Every count is taken from the complete
 # statistics before any display limit, and both reports print the same numbers for the same run ID.
-MAIN_ELEMENT_LIMITS = (('line', 20), ('transformer', 15), ('node', 20))
 MAIN_EVENTS_PER_CRITERION = 10
 MAIN_REFERENCE_ROWS = 10
 RANKING_ROWS = 10
@@ -4973,20 +4892,9 @@ def _prime_columns(results):
 
 
 def _block_rows(payload, table, columns, entries, slots, priority=None):
-    """entries (name, ref text, {column id: text}, violation) as blocks of `slots` scenario columns; any number of blocks.
-
-    When the blocks together would exceed MAX_TABLE_ROWS, every block keeps the
-    same rows: the most severe by `priority` (one sort key per entry), in their
-    order; the cut is named in the model quality, the statistics stay complete.
-    """
+    """entries (name, ref text, {column id: text}, violation) as blocks of `slots` scenario columns; any number of
+    blocks, every entry in every block (nothing is cut). `priority` is accepted for the callers' ranking only."""
     blocks = [columns[start:start + slots] for start in range(0, len(columns), slots)] or [[]]
-    room = MAX_TABLE_ROWS // len(blocks)
-    if len(entries) > room:
-        order = sorted(range(len(entries)), key=lambda index: priority[index]) if priority else range(len(entries))
-        keep = set(list(order)[:room])
-        _table_cut(payload, table, '{} of {} rows in each of the {} scenario block(s), the most severe first'.format(
-            room, len(entries), len(blocks)))
-        entries = [entry for index, entry in enumerate(entries) if index in keep]
     for number, block in enumerate(blocks, 1):
         for order, (name, ref_text, texts, violation) in enumerate(entries, 1):
             row = {
@@ -5003,46 +4911,19 @@ def _block_rows(payload, table, columns, entries, slots, priority=None):
             payload[table].append(row)
 
 
-def _table_cut(payload, table, text):
-    _quality(payload, 'table_limit_' + table, 'Table limit ' + table, 'FAIL',
-             'Published: {} (MAX_TABLE_ROWS {}). The register is incomplete in print; every count and statistic includes '
-             'the rows left out.'.format(text, MAX_TABLE_ROWS))
-
-
-def _fair_cut(payload, table, group, priority, limit=None):
-    """At most `limit` (default MAX_TABLE_ROWS) rows of `table`, shared between the groups (cases): small groups keep
-    everything, the others an equal share of the rest; each group keeps its most severe rows (`priority`), in their
-    order."""
-    rows = payload[table]
-    limit = MAX_TABLE_ROWS if limit is None else max(0, limit)
-    if len(rows) <= limit:
-        return
-    groups = {}
-    for row in rows:
-        groups.setdefault(group(row), []).append(row)
-    remaining, kept = limit, set()
-    for position, (_key, members) in enumerate(sorted(groups.items(), key=lambda item: len(item[1]))):
-        take = min(len(members), remaining // (len(groups) - position))
-        kept.update(id(row) for row in sorted(members, key=priority)[:take])
-        remaining -= take
-    _table_cut(payload, table, '{} of {} rows, shared between {} group(s), the most severe first'.format(
-        len(kept), len(rows), len(groups)))
-    payload[table][:] = [row for row in rows if id(row) in kept]
-
-
 def _critical_elements(payload, results, view, notes):
     """H07: up to 20 lines, 15 transformers and 20 nodes, most critical first; 'shown x of y' from the full count."""
     columns = _prime_columns(results)
     tables = {'line': 'ScriptedCriticalLines', 'transformer': 'ScriptedCriticalTransformers', 'node': 'ScriptedCriticalNodes'}
-    for group, limit in MAIN_ELEMENT_LIMITS:
+    for group in ('line', 'transformer', 'node'):
         if group == 'node':
             records = _node_records(view)
         else:
             records = [record for record in view.values() if record['group'] == group and _conspicuous(record)]
         records.sort(key=_rank)
-        notes[group] = (min(limit, len(records)), len(records))
+        notes[group] = (len(records), len(records))
         entries = []
-        for record in records[:limit]:
+        for record in records:
             if group == 'node':
                 low, high = record['low'], record['high']
                 ref_text = '{} / {}'.format(_extreme_text('voltage_low', low['reference'] if low else None).split(' p.u.')[0],
@@ -5103,8 +4984,7 @@ def _detail_matrices(payload, results, view):
         records.sort(key=lambda record: (record['grid'].casefold(), record['voltage_level'], record['name'].casefold()))
         entries = []
         for record in records:
-            # The name is shortened, not the second line: grid, voltage level and limit stay readable.
-            name = '{}\n{}'.format(clip_text(record['name'], MAX_LABEL_LENGTH // 2), ' · '.join(part for part in (
+            name = '{}\n{}'.format(record['name'], ' · '.join(part for part in (
                 record['grid'], record['voltage_level'], criterion_limit_text(criterion, record['threshold'])) if part and part != '-'))
             texts = {case_id: _case_cell(record, case_id, with_key=True, counters=False) for case_id, _ in columns}
             entries.append((name, _extreme_text(criterion, record['reference'], with_key=True), texts,
@@ -5206,8 +5086,6 @@ def _reference_findings(payload, results):
     for level, criterion, _size, row in rows:
         key = (level, criterion)
         ranks[key] = ranks.get(key, 0) + 1
-        if level != LEVEL_N0 and ranks[key] > MAIN_REFERENCE_ROWS:
-            continue  # n-1 reference rows appear only in the main report's top list (the detail report shows n-0, D03)
         order += 1
         row.update(row_order=order, criterion_order=CRITERIA.index(criterion), main_rank=ranks[key] if ranks[key] <= MAIN_REFERENCE_ROWS else 0)
         payload['ScriptedReferenceFindings'].append(row)
@@ -5683,8 +5561,7 @@ def _episode_row(case_order, result, item, episode, steps, is_reference):
 def _n0_episodes(payload, results):
     """ScriptedEpisodes: REF, then every calculated case; a case row ('ID · name') before the episodes of each.
 
-    Only sections with an episode are written. More than MAX_TABLE_ROWS rows are cut fairly between the sections,
-    each keeping its most severe episodes; the case rows always stay.
+    Only sections with an episode are written; every episode is published.
     """
     sections = []
     reference = find_reference(results)
@@ -5703,13 +5580,8 @@ def _n0_episodes(payload, results):
                     for rank, (item, episode) in enumerate(found))
     names = {(0 if is_reference else case_order): '{} \u00b7 {}'.format(result['id'], _result_name(result))
              for case_order, (result, _found, is_reference) in enumerate(sections, 0 if reference is not None else 1)}
-    payload['ScriptedEpisodes'][:] = rows
-    if len(rows) + len(names) > MAX_TABLE_ROWS:
-        _fair_cut(payload, 'ScriptedEpisodes', lambda row: row['case_order'], lambda row: row['rank'],
-                  limit=MAX_TABLE_ROWS - len(names))
-    kept = payload['ScriptedEpisodes']
     table, seen = [], set()
-    for row in kept:
+    for row in rows:
         if row['case_order'] not in seen:
             seen.add(row['case_order'])
             table.append(dict({field: '' for field in row}, case_order=row['case_order'], row_kind='case',
@@ -5830,19 +5702,6 @@ def _reporting_tables(payload, results, request):
     _time_criticality(payload, results, notes)
     _assessment_settings(payload, request)
     _result_provenance(payload, results)
-    # Long registers are cut fairly between the cases, never by case order; the statistics above stay complete.
-    def by_case(row):
-        return row['case_order']
-
-    def severity(row):
-        return (STATUS_RANK.get(row['status'].replace('-', '_'), len(STATUS_RANK)),
-                -_amount(row.get('peak_text') or row.get('violation_text') or '0'), row['row_order'])
-
-    _fair_cut(payload, 'ScriptedContingencyEpisodes', by_case, severity)
-    _fair_cut(payload, 'ScriptedContingencyEvents', by_case, lambda row: row['row_order'])
-    _fair_cut(payload, 'ScriptedContingencyRegister', by_case, lambda row: row['row_order'])
-    _fair_cut(payload, 'ScriptedQualityRegister', by_case, lambda row: row['row_order'])
-    _fair_cut(payload, 'ScriptedReferenceFindings', lambda row: (row['level'], row['criterion']), lambda row: row['row_order'])
     return notes
 
 
@@ -5851,14 +5710,13 @@ def critical_note(notes):
     for group, singular, plural in (('line', 'line', 'lines'), ('transformer', 'transformer', 'transformers'), ('node', 'node', 'nodes')):
         shown, total = notes.get(group, (0, 0))
         parts.append('{} of {} {}'.format(shown, total, singular if total == 1 else plural))
-    return ('Shown: ' + ', '.join(parts) + ' (conspicuous elements, most critical first; the counts come from the complete '
-            'evaluation, the detail report lists every one).')
+    return ('Shown: ' + ', '.join(parts) + ' (every conspicuous element, most critical first).')
 
 
 def events_note(notes):
     listed, total = notes.get('events', (0, 0))
-    return ('Top findings per criterion across every scenario. The detail report lists {} of {} critical single findings '
-            '(a prioritised selection per scenario); every count comes from the complete evaluation.'.format(listed, total))
+    return ('Top findings per criterion across every scenario. The detail report lists all {} critical single '
+            'findings.'.format(total))
 
 
 def overall_text(payload):
@@ -5870,10 +5728,10 @@ def overall_text(payload):
                  if row['assessment'] == ASSESSMENT_NOT_EVALUATED and row['level'] == LEVEL_N0]
     missing = ''
     if failed_n0:
-        missing += 'The QDS of {} case(s) could not be evaluated: {}. '.format(len(failed_n0), clip_text(', '.join(failed_n0), 200))
+        missing += 'The QDS of {} case(s) could not be evaluated: {}. '.format(len(failed_n0), ', '.join(failed_n0))
     if failed:
         missing += 'The contingency analysis of {} case(s) was requested but could not be evaluated: {}. '.format(
-            len(failed), clip_text(', '.join(failed), 200))
+            len(failed), ', '.join(failed))
     if not rows:
         return (missing + ('No (n-1)\' scenario could be assessed; there is no n-1 result to rely on. ' if failed else
                            'No (n-1)\' scenario was assessed in this run; the n-0 chapters compare the planning cases with Reference. ')
@@ -5881,10 +5739,10 @@ def overall_text(payload):
     caused = [row['case_name'] for row in rows if row['new_events'] or row['worsened_events']]
     incomplete = [row['case_name'] for row in rows if row['assessment'] == 'INCOMPLETE COVERAGE']
     text = '{} scenario(s) assessed against the n-1 reference. '.format(len(rows))
-    text += ('NEW or WORSENED findings in: {}. '.format(clip_text(', '.join(caused), 200)) if caused
+    text += ('NEW or WORSENED findings in: {}. '.format(', '.join(caused)) if caused
              else 'No scenario adds or worsens a violation in the assessed study times. ')
     if incomplete:
-        text += 'Incomplete evaluation in: {}; their results are no clearance. '.format(clip_text(', '.join(incomplete), 200))
+        text += 'Incomplete evaluation in: {}; their results are no clearance. '.format(', '.join(incomplete))
     return text + missing + 'This pre-assessment is no release and no proof of n-1 security.'
 
 
@@ -5908,21 +5766,6 @@ def n1_meta_text(results):
                  + n1_filter_text() + '.')
 
 
-def _enforce_table_limits(payload):
-    for name in sorted(payload):
-        if name == 'ScriptedModelQuality':
-            continue
-        rows = payload[name]
-        limit = MAX_TABLE_ROWS
-        if len(rows) <= limit:
-            continue
-        total = len(rows)
-        del rows[limit:]
-        _quality(payload, 'table_limit_' + name, 'Table limit ' + name, 'FAIL',
-                 '{} rows generated, {} published. The report is incomplete; reduce the number of cases or the model scope (MAX_TABLE_ROWS).'.format(total, limit))
-
-
-
 def coverage_statement(results, request):
     start_end = ''
     reference = find_reference(results)
@@ -5932,7 +5775,6 @@ def coverage_statement(results, request):
             'differs from it; a case with results for less than its outage time is never reported free of violations. '
             'Statement B, absolute network state over the simulated period{}: only Reference describes it. A case that adds no '
             'violation does not prove the network permissible over the whole period.'.format(start_end))
-
 
 
 def build_cases_payload(study_case, results, project_name, result_name, request, generated_by, run_mode):
@@ -5998,17 +5840,15 @@ def build_cases_payload(study_case, results, project_name, result_name, request,
     _n0_episodes(payload, results)
     meta = payload['ScriptedReportMeta'][0]
     meta.update(overall_text=overall_text(payload), critical_note=critical_note(notes), events_note=events_note(notes))
-    _enforce_table_limits(payload)
     meta['empty_tables'] = empty_tables(payload)
     return payload
-
 
 
 def coerce_value(value, kind, where, field=None):
     if value is None:
         return None
     if kind == 'string':
-        return clip_text(value, text_limit(field) if field else MAX_TEXT_LENGTH)
+        return str(value)
     if type(value) is bool:
         raise ValueError(where + ': boolean is not a numeric value')
     if kind == 'integer':
@@ -6025,7 +5865,6 @@ def coerce_value(value, kind, where, field=None):
             raise ValueError(where + ': invalid finite number ' + repr(value))
         return result
     raise ValueError(where + ': unsupported type ' + repr(kind))
-
 
 
 def api_error_code(value):
@@ -6075,12 +5914,10 @@ def validate_payload(payload):
                     raise ValueError(where + ': required text is empty')
 
 
-
 def _check(returned, context):
     code = api_error_code(returned)
     if code is not None:
         raise RuntimeError('{} returned error code {:g}'.format(context, code))
-
 
 
 def publish_report(report, payload, log=None):
@@ -6671,7 +6508,7 @@ def _declared_attributes(obj):
         if callable(value):
             continue
         described.append("{}={}".format(
-            name, clip_text(value, MAX_LABEL_LENGTH) if value is not None else ""))
+            name, clip_text(value, LOG_VALUE_LENGTH) if value is not None else ""))
     return described
 
 
@@ -6708,17 +6545,6 @@ def _same_object(left, right):
     if left is None or right is None:
         return False
     return object_key(left) == object_key(right)
-
-
-def _set_attribute(obj, name, value):
-    try:
-        setattr(obj, name, value)
-    except Exception:
-        setter = getattr(obj, "SetAttribute", None)
-        if not callable(setter):
-            return False
-        setter(name, value)
-    return _same_object(safe_attr(obj, name), value)
 
 
 def _as_objects(value):
@@ -6851,18 +6677,6 @@ def _outages_below(roots):
 
 
 BRANCH_CLASSES = ("ElmLne", "ElmTr2", "ElmTr3", "ElmCoup")
-
-
-def outage_branches(outage, parts=None):
-    """Branches an outage switches off, from its components and its actions."""
-    _, related = parts or _outage_parts(outage)
-    return [item for item in related.values() if class_name(item) in BRANCH_CLASSES]
-
-
-def outage_component_keys(outage, parts=None):
-    """Keys of every object the outage or its actions name as components."""
-    _, related = parts or _outage_parts(outage)
-    return sorted(related)
 
 
 def _outage_record(outage):
@@ -7396,9 +7210,9 @@ def resolve_request(config, records, period=(None, None), source='gui', source_t
                 plan['overridden'].append(record)
         if not plan['members']:
             errors.append('no planned outage is assigned')
-        if plan['overridden'] and not ALLOW_OUTAGE_TIME_OVERRIDE:
-            errors.append('own dates for {} are not applied: writing IntPlannedout start and end times is not verified '
-                          '(ALLOW_OUTAGE_TIME_OVERRIDE is off); create a planned outage with these dates instead'.format(
+        if plan['overridden']:
+            errors.append('own dates for {} are not applied: Outage Assessment does not write the start and end times '
+                          'of a planned outage; create a planned outage with these dates instead'.format(
                               ', '.join(record['name'] for record in plan['overridden'])))
         windows = plan['windows']
         for rule in config.get('rules') or ():
@@ -7582,37 +7396,6 @@ def save_case_config(path, config, user=''):
     config['revision'] = stored['revision']
     config.pop('migration_note', None)
     return stored
-
-
-def preview_text(request, period=(None, None)):
-    """What OK would calculate, as plain text for the case manager and the log."""
-    lines = ['Reference: {}'.format(_reference_text(request)),
-             'Simulated period: {} to {}'.format(_format_pf_time(period[0]) or '?', _format_pf_time(period[1]) or '?'), '']
-    ready = [plan for plan in request['cases'] if plan['status'] == PLAN_READY]
-    groups = {}
-    for plan in ready:
-        groups.setdefault(plan['fingerprint'], []).append(plan['id'])
-    reference = setting_value('run_reference', request.get('settings') or {})
-    runs = len(groups) + (1 if reference else 0)
-    lines.append('{} case(s), {} ready; QDS runs: {} ({} reference){}.'.format(
-        len(request['cases']), len(ready), runs, 1 if reference else 0,
-        '; identical cases calculated once: ' + ', '.join('/'.join(ids) for ids in groups.values() if len(ids) > 1)
-        if any(len(ids) > 1 for ids in groups.values()) else ''))
-    for plan in request['cases']:
-        lines.append('')
-        lines.append('[{}] {} - {}'.format(plan['id'], plan['name'], plan['status']))
-        for record in plan['members']:
-            start, end = plan['windows'][record['key']]
-            lines.append('   {}  {}'.format(record['name'], period_text(_format_pf_time(start), _format_pf_time(end)) or 'unknown window'))
-        for left, right, code in plan['relations']:
-            lines.append('   {} / {}: {} ({})'.format(left, right, code, INTERVAL_RELATIONS[code]))
-        if plan['states']:
-            lines.append('   network states: ' + states_text(plan))
-        for warning in plan['warnings']:
-            lines.append('   warning: ' + warning)
-        if plan['reason']:
-            lines.append('   ' + plan['reason'])
-    return '\n'.join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -8294,16 +8077,6 @@ class CaseEditor:
         return 'from the first to the last planned outage of the calculated cases, plus one QDS step after ' \
                '(ComStatsim: {})'.format(self._qds_text)
 
-    def settings_rows(self):
-        """(key, label, unit, value text, source, category, editable) of every setting, in SETTINGS order."""
-        overrides = self.settings_overrides()
-        values = default_settings()
-        values.update({key: value for key, value in overrides.items() if key in values})
-        return [(setting['key'], setting['label'], setting['unit'],
-                 setting_text(setting['key'], values.get(setting['key'], setting['default'])),
-                 setting_source(setting['key'], overrides), setting['category'], setting['editable'])
-                for setting in SETTINGS]
-
     def set_settings(self, values):
         """Take the edited values of the Settings tab; [(key, problem)] and nothing changes when one is invalid."""
         parsed, problems = {}, []
@@ -8389,7 +8162,7 @@ class CaseEditor:
         grids = self.selected_grids('monitoring_grids')
         if grids:
             return ', '.join(grids)
-        return 'every grid' + (' named *{}*'.format(GRID_NAME_FILTER) if GRID_NAME_FILTER else '')
+        return 'every grid'
 
     # --- assessment and preview ------------------------------------------------
     def set_log_level(self, level):
@@ -10609,9 +10382,6 @@ class CaseManagerDialog:
         self.set_property(self.status_line, 'problem', bool(problems))
         self.refresh_settings_state()
 
-    def refresh_preview(self):
-        self.refresh_overview()
-
     # --- cases -------------------------------------------------------------------
     def on_case_select(self):
         if getattr(self, '_selecting', False):
@@ -11517,7 +11287,7 @@ def evaluate_qds(run, description, plan, logger):
         RUN_STATS.count("qds_steps", len(labels))
         RUN_STATS.count("series", len(series))
         RUN_STATS.count("values", len(series) * len(labels))
-        if current_setting("monitoring_grids") or GRID_NAME_FILTER:
+        if current_setting("monitoring_grids"):
             logger.write(
                 "EXTRACTION",
                 "Grid scope ({}): {} series assessed, {} out of scope and "
@@ -11846,15 +11616,6 @@ def _isolate_outages(guard, active_keys, records, label):
                 "with exactly its own planned outages.".format(record["name"], label))
 
 
-def _apply_overrides(guard, plan):
-    """Own dates of a case; only reached when ALLOW_OUTAGE_TIME_OVERRIDE is on."""
-    for record in plan.get("overridden") or ():
-        start, end = plan["windows"][record["key"]]
-        for attribute, value in (("starttime", start), ("endtime", end)):
-            if not guard.set(record["_object"], attribute, value, "{} of outage '{}'".format(attribute, record["name"])):
-                raise OutageAssessmentError("{} of outage '{}' could not be set for case {}.".format(attribute, record["name"], plan["id"]))
-
-
 def applied_text(command, records, option=PLANNED_OUTAGE_OPTION):
     """What PowerFactory will apply, read back from the objects: the option and every outage not Ignored."""
     found, value = _read_setting(command, option)
@@ -11943,7 +11704,6 @@ def _calculate_case(app, study_case, qds, plan, request, records, original_resul
     try:
         with StateGuard() as guard:
             _isolate_outages(guard, active, records, "case " + plan["id"])
-            _apply_overrides(guard, plan)
             logger.detail(applied_text(qds, records))
             run = _calculate_qds(app, study_case, qds, plan["id"], plan["name"], original_result, logger,
                                  result_objects, plan["fingerprint"], announce=False)
@@ -12188,19 +11948,6 @@ def create_contingency_analysis(study_case, elements, name):
     return command, made, refused
 
 
-def contingencies_outside(equipment, grids):
-    """The analysed contingencies none of whose equipment lies in `grids`; they are set to 'Not analysed' for the run.
-
-    No grid selected keeps every contingency. A contingency partly in the
-    grids, or without readable equipment, stays analysed.
-    """
-    if not grids:
-        return []
-    return [outage for outage, elements in equipment
-            if safe_attr(outage, 'outserv', 0) in (0, False) and elements
-            and not any(element_grid_name(element) in grids for element in elements)]
-
-
 N1_SWEEP_ATTRIBUTES = ('iEnableTS', 'calcPeriod', 'startTime', 'endTime', 'stepSize', 'stepUnit', 'stepNumber',
                        N1_TIMES_ATTRIBUTE, N1_IGNORE_ATTRIBUTE, N1_PLANNED_OPTION)
 
@@ -12265,10 +12012,6 @@ def calculated_times(command):
 
 def _missing_times(wanted, found, tolerance=1.0):
     return [moment for moment in wanted if not any(abs(moment - other) <= tolerance for other in found)]
-
-
-def _same_times(found, wanted, tolerance=1.0):
-    return len(found) == len(wanted) and all(abs(a - b) <= tolerance for a, b in zip(sorted(found), sorted(wanted)))
 
 
 def run_n1_sweep(command, times, step, active_keys, records, excluded, label, keep=None):
@@ -12565,12 +12308,6 @@ def evaluate_n1_case(entry, plan, elements_of, run_id=''):
     return result
 
 
-def run_n1_case(command, plan, request, records, grid, excluded, elements_of, prime, references, label=None):
-    """Both phases at once for one case (no kept copies): used where nothing has to be kept."""
-    return evaluate_n1_case(calculate_n1_case(command, plan, request, records, grid, excluded, prime, references,
-                                              label=label), plan, elements_of)
-
-
 # ---------------------------------------------------------------------------
 # Network scope, calculation requests and run logging
 # ---------------------------------------------------------------------------
@@ -12806,9 +12543,6 @@ def _log_context(app, study_case, qds, original_result, logger):
         project, object_name(study_case), object_name(qds)), verbosity=LOG_DETAILED)
     logger.detail("Result object: {} ({})".format(
         object_name(original_result), class_name(original_result) or "ElmRes"), verbosity=LOG_DETAILED)
-    logger.detail("Grid scope of the script: {}".format(
-        "grids whose name contains {!r}".format(GRID_NAME_FILTER)
-        if GRID_NAME_FILTER else "every element (a grid selection in Settings takes precedence)"), verbosity=LOG_DETAILED)
     logger.detail("Reference case: {} | case source: {} | time base: complete ComStatsim period".format(
         "on" if setting_value('run_reference') else "off", CASE_SOURCE), verbosity=LOG_DETAILED)
 
@@ -13111,7 +12845,6 @@ def evaluate_runs(runs, request, logger):
                 reference_episodes(reference)
             reference['run_note'] = run.get('run_note', '')
             results.append(reference)
-            check_run_budget(results)
             continue
         if run.get('reuse_of'):
             source = by_id.get(run['reuse_of'])
@@ -13124,7 +12857,6 @@ def evaluate_runs(runs, request, logger):
         result = evaluate_case(run, reference, logger)
         by_id[run['id']] = result
         results.append(result)
-        check_run_budget(results)
     return results
 
 
@@ -13428,6 +13160,7 @@ def execute_outage_assessment(app):
                 n1_runs = calculate_n1(app, study_case, qds, request, records, ready, logger, study_time_state,
                                        result_objects, grid=n1_grid)
         else:
+            check_run_size(app, span_grid(qds, ready), len({plan["fingerprint"] for plan in ready}), logger)
             span = set_qds_span(qds_guard, qds, ready, logger)
             request["qds_run_period"] = (
                 "QDS period {}, set for the run from the first planned outage of the calculated cases to one QDS "
@@ -13499,8 +13232,8 @@ def execute_outage_assessment(app):
     logger.write("RESTORE", "Original PowerFactory state restored and verified.", 5, verbosity=LOG_COMPACT)
     logger.step(6, "Evaluation (phase 2): reading and comparing the kept result objects")
     if open_column_buffer(app) is None:
-        logger.write("EXTRACTION", "No IntVec could be created in this ComPython, so results are read value by value "
-                     "(slow). The run summary counts these reads.", 6, "WARNING")
+        logger.write("EXTRACTION", "No IntVec could be created in the study case or in this ComPython, so results are "
+                     "read value by value (slow). The run summary counts these reads.", 6, "WARNING")
     try:
         results = evaluate_runs(runs, request, logger)
         if not n0:
@@ -13513,7 +13246,6 @@ def execute_outage_assessment(app):
     for result in results:
         release_values(result)
     with RUN_STATS.measure("judge the cases"):
-        check_run_budget(results)
         apply_reference(results)
         judge_cases(results)
     logger.step(7, "Results and report publication")

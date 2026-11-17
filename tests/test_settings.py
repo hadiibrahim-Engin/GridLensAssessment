@@ -43,8 +43,7 @@ def test_defaults_are_the_values_of_the_existing_code():
     assert values["energized_min_pu"] == gl.ENERGIZED_MIN_PU and values["top_n"] == gl.TOP_N == 10
     assert values["max_plot_points"] == gl.MAX_PLOT_POINTS and values["max_cases"] == gl.MAX_CASES
     assert values["max_n1_times"] == gl.MAX_N1_TIMES and values["run_reference"] is gl.RUN_REFERENCE_CASE
-    assert (values["loading_appendix_delta"], values["voltage_appendix_delta"]) == (
-        gl.LOADING_APPENDIX_DELTA, gl.VOLTAGE_APPENDIX_DELTA)
+    assert "loading_appendix_delta" not in values and "voltage_appendix_delta" not in values, "retired on 16 Nov 2026"
     assert values["loading_change_tolerance"] == gl.LOADING_DELTA_TOLERANCE == 0.1
     assert values["voltage_change_tolerance"] == gl.VOLTAGE_DELTA_TOLERANCE == 0.001
     assert values["n1_limit_mode"] == gl.N1_LIMITS_POWERFACTORY
@@ -185,9 +184,10 @@ def test_editor_refuses_invalid_settings_and_restores_defaults(editor):
     assert editor.set_settings({"voltage_min_pu": "1.2"})[0][0] == "voltage_min_pu"
     assert editor.set_settings({"voltage_min_pu": "0.9"}) == []
     assert editor.settings_overrides() == {"voltage_min_pu": 0.9}
-    rows = {row[0]: row for row in editor.settings_rows()}
-    assert rows["voltage_min_pu"][4] == gl.SOURCE_USER and rows["line_limit"][4] == gl.SOURCE_OUTAGE_ASSESSMENT
-    assert rows["contingency_set"][3] == gl.NOT_VERIFIED and rows["contingency_set"][6] is False
+    overrides = editor.settings_overrides()
+    assert gl.setting_source("voltage_min_pu", overrides) == gl.SOURCE_USER
+    assert gl.setting_source("line_limit", overrides) == gl.SOURCE_OUTAGE_ASSESSMENT
+    assert gl.SETTINGS_BY_KEY["contingency_set"]["editable"] is False
     assert "Settings" in dict(editor.summary()[0])
     assert "Settings: Minimum voltage, every voltage level = 0.9 p.u." in editor.calculation_preview()
     editor.restore_default_settings()

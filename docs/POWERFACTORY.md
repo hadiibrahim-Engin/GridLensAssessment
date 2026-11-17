@@ -261,13 +261,13 @@ cols = res.GetNumberOfColumns()
 var = res.GetVariable(col)               # "c:loading"
 obj = res.GetObject(col)                 # the element of the column
 err, value = res.GetValue(row, col)      # one cell; err != 0: no value
-vec = script.CreateObject("IntVec", "OutageAssessment_column_buffer")
+vec = study_case.CreateObject("IntVec", "OutageAssessment_column_buffer")
 res.GetColumnValues(vec, col)            # a whole column into vec.V
 res.Release()
 ```
 
 - Outage Assessment reads column by column with `GetColumnValues` into an `IntVec` it
-  creates in the running ComPython and deletes at the end
+  creates in the active study case (else in the running ComPython) and deletes at the end
   (`open_column_buffer`, `read_column`); where that fails, cell by cell with
   `GetValue` (slow, counted in the run summary).
 - The time column gives the absolute time axis; Outage Assessment checks that REF and

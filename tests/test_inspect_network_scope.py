@@ -55,7 +55,6 @@ CASES = [
 
 
 def test_probe_uses_the_report_filter_and_variables():
-    assert probe.GRID_NAME_FILTER == gl.GRID_NAME_FILTER
     assert probe.VARIABLES == gl.VARIABLES
     assert probe.CLASS_CATEGORIES == gl.CLASS_CATEGORIES
 

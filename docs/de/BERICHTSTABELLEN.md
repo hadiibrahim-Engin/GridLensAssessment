@@ -1,6 +1,6 @@
 # Outage Assessment – wie jede Berichtstabelle berechnet und erstellt wird
 
-Outage Assessment veröffentlicht **40 Tabellen** (Datenvertrag 7.2), die die Berichte
+Outage Assessment veröffentlicht **41 Tabellen** (Datenvertrag 7.3), die die Berichte
 lesen: `MASTER_OUTAGE_ASSESSMENT` (Hauptbericht), `MASTER_OUTAGE_ASSESSMENT_DETAIL`
 (technischer Detailbericht) und `MASTER_OUTAGE_ASSESSMENT_TABLES` (Tabellenbericht, nur n-0,
 soll beide ersetzen), gehalten als Pages in `designer-pages/<Bericht>/`
@@ -36,12 +36,13 @@ flowchart LR
 3. **`validate_payload`** prüft jede Zeile: nur deklarierte Felder (`TABLES`),
    der richtige Typ (Text, Ganzzahl, endliche Zahl), jedes Pflichtfeld
    (`REQUIRED_FIELDS`) gefüllt, genau eine Zeile in `ScriptedReportMeta`. Namen
-   werden auf 80 Zeichen, andere Texte auf 500 gekürzt und enden mit „…“.
+   und Texte werden vollständig veröffentlicht, nie gekürzt.
 4. **`publish_report`** (nur unter einem `IntReport`): genau ein `Reset()`,
    dann je Tabelle `CreateTable(name)` mit dem Namen **ohne** das Präfix
    `Scripted` (PowerFactory ergänzt es), `CreateField` je Feld und `SetValue`
-   je gefüllter Zelle. Eine Tabelle mit mehr als 5000 Zeilen (`MAX_TABLE_ROWS`)
-   wird gekürzt, und die Kürzung steht auf der Qualitätsseite.
+   je gefüllter Zelle. Jede Zeile wird veröffentlicht: keine Tabelle, kein
+   Register und keine Liste der n-1-Einzelbefunde wird gekürzt (Hadi, 17.11.2026:
+   „ich brauche alle Daten“).
 
 **Veröffentlicht wird nur, was gedruckt wird.** Felder, die das Skript für sich
 berechnet (Zusammenfassungen, Log, Prüfungen) und die kein Bericht zeigt,
@@ -163,7 +164,6 @@ PowerFactory-Berichtsengine Relationen auf Diagramme nicht anwendet.
 | `outages_<case>` | hat jede Außerbetriebnahme gewirkt (`APPLIED`, `EFFECT SEEN`, `NO EFFECT`, `NOT CHECKABLE`) |
 | `outages_after_<case>` | eine Außerbetriebnahme, die nach ihrem Fenster weiterwirkt |
 | `n1_<case>` | (n-1)' gegen n-1: Zählungen je Status; FAIL, wenn der Fall `NEW` oder `WORSENED` verursacht, WARNING, wenn Ergebnisse fehlen |
-| `table_limit_<table>` | FAIL, wenn eine Tabelle bei 5000 Zeilen gekürzt wurde |
 
 `affected_element` nennt den betroffenen Fall oder das Betriebsmittel, sonst `-`.
 
@@ -225,9 +225,11 @@ Bedingungen auf `class_label`.
 
 ### 3.7 `ScriptedCaseCounts` – kritische Betriebsmittel je Fall
 
-**Haupt 9** (Diagramm). **Zeilen:** REF und jeder gerechnete Fall
-(`_case_counts`). `line_count`, `transformer_count`, `node_count`: in diesem
-Lauf über den ganzen Zeitraum kritische Betriebsmittel.
+**Haupt 9** und erstes Histogramm des Tabellenberichts (Diagramm). **Zeilen:**
+REF und jeder gerechnete Fall (`_case_counts`). `line_count`,
+`transformer_count`, `node_count`: Betriebsmittel, die im ganzen Zeitraum dieses
+Laufs ihre Grenze (strikt) verletzen; ein Fall zählt die Betriebsmittel nicht,
+die er selbst freischaltet.
 
 ### 3.8 `ScriptedLineLoadingBars` – höchstbelastete Leitungen über alle Läufe
 
@@ -283,22 +285,28 @@ weitere Leitung hat.
 
 ### 3.12 `ScriptedAppendixLine` und `ScriptedAppendixTransformer` – Anhänge A und B
 
-**Detail**, Anhänge A (Leitungen) und B (Transformatoren). Matrixtabellen mit
-einer Zeile je relevantem Betriebsmittel (`_loading_appendix`): sein Maximum
-in irgendeinem Lauf liegt auf oder über der Warnschwelle, **oder** sein
-Maximum weicht in einem Fall um mindestens *Appendix: also list a loading
-change from* von REF ab. Die Zelle ist das Maximum des Betriebsmittels in
-diesem Lauf. Sortiert nach dem höchsten Maximum, dann Name. `violation`: 1,
-wenn ein Fall eine Verletzung des Betriebsmittels verursacht, 2, wenn sie schon
-in REF besteht.
+**Detail**-Anhänge A (Leitungen) und B (Transformatoren) sowie der
+Tabellenbericht. Matrixtabellen mit einer Zeile je Betriebsmittel **über seiner
+Grenze** (strikt über 100 %) in REF oder einem Fall (`_loading_appendix`); eine
+Warn- oder Änderungsschwelle gibt es nicht mehr (seit 16.11.2026). Die Zelle ist
+das Maximum über den ganzen Rechenzeitraum dieses Laufs und, bei Verletzung, der
+Anteil des Zeitraums über der Grenze (`112.4 % · 18 %`, `hours_over` /
+`period_hours`). In dem Fall, der das Betriebsmittel selbst freischaltet (eine
+seiner Außerbetriebnahmen), steht `switched off`, und der Fall zählt dafür
+nichts. Rangfolge nach dem höchsten Maximum (`rank` 1, 2, …), dann Name.
+`violation`: 1, wenn ein Fall eine Verletzung verursacht, 2, wenn sie schon in
+REF besteht.
 
 ### 3.13 `ScriptedAppendixVoltage` – Anhang C
 
-**Detail**, Anhang C (Knotenspannungen). Eine Zeile je relevantem Knoten
-(`_voltage_appendix`): ein anderer Status als `OK` in einem Fall, **oder** ein
-Minimum, das um mindestens *Appendix: also list a voltage change from* von REF
-abweicht. Die Zelle ist die Mindestspannung in diesem Lauf (p.u.). Sortiert
-nach der größten Überschreitung des Bands, dann Name.
+**Detail**-Anhang C (Knotenspannungen) sowie der Tabellenbericht. Eine Zeile je
+Knoten **außerhalb seines Bands** in REF oder einem Fall (`_voltage_appendix`).
+Die Zelle ist die Spannung mit dem größten Abstand zum Band über den ganzen
+Rechenzeitraum (p.u., `worst_voltage`) und der Anteil des Zeitraums außerhalb.
+Rangfolge nach der größten Überschreitung, dann Name. Interne Stationsknoten
+(`ElmTerm` mit Verwendung *Internal Node*, `iUsage` 2) tragen die Spannung ihrer
+Sammelschiene und werden gar nicht bewertet (`is_internal_node`; gezählt auf der
+Qualitätsseite).
 
 ### 3.14–3.34 Statistik je Ebene, Betriebsmittel, Fehlerfall und Zeit
 
@@ -330,13 +338,10 @@ einzeln.
 | 3.33 | `ScriptedTimeCriticality`, `ScriptedTimeMatrix` | Haupt 12 | je Studienzeitpunkt | `_time_criticality` | mit n-1: einzelne kritische Betriebsmittel in n-1 und in (n-1)' über alle Fälle (zwei Reihen), je Fall E = kritische Betriebsmittel, C = kritische Fehlerfälle. Ohne n-1: Reference und alle Fälle je QDS-Zeitschritt (das Diagramm nimmt die größte Zahl seit dem vorigen Plotpunkt); die Tabelle nennt die Schritte, in denen ein Fall andere kritische Betriebsmittel hat als Reference |
 | 3.34 | `ScriptedAssessmentSettings`, `ScriptedResultProvenance` | Haupt 13, Detail 15 | je Einstellung; je Ergebnisobjekt | `_assessment_settings`, `_result_provenance` | Wert, Einheit, Herkunft, Status; Objektname und PowerFactory-Pfad, soweit bekannt |
 
-**Kürzungen.** Kein Register wird in Fallreihenfolge gekürzt. Würde eine
-Tabelle 5000 Zeilen überschreiten, verteilt `_fair_cut` die Zeilen auf die
-Fälle (jeder behält seine schwersten Zeilen), und `_block_rows` behält in
-jedem Fallblock dieselben, schwersten Zeilen; die Kürzung steht auf der
-Qualitätsseite, und jede Zählung enthält auch die ausgelassenen Zeilen. Von
-den n-1-Referenzbefunden werden nur die obersten Zeilen veröffentlicht (der
-Detailbericht zeigt die n-0-Zeilen). Jeder Planungsfall behält seine Zeilen,
+**Keine Kürzungen.** Jede Tabelle enthält jede Zeile: die Register, die
+Episoden, jedes kritische Betriebsmittel des Hauptberichts und jeden
+n-1-Referenzbefund (`main_rank` markiert nur die obersten Zeilen, die der
+Hauptbericht druckt). Jeder Planungsfall behält seine Zeilen,
 auch wenn seine QDS oder sein n-1 gescheitert ist; `ScriptedQualityRegister`
 enthält auch NOT APPLICABLE je Fehlerfall.
 
@@ -360,29 +365,36 @@ Dauer (Summe der Schrittdauern), Spitze und ihre Zeit, REF zur Spitzenzeit und d
 schwerste Schrittstatus. Referenz-Episoden (`reference_episodes`, ganzer Zeitraum, Status EXCEEDED) stehen
 zuerst, dann jeder Fall. Vor den Episoden jedes Abschnitts steht eine Fallzeile (`row_kind = 'case'`, nur
 `case_name` = „ID · Name“); die Vorlage zeichnet sie als grauen Balken. Innerhalb eines Abschnitts stehen die
-Elemente nach ihrer schwersten Episode, die Episoden eines Elements zeitlich. Mehr als `MAX_TABLE_ROWS` Zeilen
-werden gerecht über die Abschnitte gekürzt; die Fallzeilen bleiben.
+Elemente nach ihrer schwersten Episode, die Episoden eines Elements zeitlich. Jede Episode wird veröffentlicht.
 
 Vertrag 7.2 ergänzt außerdem `location_text` (Grid / Station, `element_location`) in den drei Anhangsmatrizen,
-`result_path` in `ScriptedCalculationRuns` und `duration_text` in `ScriptedOutageWindows`; die Knotenmatrix zeigt
-minimale / maximale Spannung.
+`result_path` in `ScriptedCalculationRuns` und `duration_text` in `ScriptedOutageWindows`. Vertrag 7.3 ergänzt
+`rank` in den drei Anhangsmatrizen.
+
+### 3.37 `ScriptedTimeShare` – Zeitanteil über der Grenze (Tabellenbericht)
+
+`_time_share`. Eine Zeile je Lauf, Referenz zuerst (`case_order` 0). Leitungen und Transformatoren über ihrer
+Grenze in diesem Lauf (ohne die Betriebsmittel, die ein Fall selbst freischaltet), gezählt nach dem Anteil des
+Rechenzeitraums über der Grenze: `share_low` bis 10 %, `share_mid` über 10 bis 25 %, `share_high` über 25 bis
+50 %, `share_top` über 50 % (Obergrenzen eingeschlossen). Das zweite Histogramm des Tabellenberichts stapelt die
+vier Anzahlen je Lauf.
 
 ---
 
 ## 4. Kapitel und ihre Tabellen
 
-**Tabellenbericht** (`MASTER_OUTAGE_ASSESSMENT_TABLES`, nur n-0, keine Diagramme, jede Information einmal):
+**Tabellenbericht** (`MASTER_OUTAGE_ASSESSMENT_TABLES`, nur n-0, jede Information einmal, zwei Histogramme):
 
 | Seite | Tabellen |
 |---|---|
 | Titelseite, Inhaltsverzeichnis | `ScriptedReportMeta` |
 | Case summary | `ScriptedCaseSummary` |
+| Overloads per scenario | `ScriptedCaseCounts` (Anzahl je Szenario), `ScriptedTimeShare` (Zeitanteil) |
 | Planned outages | `ScriptedOutageWindows` (Fall, Außerbetriebnahme, Objekt, Betriebsmittel, Beginn, Ende, Dauer) |
-| Lines, Transformers, Node voltages | `ScriptedAppendixLine`, `…Transformer`, `…Voltage` mit Location |
+| Lines, Transformers, Nodes über der Grenze | `ScriptedAppendixLine`, `…Transformer`, `…Voltage` mit Rang und Location |
 | Violation episodes | `ScriptedEpisodes` |
 | Model quality | `ScriptedModelQuality` ohne die Zeilen anderer Seiten (Grenzwerte, Netzumfang, Einstellungen, Aussageumfang, gescheiterte Rechnungen, n-1) |
 | Calculation evidence | `ScriptedCalculationRuns` mit Pfad des Ergebnisobjekts |
-| Settings and limits | `ScriptedAssessmentSettings` |
 | Method | Text |
 
 

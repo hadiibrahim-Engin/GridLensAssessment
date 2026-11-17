@@ -138,7 +138,6 @@ def test_c_kw10_and_kw40_run_over_the_complete_period_without_proposed_windows()
     assert gl.qds_mode_text(request).startswith("Every run covers the same QDS period")
     request["qds_run_period"] = "QDS period 2016-05-02 08:00 - 2016-07-29 18:00, set for the run."
     assert gl.qds_mode_text(request).startswith("QDS period 2016-05-02 08:00 - 2016-07-29 18:00, set for the run. Every")
-    assert "proposed" not in gl.preview_text(request, PERIOD)
 
 
 def test_no_time_optimisation_remains_in_the_runtime():
@@ -247,14 +246,14 @@ def test_legacy_cycle_is_rejected_before_assignments_can_be_lost(tmp_path):
     assert path.read_text() == original
 
 
-def test_own_dates_are_refused_while_overrides_are_off():
+def test_own_dates_are_refused():
     fs1 = record("FS1", kw(10), kw(11))
     data = config([case("B", fs1, overrides={fs1["key"]: [kw(40), kw(41)]})])
 
     plan = gl.resolve_request(data, [fs1], PERIOD)["cases"][0]
 
     assert plan["status"] == gl.PLAN_NOT_EVALUATED
-    assert "ALLOW_OUTAGE_TIME_OVERRIDE" in plan["reason"]
+    assert "own dates for FS1 are not applied" in plan["reason"]
     assert plan["windows"][fs1["key"]] == (kw(40), kw(41)), "the case documents its own dates"
 
 
@@ -325,17 +324,6 @@ def test_per_outage_request_reproduces_one_case_per_outage():
 
     assert [plan["id"] for plan in request["cases"]] == ["OUT01"]
     assert request["skipped"] == [fs2]
-
-
-def test_preview_names_states_relations_and_runs():
-    fs1 = record("FS1", kw(10), kw(10) + 5 * H)
-    fs2 = record("FS2", kw(10) + 2 * H, kw(10) + 7 * H)
-    request = gl.resolve_request(config([case("A", fs1, fs2), case("B", fs2, fs1)]), [fs1, fs2], PERIOD)
-
-    text = gl.preview_text(request, PERIOD)
-
-    assert "T05" in text and "network states" in text
-    assert "identical cases calculated once: A/B" in text
 
 
 # ---------------------------------------------------------------------------
@@ -627,7 +615,8 @@ def gl_obj(name, kind):
     return Obj()
 
 
-def test_extraction_builds_only_the_plotted_points_and_keeps_the_exact_statistics():
+def test_extraction_keeps_no_plot_points_and_the_exact_statistics():
+    # Hadi, 17 Nov 2026: the per-series plot points were no longer read by any report but held most of the memory.
     result = _LongElmRes()
 
     series, labels, plot_times, *_ = gl.collect_series(result)
@@ -635,8 +624,7 @@ def test_extraction_builds_only_the_plotted_points_and_keeps_the_exact_statistic
     for item in series:
         values = [None if value == gl.MISSING else value for value in item["values"]]
         full = {"points": [(labels[row], plot_times[row], value) for row, value in enumerate(values)]}
-        assert len(item["points"]) == gl.MAX_PLOT_POINTS
-        assert item["points"] == gl.sampled_plot_points(full)
+        assert "points" not in item
         assert item["statistics"] == gl.statistics(full)
         assert "p95" not in item["statistics"]
     line = next(item for item in series if item["category"] == "line")

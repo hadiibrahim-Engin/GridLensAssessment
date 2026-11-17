@@ -157,8 +157,8 @@ def test_a_relative_time_axis_uses_clock_labels():
     assert (episode["start_text"], episode["end_text"]) == (gl.format_clock(1.0), gl.format_clock(2.0))
 
 
-def test_episode_rows_are_cut_fairly_and_keep_the_case_rows(monkeypatch):
-    monkeypatch.setattr(gl, "MAX_TABLE_ROWS", 6)
+def test_every_episode_is_published_with_its_case_rows():
+    # Hadi, 17 Nov 2026: tables and calculated results are never cut.
     series = [("line", "L{}".format(number), [101.0 + number, 50.0]) for number in range(6)]
     reference = _result("REF", [("line", name, [50.0, 50.0]) for _, name, _ in series])
     cases = [_result(case_id, series) for case_id in ("C1", "C2")]
@@ -168,10 +168,10 @@ def test_episode_rows_are_cut_fairly_and_keep_the_case_rows(monkeypatch):
     payload = gl.empty_payload()
     gl._n0_episodes(payload, [reference] + cases)
     rows = payload["ScriptedEpisodes"]
-    assert len(rows) == 6 and [row["row_kind"] for row in rows].count("case") == 2
-    assert [row["element_name"] for row in rows if row["case_order"] == 1][1:] == ["L5", "L4"], "the highest peaks stay"
-    assert [row["row_order"] for row in rows] == list(range(1, 7))
-    assert any(row["check_name"] == "Table limit ScriptedEpisodes" for row in payload["ScriptedModelQuality"])
+    assert len(rows) == 14 and [row["row_kind"] for row in rows].count("case") == 2
+    assert [row["element_name"] for row in rows if row["case_order"] == 1][1:] == ["L5", "L4", "L3", "L2", "L1", "L0"]
+    assert [row["row_order"] for row in rows] == list(range(1, 15))
+    assert not payload["ScriptedModelQuality"], "no cut, so no note about one"
 
 
 # ---------------------------------------------------------------------------
@@ -223,3 +223,77 @@ def test_case_summary_shows_no_increase_within_the_tolerance_and_names_reference
     assert ref_row["transformers_text"] == "1 exceeded"
     assert (case_row["coincident_delta_text"], case_row["coincident_delta_element"]) == ("-", "")
     assert case_row["transformers_text"] == "1 pre-existing"
+
+
+# ---------------------------------------------------------------------------
+# Element tables (lines, transformers, nodes) and the histograms
+# ---------------------------------------------------------------------------
+def _with_outage(reference_series, case_series, switched_off=()):
+    """REF and one case compared over the whole period; `switched_off` names the case's own outaged elements."""
+    reference = _result("REF", reference_series)
+    case = _result("C1", case_series)
+    window = (reference["hours"][0] * 3600.0, (reference["hours"][-1] + 1) * 3600.0)
+    gl.compare_case(case, reference, [window], {"\\P\\" + name for name in switched_off})
+    return [reference, case]
+
+
+def test_element_tables_list_only_violations_ranked_with_their_share_of_the_period():
+    # Hadi, 16 Nov 2026: no warning threshold - everything over 100 %, ranked, with the share of the time.
+    results = _with_outage(
+        [("line", "Low", [50.0] * 4), ("line", "Warn", [95.0] * 4), ("line", "Over", [101.0, 50.0, 50.0, 50.0]),
+         ("line", "Worst", [50.0] * 4)],
+        [("line", "Low", [50.0] * 4), ("line", "Warn", [99.9] * 4), ("line", "Over", [101.0, 50.0, 50.0, 50.0]),
+         ("line", "Worst", [120.0, 130.0, 50.0, 50.0])])
+    payload = gl.empty_payload()
+    gl._loading_appendix(payload, results, "line", "ScriptedAppendixLine")
+    rows = payload["ScriptedAppendixLine"]
+    assert [(row["rank"], row["element_name"]) for row in rows] == [(1, "Worst"), (2, "Over")]
+    worst, over = rows
+    assert (worst["ref_text"], worst["case_a_text"]) == ("50.0 %", "130.0 % · 50 %")
+    assert (over["ref_text"], over["case_a_text"]) == ("101.0 % · 25 %", "101.0 % · 25 %")
+    assert worst["location_text"] == "D7 / UW Worst"
+
+
+def test_an_element_the_case_switches_off_is_no_finding_of_that_case():
+    results = _with_outage([("line", "Outaged", [104.0] * 4), ("line", "Other", [60.0] * 4)],
+                           [("line", "Outaged", [0.0, 0.0, 0.0, 0.0]), ("line", "Other", [60.0] * 4)],
+                           switched_off=("Outaged",))
+    payload = gl.empty_payload()
+    gl._loading_appendix(payload, results, "line", "ScriptedAppendixLine")
+    (row,) = payload["ScriptedAppendixLine"]
+    assert (row["element_name"], row["ref_text"], row["case_a_text"]) == ("Outaged", "104.0 % · 100 %", "switched off")
+    # Without the violation in REF the switched-off element is not listed at all, whatever its change.
+    results = _with_outage([("line", "Outaged", [90.0] * 4)], [("line", "Outaged", [0.0] * 4)], switched_off=("Outaged",))
+    payload = gl.empty_payload()
+    gl._loading_appendix(payload, results, "line", "ScriptedAppendixLine")
+    assert payload["ScriptedAppendixLine"] == []
+    assert gl._violation_counts(results[1]) == (0, 0, 0)
+
+
+def test_the_node_table_shows_the_voltage_furthest_from_the_band():
+    results = _with_outage([("voltage", "Bus", [1.0, 1.0, 1.0, 1.0])], [("voltage", "Bus", [0.93, 1.0, 1.01, 1.0])])
+    payload = gl.empty_payload()
+    gl._voltage_appendix(payload, results)
+    (row,) = payload["ScriptedAppendixVoltage"]
+    assert (row["ref_text"], row["case_a_text"], row["violation"]) == ("1.000", "0.930 · 25 %", 1)
+
+
+def test_time_share_counts_lines_and_transformers_by_the_share_of_the_period_over_the_limit():
+    hours = 20
+    over = lambda steps: [101.0] * steps + [50.0] * (hours - steps)
+    results = _with_outage(
+        [("line", "A", over(1)), ("line", "B", over(4)), ("transformer", "T", over(9)), ("line", "C", over(11)),
+         ("voltage", "Bus", [0.9] * hours)],
+        [("line", "A", over(2)), ("line", "B", over(5)), ("transformer", "T", over(10)), ("line", "C", over(20)),
+         ("voltage", "Bus", [0.9] * hours)], switched_off=("C",))
+    payload = gl.empty_payload()
+    gl._time_share(payload, results)
+    shares = [(row["case_name"], row["share_low"], row["share_mid"], row["share_high"], row["share_top"])
+              for row in payload["ScriptedTimeShare"]]
+    # REF: 5 %, 20 %, 45 %, 55 %; the case: 10 % (on the bound), 25 %, 50 % and C switched off. Nodes do not count.
+    assert shares == [("Reference", 1, 1, 1, 1), ("Case C1", 1, 1, 1, 0)]
+
+
+def test_retired_appendix_settings_in_a_saved_file_are_ignored():
+    assert gl.validate_settings({"loading_appendix_delta": 2.0, "voltage_appendix_delta": 0.01}) == []
+    assert "loading_appendix_delta" not in gl.effective_settings({"loading_appendix_delta": 2.0})

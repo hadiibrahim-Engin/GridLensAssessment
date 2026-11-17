@@ -200,11 +200,12 @@ flowchart TD
 ## 8. Ergebnisse schnell lesen
 
 `ElmRes.GetColumnValues` liest eine ganze Spalte in einem Aufruf, braucht aber
-einen `IntVec`. Das Tool legt ihn im laufenden Script an und löscht ihn am Ende
-der Auswertung. Verweigert PowerFactory das (*cannot create IntVec*, z. B. bei
-einem Script an einer schreibgeschützten Stelle), wird jeder Wert einzeln
-gelesen: gleiche Ergebnisse, deutlich langsamer. Die Laufzusammenfassung zählt
-beide Wege.
+einen `IntVec`. Das Tool legt ihn im aktiven Study Case an (dort schreibt der Lauf
+ohnehin seine Ergebnisobjekte), sonst im laufenden Script, und löscht ihn am Ende
+der Auswertung. Ein Script an einer schreibgeschützten Stelle (*Object cannot be
+modified, no write access*) erzwingt deshalb nicht mehr den langsamen Weg. Nur
+wenn beide ablehnen, wird jeder Wert einzeln gelesen: gleiche Ergebnisse,
+deutlich langsamer. Die Laufzusammenfassung zählt beide Wege.
 
 ---
 

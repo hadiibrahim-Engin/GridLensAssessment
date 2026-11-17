@@ -239,6 +239,12 @@ class Study(Obj):
         return [child for child in self._children if pattern in ("*", "*." + child.GetClassName())]
 
 
+def _run_n1_case(command, plan, request, records, grid, excluded, elements_of, prime, references):
+    """Both phases of one case at once (no kept copies)."""
+    return gl.evaluate_n1_case(gl.calculate_n1_case(command, plan, request, records, grid, excluded, prime, references),
+                               plan, elements_of)
+
+
 def _scenario(fail=False, grid_b=False):
     lines = [Obj("L1", "ElmLne"), Obj("L2", "ElmLne"), Obj("L3", "ElmLne", cpGrid=Obj("Grid B", "ElmNet")) if grid_b
              else Obj("L3", "ElmLne")]
@@ -278,7 +284,7 @@ def test_a_case_runs_n1_and_n1_prime_on_the_qds_steps_of_its_windows_and_restore
     equipment = gl.contingency_equipment(analysis)
     elements_of = {gl.object_key(o): {gl.object_key(e) for e in els} for o, els in equipment}
 
-    entry = gl.run_n1_case(analysis, plan, request, records, GRID, [], elements_of, True, {})
+    entry = _run_n1_case(analysis, plan, request, records, GRID, [], elements_of, True, {})
 
     assert analysis.runs == [(0, (START + 2 * H, START + 3 * H)), (1, (START + 2 * H, START + 3 * H))]
     assert entry["status"] == "EVALUATED" and entry["kind"] == "(n-1)'" and entry["times"] == 2
@@ -301,7 +307,7 @@ def test_windows_that_lie_apart_are_calculated_as_one_period_and_only_the_window
     second = {"key": "late", "name": "Late", "_object": records[0]["_object"], "component_keys": []}
     plan = dict(plan, members=plan["members"] + [second],
                 windows=dict(plan["windows"], late=(START + 7 * H, START + 8 * H)))
-    entry = gl.run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, False, {})
+    entry = _run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, False, {})
     # 02:00 to 07:00 calculated (6 steps), 02:00, 03:00 and 07:00 assessed.
     assert analysis.runs == [(0, tuple(START + hour * H for hour in range(2, 8)))]
     assert entry["times"] == 3
@@ -318,8 +324,8 @@ def test_cases_with_the_same_study_times_share_one_reference_sweep():
     analysis, records, plan, *_ = _scenario()
     references = {}
     request = {"background": [], "assessments": ["n-0", "n-1"]}
-    first = gl.run_n1_case(analysis, plan, request, records, GRID, [], {}, False, references)
-    gl.run_n1_case(analysis, dict(plan, id="C2"), request, records, GRID, [], {}, False, references)
+    first = _run_n1_case(analysis, plan, request, records, GRID, [], {}, False, references)
+    _run_n1_case(analysis, dict(plan, id="C2"), request, records, GRID, [], {}, False, references)
     assert len(analysis.runs) == 1 and first["kind"] == "n-1"
     assert first["summary"] == "n-1 reference: 0 element(s) with a post-fault violation"
     assert first["details"][0].startswith("n-1 result 'read at once': 2 study time(s) assessed (2 calculated, of 23 "
@@ -329,13 +335,13 @@ def test_cases_with_the_same_study_times_share_one_reference_sweep():
 def test_a_failed_calculation_or_other_study_times_are_errors_and_settings_are_restored():
     analysis, records, plan, *_ = _scenario(fail=True)
     with pytest.raises(gl.OutageAssessmentError, match="error code 1"):
-        gl.run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, True, {})
+        _run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, True, {})
     assert analysis.studyTime == [START]
 
     analysis, records, plan, *_ = _scenario()
     analysis.Execute = lambda: (setattr(analysis, "p_rescnt", Folder([])), 0)[1]
     with pytest.raises(gl.OutageAssessmentError, match="did not calculate 2 of the 2 study times inside the outage") as raised:
-        gl.run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, False, {})
+        _run_n1_case(analysis, plan, {"background": []}, records, GRID, [], {}, False, {})
     # The report names the wanted, missing and calculated times, the written period and the settings read back.
     wanted, missing, period, calculated, before, _ = raised.value.details
     assert wanted.startswith("Wanted (QDS steps inside the outage windows): ") and wanted.endswith("(2)")
@@ -345,11 +351,10 @@ def test_a_failed_calculation_or_other_study_times_are_errors_and_settings_are_r
     assert analysis.startTime == int(START + 10 * H), "restored after the error"
 
 
-def test_contingencies_outside_the_contingency_grids_are_not_analysed_for_the_run_only():
+def test_contingencies_set_to_not_analysed_for_a_sweep_are_restored():
     analysis, records, plan, outages, _ = _scenario(grid_b=True)
-    excluded = gl.contingencies_outside(gl.contingency_equipment(analysis), ("Grid B",))
-    assert [outage.loc_name for outage in excluded] == ["C1", "C2"]
-    assert gl.contingencies_outside(gl.contingency_equipment(analysis), ()) == []
+    excluded = [outage for outage, _elements in gl.contingency_equipment(analysis) if outage.loc_name in ("C1", "C2")]
+    assert len(excluded) == 2
 
     gl.run_n1_sweep(analysis, [START], H, set(), records, excluded, "test")
     assert all(outage.outserv == 0 for outage in outages), "'Not analysed' is restored"
@@ -619,7 +624,7 @@ def test_the_contract_seven_tables_of_one_case_come_from_the_reporting_core():
     request = {"background": [], "assessments": ["n-0", "n-1", "(n-1)'"]}
     equipment = gl.contingency_equipment(analysis)
     elements_of = {gl.object_key(o): {gl.object_key(e) for e in els} for o, els in equipment}
-    entry = gl.run_n1_case(analysis, plan, request, records, GRID, [], elements_of, True, {})
+    entry = _run_n1_case(analysis, plan, request, records, GRID, [], elements_of, True, {})
     results = [{"id": "REF", "name": "Reference", "status": gl.CONVERGED},
                {"id": "C1", "name": "Case 1", "status": gl.CONVERGED, "n1": entry},
                {"id": "C2", "name": "Case 2", "status": gl.CONVERGED, "n1": {"status": "NOT EVALUATED", "reason": "no window"}}]
@@ -675,31 +680,14 @@ def test_the_contract_seven_tables_of_one_case_come_from_the_reporting_core():
     assert gl.n1_meta_text(results[:1])[0] == "0"
 
 
-def test_long_registers_are_cut_fairly_between_cases_and_keep_the_most_severe(monkeypatch):
-    monkeypatch.setattr(gl, "MAX_TABLE_ROWS", 5)
-    payload = gl.empty_payload()
-    payload["ScriptedContingencyEpisodes"] = (
-        [{"case_order": 1, "row_order": n, "status": "PRE-EXISTING", "peak_text": "{} pp".format(n)} for n in range(1, 9)]
-        + [{"case_order": 2, "row_order": 1, "status": "NEW", "peak_text": "1.0 pp"}])
-    gl._fair_cut(payload, "ScriptedContingencyEpisodes", lambda row: row["case_order"],
-                 lambda row: (gl.STATUS_RANK[row["status"].replace("-", "_")], -gl._amount(row["peak_text"]), row["row_order"]))
-
-    kept = [(row["case_order"], row["row_order"]) for row in payload["ScriptedContingencyEpisodes"]]
-    # Case 2 keeps its only row; case 1 the four largest peaks, in their original order (never cut by case order).
-    assert kept == [(1, 5), (1, 6), (1, 7), (1, 8), (2, 1)]
-    (note,) = payload["ScriptedModelQuality"]
-    assert note["status"] == "FAIL" and "5 of 9 rows, shared between 2 group(s)" in note["message"]
-
-
-def test_block_tables_keep_the_same_rows_in_every_block_when_cut(monkeypatch):
-    monkeypatch.setattr(gl, "MAX_TABLE_ROWS", 4)
+def test_block_tables_publish_every_row_in_every_block():
+    # Hadi, 17 Nov 2026: tables and calculated results are never cut.
     payload = gl.empty_payload()
     columns = [("C{}".format(n), "Case {}".format(n)) for n in range(1, 5)]
-    entries = [("E{}".format(n), "-", {}, 0) for n in range(1, 5)]
-    gl._block_rows(payload, "ScriptedDetailLines", columns, entries, 3, priority=[3, 0, 2, 1])
+    entries = [("E{}".format(n), "-", {}, 0) for n in range(1, 7000)]
+    gl._block_rows(payload, "ScriptedDetailLines", columns, entries, 3, priority=list(range(len(entries))))
 
     rows = payload["ScriptedDetailLines"]
-    # Two blocks of at most two rows each: the two most severe elements (E2, E4) in both, in display order.
-    assert [(row["block"], row["element_name"], row["col_count"]) for row in rows] == [
-        (1, "E2", 3), (1, "E4", 3), (2, "E2", 1), (2, "E4", 1)]
-    assert "2 of 4 rows in each of the 2 scenario block(s)" in payload["ScriptedModelQuality"][0]["message"]
+    assert len(rows) == 2 * len(entries) and {row["block"] for row in rows} == {1, 2}
+    assert not payload["ScriptedModelQuality"]
+    assert not hasattr(gl, "MAX_TABLE_ROWS") and not hasattr(gl, "_fair_cut")

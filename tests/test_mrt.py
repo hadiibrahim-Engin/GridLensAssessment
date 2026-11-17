@@ -97,9 +97,9 @@ CHAPTER_PAGES = {
     "detail": ["PageCover", "PageContents", "PageScope", "PageRegister", "PageBasefindings", "PageLines", "PageTransformers",
                "PageVoltagelow", "PageVoltagehigh", "PageClassification", "PageContingencies", "PageEvents", "PageEpisodes",
                "PageQualityregister", "PageProvenance", "PageMethod", "PageAppendix", "PageAppa", "PageAppb", "PageAppc"],
-    # The tabular report (contract 7.2): n-0 only, no chart, every fact once.
-    "tables": ["PageCover", "PageContents", "PageCasesummary", "PageOutages", "PageLines", "PageTransformers", "PageVoltages",
-               "PageEpisodes", "PageQuality", "PageEvidence", "PageSettings", "PageMethod"]}
+    # The tabular report (contract 7.3): n-0 only, every fact once; two histograms, no settings page.
+    "tables": ["PageCover", "PageContents", "PageCasesummary", "PageHistograms", "PageOutages", "PageLines",
+               "PageTransformers", "PageVoltages", "PageEpisodes", "PageQuality", "PageEvidence", "PageMethod"]}
 
 
 @both
@@ -127,9 +127,10 @@ def test_the_report_has_one_landscape_page_per_chapter_in_the_order_of_the_templ
 def test_the_two_reports_share_one_contract_and_split_its_chapters():
     main, detail = _sources_used(_root("main")), _sources_used(_root("detail"))
     tables = set(dict(gl.TABLES))
-    # Every table is shown by at least one report; the case summary and the n-0 episodes only by the tabular one.
-    assert tables - main - detail == {"ScriptedCaseSummary", "ScriptedEpisodes"}
-    assert {"ScriptedCaseSummary", "ScriptedEpisodes"} <= _sources_used(_root("tables"))
+    # Every table is shown by at least one report; case summary, n-0 episodes and time share only by the tabular one.
+    own = {"ScriptedCaseSummary", "ScriptedEpisodes", "ScriptedTimeShare"}
+    assert tables - main - detail == own
+    assert own <= _sources_used(_root("tables"))
     assert not {name for name in main if name.startswith(("ScriptedDetail", "ScriptedClassification"))}
     assert not {"ScriptedContingencyEpisodes", "ScriptedQualityRegister", "ScriptedScope", "ScriptedContingencyRegister"} & main
     assert not {name for name in detail if name.startswith(("ScriptedCritical", "ScriptedTime", "ScriptedPie"))}
@@ -266,9 +267,9 @@ MATRICES = {
                ("Voltagelow", "ScriptedDetailVoltageLow", 3), ("Voltagehigh", "ScriptedDetailVoltageHigh", 3),
                ("Classification", "ScriptedClassificationMatrix", 3), ("TopCase", "ScriptedTopLinesByCase", 6),
                ("Appa", "ScriptedAppendixLine", 6), ("Appb", "ScriptedAppendixTransformer", 6), ("Appc", "ScriptedAppendixVoltage", 6)],
-    # The matrices of the tabular report carry one more column: the location of the element.
-    "tables": [("Appa", "ScriptedAppendixLine", 6, 1), ("Appb", "ScriptedAppendixTransformer", 6, 1),
-               ("Appc", "ScriptedAppendixVoltage", 6, 1)]}
+    # The matrices of the tabular report carry two more columns: the rank and the location of the element.
+    "tables": [("Appa", "ScriptedAppendixLine", 6, 2), ("Appb", "ScriptedAppendixTransformer", 6, 2),
+               ("Appc", "ScriptedAppendixVoltage", 6, 2)]}
 
 
 @both
@@ -276,10 +277,10 @@ def test_matrix_tables_have_a_band_pair_per_block_and_filter_on_it(report):
     # The main report shows up to six scenarios per block, the detail report three; any number of cases up to the limit.
     # Every full block has its own pair (block and column count), the one partial block a pair per column count;
     # each header reads the case names of the first row of its band.
-    assert gl.CASE_SLOTS == 6 and gl.DETAIL_SLOTS == 3 and gl.MAX_PLANNING_CASES == 20
+    assert gl.CASE_SLOTS == 6 and gl.DETAIL_SLOTS == 3 and gl.COUNT_LIMITS["max_cases"] == 20
     root = _root(report)
     for key, source, slots, *extra in MATRICES[report]:
-        full = -(-gl.MAX_PLANNING_CASES // slots)
+        full = -(-gl.COUNT_LIMITS["max_cases"] // slots)
         expected = [(slots, block) for block in range(1, full + 1)] + [(n, None) for n in range(slots - 1, -1, -1)]
         data = [item for item in _bands_of(root, key) if item.tag.endswith("_DataBand")]
         assert [item.tag for item in data] == ["{}{}{}_DataBand".format(key, n, "B{}".format(block) if block else "")
@@ -626,19 +627,44 @@ def test_the_tabular_report_prints_every_field_on_one_page_only():
     assert pages and {key: sorted(found) for key, found in pages.items() if len(found) > 1} == {}
     # One table per fact: none of the overview tables the case summary and the episodes replace is read.
     replaced = {"ScriptedCases", "ScriptedCaseStatistics", "ScriptedCaseMetrics", "ScriptedCaseComparison", "ScriptedKpis",
-                "ScriptedCaseCounts", "ScriptedCaseStatusCounts", "ScriptedLineLoadingBars", "ScriptedPieLines",
+                "ScriptedCaseStatusCounts", "ScriptedLineLoadingBars", "ScriptedPieLines",
                 "ScriptedPieTransformers", "ScriptedTopLinesByCase", "ScriptedReferenceFindings", "ScriptedResultProvenance",
                 "ScriptedCoverage", "ScriptedScope"}
     assert replaced & _sources_used(root) == set()
 
 
-def test_the_tabular_report_has_no_chart_and_no_contingency_source():
+def test_the_tabular_report_has_only_the_two_histograms_and_no_contingency_source():
+    # Hadi, 16 Nov 2026: histograms of the overloaded elements per scenario and of their share of the time.
     root = _root("tables")
-    assert _charts(root) == []
+    charts = _charts(root)
+    assert [chart.tag for chart in charts] == ["OverloadCountsColumns", "TimeShareColumns"]
+    counts, shares = charts
+    assert counts.find("Area").get("type").endswith("StiClusteredColumnArea")
+    assert shares.find("Area").get("type").endswith("StiStackedColumnArea")
+    assert [item.findtext("ValueDataColumn") for item in counts.find("Series")] == [
+        "ScriptedCaseCounts." + name for name in ("line_count", "transformer_count", "node_count")]
+    assert [item.findtext("ValueDataColumn") for item in shares.find("Series")] == [
+        "ScriptedTimeShare." + name for name in ("share_low", "share_mid", "share_high", "share_top")]
+    for chart in charts:
+        assert {item.findtext("ArgumentDataColumn") for item in chart.find("Series")} == {
+            chart.findtext("DataSourceName") + ".case_name"}
+        assert all(item.findtext("AllowApplyStyle") == "False" for item in chart.find("Series")), "fixed colours"
     n1 = {name for name in dict(gl.TABLES) if name.startswith(("ScriptedContingency", "ScriptedQualityRegister",
-                                                                "ScriptedTime", "ScriptedCritical", "ScriptedDetail",
+                                                                "ScriptedTimeCriticality", "ScriptedTimeMatrix",
+                                                                "ScriptedCritical", "ScriptedDetail",
                                                                 "ScriptedClassification"))}
     assert n1 & _sources_used(root) == set()
+    assert "ScriptedAssessmentSettings" not in _sources_used(root), "no settings page (Hadi, 16 Nov 2026)"
+
+
+def test_the_element_tables_print_a_rank_before_the_element():
+    root = _root("tables")
+    for key, source in (("Appa", "ScriptedAppendixLine"), ("Appb", "ScriptedAppendixTransformer"),
+                        ("Appc", "ScriptedAppendixVoltage")):
+        band = [item for item in _bands_of(root, key) if item.tag.endswith("_DataBand")][0]
+        cells = list(band.find("Components"))
+        assert [cell.findtext("Text") for cell in cells[:3]] == [
+            "{%s.rank}" % source, "{%s.element_name}" % source, "{%s.location_text}" % source]
 
 
 def test_the_tabular_quality_page_leaves_out_what_other_pages_show():
@@ -658,3 +684,25 @@ def test_episode_case_rows_are_bars_across_the_table():
     for index in range(12):
         conditions = [value.text for value in root.find(".//Episodes_C{}".format(index)).find("Conditions")]
         assert conditions[0].startswith("ScriptedEpisodes.row_kind,EqualTo,case,,String,White,[120:120:120]")
+
+
+def test_every_table_of_the_tabular_report_fills_the_page_width_and_centres_its_values():
+    # Hadi, 16 Nov 2026: tables fill the page, not left-aligned; with fewer cases the case columns widen.
+    root = _root("tables")
+    page = _page(root)
+    width = float(page.findtext("PageWidth")) - sum(float(v) for v in page.findtext("Margins").split(",")[0::2])
+    bands = [band for band in root.iter() if band.tag.endswith(("_DataBand", "_HeaderBand"))]
+    checked = 0
+    for band in bands:
+        cells = [cell for cell in band.find("Components") if "_H" in cell.tag or "_C" in cell.tag]
+        if not cells:
+            continue
+        edges = [float(cell.findtext("ClientRectangle").split(",")[2]) for cell in cells]
+        assert sum(edges) == pytest.approx(width), band.tag
+        checked += 1
+    assert checked > 30
+    # Values are centred (the case columns of the matrices, times, durations, statuses); names stay left-aligned.
+    assert root.find(".//Appa1_C1").findtext("HorAlignment") == "Center"
+    assert root.find(".//Appa1_C0").findtext("HorAlignment") is None
+    assert root.find(".//Episodes_C4").findtext("HorAlignment") == "Center"
+    assert root.find(".//Episodes_H4").findtext("HorAlignment") == "Center"

@@ -282,7 +282,8 @@ def test_the_minimum_test_profile_streams_without_a_dense_result_cube():
         assert total(statistics) == statistics["coverage"]["cells_required"]
         assert statistics["coverage"]["cells_required"] == 84 * 320 * (cells - statistics["switched_off"])
         assert statistics["monitored"]["node"] == 5000 and statistics["events"]["NEW"] > 0
-        assert len(statistics["events_top"]) <= 500 and statistics["events_listed"] >= len(statistics["events_top"])
+        # Hadi, 17 Nov 2026: every single finding is kept, none is cut.
+        assert len(statistics["events_top"]) == statistics["events_listed"]
         assert statistics["new_elements"]["line"] <= statistics["critical"]["line"] <= 3400
 
 
