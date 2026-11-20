@@ -11220,10 +11220,36 @@ def monitor_text(elmres, limit=6):
 
 
 # The default variables of the quasi-dynamic simulation, as PowerFactory's "Add default variables" sets them:
-# one class-wide variable set (IntMon) per class. Outage Assessment adds them for the run when the result object
-# selects none of the assessed variables, and removes them again afterwards.
+# one class-wide variable set (IntMon) per class. Outage Assessment adds those the result object does not select yet
+# in every run (Hadi, 20 Nov 2026: "create always"), and removes them again afterwards.
 DEFAULT_VARIABLES = (('ElmLne', 'c:loading'), ('ElmTr2', 'c:loading'), ('ElmTr3', 'c:loading'), ('ElmTerm', 'm:u'))
 DEFAULT_MONITOR_PREFIX = SNAPSHOT_PREFIX + 'default_'
+
+
+# ComStatsim option 'Parallel computation' (attribute iEnableParal, probe 20 Nov 2026); off by default. Outage
+# Assessment switches it on for the run and puts it back with the other QDS settings in step 5.
+PARALLEL_OPTION = 'iEnableParal'
+
+
+def enable_parallel_computation(guard, qds, logger):
+    """Switch the parallel computation of the QDS on for the run (restored through `guard`); a warning when the
+    ComStatsim has no such option or does not take the value."""
+    found, value = _read_setting(qds, PARALLEL_OPTION)
+    if not found:
+        logger.write("CALCULATION", "The ComStatsim has no option 'Parallel computation' [{}]; the QDS runs as "
+                     "set.".format(PARALLEL_OPTION), 4, "WARNING")
+        return False
+    if finite_number(value) == 1.0:
+        logger.write("CALCULATION", "Parallel computation [{}] is already on.".format(PARALLEL_OPTION), 4,
+                     verbosity=LOG_DETAILED)
+        return True
+    if not guard.set(qds, PARALLEL_OPTION, 1, "Parallel computation [{}]".format(PARALLEL_OPTION)):
+        logger.write("CALCULATION", "Parallel computation [{}] could not be switched on; the QDS runs without "
+                     "it.".format(PARALLEL_OPTION), 4, "WARNING")
+        return False
+    logger.write("CALCULATION", "Switched parallel computation [{}] on for this run (it was {}); put back "
+                 "afterwards.".format(PARALLEL_OPTION, _format_setting_value(value)), 4)
+    return True
 
 
 def selected_variables(result):
@@ -11237,6 +11263,22 @@ def selected_variables(result):
             return None
         selected.update(str(variable).strip() for variable in variables)
     return selected
+
+
+def class_wide_selection(result):
+    """{(class, variable)} the class-wide variable sets (IntMon without an object) of a result object select; None
+    when the selection cannot be read. A set for one object does not record the other objects of its class."""
+    if result is None or not callable(safe_attr(result, 'GetContents')):
+        return None
+    pairs = set()
+    for monitor in _contents(result, '*.IntMon'):
+        variables = safe_attr(monitor, 'vars')
+        if not isinstance(variables, (list, tuple)):
+            return None
+        kind = str(safe_attr(monitor, 'classnm') or '').strip()
+        if kind and safe_attr(monitor, 'obj_id') is None:
+            pairs.update((kind, str(variable).strip()) for variable in variables)
+    return pairs
 
 
 def _add_default_monitor(result, kind, variable):
@@ -11277,30 +11319,45 @@ def _delete_monitors(monitors):
 
 
 def ensure_default_variables(result, logger):
-    """Before the first QDS: make the bound result object record loading and voltage. Returns the IntMon added.
+    """Before the first QDS: the bound result object records every default variable. Returns the IntMon added.
 
     PowerFactory records into the bound result object exactly its variable selection (its IntMon objects); without
-    one it records only its own status columns (b:noconv, b:number). When the selection names none of the assessed
-    variables, Outage Assessment adds PowerFactory's default variables (DEFAULT_VARIABLES) for the run and reads the
-    selection back; restore_default_variables removes them again. Nothing is added when no result object is bound
-    (PowerFactory then binds its own with its default selection) or when the selection cannot be read; the check
-    after the first run (check_recording) stays in place for those. When the variables cannot be added, the run
-    stops before any calculation.
+    one it records only its own status columns (b:noconv, b:number). In every run Outage Assessment adds the default
+    variables (DEFAULT_VARIABLES, one class-wide IntMon per class) the selection does not hold yet, reads the
+    selection back, and restore_default_variables removes them again after the run. Nothing is added when no result
+    object is bound (PowerFactory then binds its own with its default selection) or when the selection cannot be
+    read; the check after the first run (check_recording) stays in place for those. When the missing variables
+    cannot be added, the run goes on with a warning if the selection already records loading or voltage, and stops
+    before any calculation if it records neither.
     """
-    selected = selected_variables(result)
-    if selected is None or selected & ASSESSED_VARIABLES:
+    present = class_wide_selection(result)
+    if present is None:
+        return []
+    missing = [(kind, variable) for kind, variable in DEFAULT_VARIABLES if (kind, variable) not in present]
+    if not missing:
+        logger.write("CALCULATION", "The result object '{}' of the quasi-dynamic simulation already records every "
+                     "default variable ({}).".format(object_name(result), _pairs_text(DEFAULT_VARIABLES)), 4,
+                     verbosity=LOG_DETAILED)
         return []
     added = []
-    for kind, variable in DEFAULT_VARIABLES:
+    for kind, variable in missing:
         monitor = _add_default_monitor(result, kind, variable)
         if monitor is None:
             break
         added.append(monitor)
-    if len(added) == len(DEFAULT_VARIABLES) and (selected_variables(result) or set()) & ASSESSED_VARIABLES:
-        logger.write("CALCULATION", "The result object '{}' of the quasi-dynamic simulation recorded no loading or "
-                     "voltage, so Outage Assessment added the default variables for this run ({}); they are removed "
-                     "again afterwards.".format(object_name(result), ", ".join(
-                         "{} {}".format(kind, variable) for kind, variable in DEFAULT_VARIABLES)), 4)
+    now = class_wide_selection(result) or set()
+    if len(added) == len(missing) and all(pair in now for pair in DEFAULT_VARIABLES):
+        logger.write("CALCULATION", "Added the default variables the result object '{}' did not select yet, for this "
+                     "run: {}{}. They are removed again afterwards.".format(
+                         object_name(result), _pairs_text(missing),
+                         "" if len(missing) == len(DEFAULT_VARIABLES) else "; already selected: " + _pairs_text(
+                             [pair for pair in DEFAULT_VARIABLES if pair not in missing])), 4)
+        return added
+    if (selected_variables(result) or set()) & ASSESSED_VARIABLES:
+        logger.write("CALCULATION", "Not every default variable could be added to the result object '{}' ({} missing: "
+                     "{}); the run goes on with what it selects: {}.".format(
+                         object_name(result), len(missing) - len(added), _pairs_text(missing[len(added):]),
+                         monitor_text(result)), 4, "WARNING")
         return added
     left = _delete_monitors(added)
     raise RecordingError(
@@ -11311,6 +11368,11 @@ def ensure_default_variables(result, logger):
         + (["Added variable sets that could not be removed: " + ", ".join(left)] if left else []),
         hint="The result object may lie where the script has no write access. Open ComStatsim > Result Variables, "
              "press 'Add default variables', then run Outage Assessment again.")
+
+
+def _pairs_text(pairs):
+    """'ElmLne c:loading, ElmTerm m:u'."""
+    return ", ".join("{} {}".format(kind, variable) for kind, variable in pairs)
 
 
 def restore_default_variables(monitors, logger):
@@ -11640,7 +11702,7 @@ RESTORE_SERVICE = "restore PowerFactory state"
 RESTORE_STUDY_TIME = "Put the study time back"
 RESTORE_VARIABLES = "Remove the default variables added for the run"
 RESTORE_OPTION = "Switch the 'Planned Outages' option back"
-RESTORE_PERIOD = "Put the QDS period back"
+RESTORE_PERIOD = "Put the QDS period and parallel computation back"
 
 
 def _restore_part(name, restore):
@@ -13480,6 +13542,7 @@ def execute_outage_assessment(app):
                                        result_objects, grid=n1_grid)
         else:
             default_monitors = ensure_default_variables(original_result, logger)
+            enable_parallel_computation(qds_guard, qds, logger)
             check_run_size(app, span_grid(qds, ready), len({plan["fingerprint"] for plan in ready}), logger)
             span = set_qds_span(qds_guard, qds, ready, logger)
             request["qds_run_period"] = (

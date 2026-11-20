@@ -86,8 +86,7 @@ class ElmRes(PFObject):
         """As in PowerFactory, the result object holds its variable selection: one IntMon per class."""
         if pattern != "*.IntMon":
             return []
-        return [PFObject("Lines", "IntMon", classnm="ElmLne", vars=["c:loading"]),
-                PFObject("Nodes", "IntMon", classnm="ElmTerm", vars=["m:u"])]
+        return [PFObject(kind, "IntMon", classnm=kind, vars=[variable]) for kind, variable in gl.DEFAULT_VARIABLES]
 
     def Load(self):
         return None
@@ -185,7 +184,7 @@ class QDS(PFObject):
     def __init__(self, result, study_time, failure=None):
         super().__init__(
             "Configured QDS", "ComStatsim", results=result,
-            calcPeriod=4, stepSize=1, stepUnit=2,
+            calcPeriod=4, stepSize=1, stepUnit=2, iEnableParal=0,
             iopt_net=0, iopt_at=1, iopt_maint=0,
             startTime=PERIOD_START, endTime=PERIOD_END,
         )
@@ -2300,7 +2299,8 @@ def test_without_assessed_variables_the_default_variables_are_added_for_the_run_
                              ("ElmTr3", ("c:loading",))], "every run records loading and voltage"
     assert result.monitors == [], "the result object is as before the run"
     text = "\n".join(app.messages)
-    assert "added the default variables for this run" in text
+    assert ("Added the default variables the result object 'Configured QDS Result' did not select yet, for this run: "
+            "ElmLne c:loading, ElmTr2 c:loading, ElmTr3 c:loading, ElmTerm m:u.") in text
     assert app.qds.execute_calls == 2
 
 
@@ -2317,14 +2317,56 @@ def test_default_variables_that_cannot_be_added_stop_before_any_calculation():
     assert app.qds.iopt_maint == 0 and app.qds.results is app.original_result
 
 
-def test_a_result_object_that_selects_an_assessed_variable_is_left_alone():
+def test_only_the_default_variables_not_selected_yet_are_added_in_every_run():
+    # Hadi, 20 Nov 2026: the default variables are created in every run, not only without loading or voltage.
     app = App((PlannedOutage("FS1"),))
     lines = Monitor("Lines", classnm="ElmLne", vars=["c:loading", "m:P:bus1"])
-    result = app.original_result = app.qds.results = MonitoredResult([lines])
+    one_line = Monitor("One transformer", obj_id=PFObject("T1", "ElmTr2"), classnm="ElmTr2", vars=["c:loading"])
+    result = app.original_result = app.qds.results = MonitoredResult([lines, one_line])
+    selections = []
+    execute = app.qds.Execute
+
+    def watched():
+        selections.append(sorted((monitor.classnm, tuple(monitor.vars)) for monitor in result.monitors
+                                 if monitor.loc_name.startswith("OA_default_")))
+        return execute()
+    app.qds.Execute = watched
 
     gl.execute_outage_assessment(app)
 
-    assert result.monitors == [lines] and app.qds.execute_calls == 2
+    # A set for one transformer does not record the others: ElmTr2 is added class-wide as well.
+    assert selections[0] == [("ElmTerm", ("m:u",)), ("ElmTr2", ("c:loading",)), ("ElmTr3", ("c:loading",))]
+    assert result.monitors == [lines, one_line] and app.qds.execute_calls == 2
+    assert "already selected: ElmLne c:loading" in "\n".join(app.messages)
+
+
+def test_missing_default_variables_that_cannot_be_added_warn_when_loading_is_recorded():
+    app = App((PlannedOutage("FS1"),))
+    lines = Monitor("Lines", classnm="ElmLne", vars=["c:loading"])
+    result = app.original_result = app.qds.results = MonitoredResult([lines], writable=False)
+
+    gl.execute_outage_assessment(app)
+
+    assert app.qds.execute_calls == 2 and result.monitors == [lines]
+    assert any("WARNING" in line and "Not every default variable could be added" in line for line in app.messages)
+
+
+def test_parallel_computation_is_switched_on_for_the_run_and_put_back():
+    # Hadi, 20 Nov 2026: 'Parallel computation' (iEnableParal) is off by default.
+    app = App((PlannedOutage("FS1"),))
+    seen = []
+    execute = app.qds.Execute
+
+    def watched():
+        seen.append(app.qds.iEnableParal)
+        return execute()
+    app.qds.Execute = watched
+
+    gl.execute_outage_assessment(app)
+
+    assert seen == [1, 1] and app.qds.iEnableParal == 0
+    assert any("Switched parallel computation [iEnableParal] on for this run (it was 0)" in line for line in app.messages)
+    assert gl.RESTORE_PERIOD in gl.RUN_STATS.parts[gl.RESTORE_SERVICE]
 
 
 def test_an_unreadable_variable_selection_is_left_to_the_check_after_the_first_run():

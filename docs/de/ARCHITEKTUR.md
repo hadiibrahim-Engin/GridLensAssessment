@@ -204,15 +204,19 @@ Phase 1 rechnet und erhält nur; gelesen wird noch nichts.
    Fingerabdruck in die Beschreibung der Kopie. Die Kopien bleiben; Outage Assessment
    löscht sie nie.
 5. **Aufzeichnungsprüfung.** Vor der ersten QDS liest Outage Assessment die
-   Variablenauswahl (IntMon) des gebundenen Ergebnisobjekts. Nennt sie keine
-   bewertete Variable (ein Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und
-   `b:number` auf), legt Outage Assessment die Standardvariablen selbst
-   an – je ein klassenweiter IntMon: `c:loading` von `ElmLne`, `ElmTr2`,
-   `ElmTr3`, `m:u` von `ElmTerm` (`ensure_default_variables`) –, liest sie zurück und
-   entfernt sie in Schritt 5 wieder (`restore_default_variables`). Lassen sie sich
-   nicht anlegen, startet kein Lauf. Direkt nach dem ersten Lauf prüft es noch
+   klassenweiten Variablensätze (IntMon ohne Objekt) des gebundenen Ergebnisobjekts
+   und legt in jedem Lauf die Standardvariablen an, die dort noch fehlen – je ein
+   klassenweiter IntMon: `c:loading` von `ElmLne`, `ElmTr2`, `ElmTr3`, `m:u` von
+   `ElmTerm` (`ensure_default_variables`, seit 20.11.2026 immer, vorher nur ohne
+   bewertete Variable). Ein Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und
+   `b:number` auf. Es liest sie zurück und entfernt sie in Schritt 5 wieder
+   (`restore_default_variables`). Lassen sie sich nicht anlegen, läuft die Rechnung
+   mit einer Warnung weiter, wenn Auslastung oder Spannung schon gewählt sind, und
+   stoppt sonst vor der ersten QDS. Direkt nach dem ersten Lauf prüft es noch
    einmal, dass die Kopie mindestens eine bewertete Variable enthält
-   (`check_recording`).
+   (`check_recording`). Außerdem schaltet es die QDS-Option *Parallel computation*
+   (`iEnableParal`, standardmäßig aus) für den Lauf ein und in Schritt 5 zurück
+   (`enable_parallel_computation`).
    `ElmRes.butdefault` wird mit einer separaten Probe untersucht und von der Laufzeit nicht verwendet.
 6. **Nach jedem Lauf** werden die *Ignored*-Flags zurückgesetzt und
    zurückgelesen, die Studienzeit wird zurückgesetzt, und Schalter, die anders

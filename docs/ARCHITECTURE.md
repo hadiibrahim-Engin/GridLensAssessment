@@ -193,15 +193,19 @@ Phase 1 only calculates and keeps; nothing is read yet.
    copies it into the study case as `OA_<yymmdd-HHMMSS>_<case>` (REF:
    `…_REF`) and writes case and fingerprint into the copy's description. The
    copies stay; Outage Assessment never deletes them.
-5. **Recording check.** Before the first QDS Outage Assessment reads the variable
-   selection (IntMon objects) of the bound result object. When it names no assessed
-   variable (a result object without IntMon records only `b:noconv` and `b:number`),
-   Outage Assessment adds the default variables itself – one
-   class-wide IntMon each: `c:loading` of `ElmLne`, `ElmTr2`, `ElmTr3`, `m:u` of
-   `ElmTerm` (`ensure_default_variables`) – reads them back and removes them in step 5
-   (`restore_default_variables`). If they cannot be added, no run starts. Right after
-   the first run it checks again that the copy records at least one assessed
-   variable (`check_recording`).
+5. **Recording check.** Before the first QDS Outage Assessment reads the class-wide
+   variable sets (IntMon without an object) of the bound result object and adds, in
+   every run, the default variables it does not select yet – one class-wide IntMon
+   each: `c:loading` of `ElmLne`, `ElmTr2`, `ElmTr3`, `m:u` of `ElmTerm`
+   (`ensure_default_variables`, since 20 Nov 2026 always, before only without any
+   assessed variable). A result object without IntMon records only `b:noconv` and
+   `b:number`. It reads them back and removes them in step 5
+   (`restore_default_variables`). If they cannot be added, the run goes on with a
+   warning when loading or voltage is already selected, and stops before any QDS
+   otherwise. Right after the first run it checks again that the copy records at
+   least one assessed variable (`check_recording`). It also switches the QDS option
+   *Parallel computation* (`iEnableParal`, off by default) on for the run and puts it
+   back in step 5 (`enable_parallel_computation`).
    `ElmRes.butdefault` is evaluated by a separate probe and is not used by the runtime.
 6. **After every run** the *Ignored* flags are restored and read back, the
    study time is put back, and switches that are in another state than before

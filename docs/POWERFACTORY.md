@@ -235,10 +235,10 @@ copy.loc_name = "OA_<stamp>_<case>"
   The binding PowerFactory sets is left as after a run by hand.
 - If `ComStatsim.results` is bound to a kept Outage Assessment object, Outage Assessment stops
   before any calculation: the QDS would overwrite it.
-- Before the first QDS Outage Assessment reads the variable selection (IntMon) of the
-  bound result object. If it selects none of `c:loading`, `m:loading`, `m:u`, `m:u1`
-  – a result object without IntMon records only `b:noconv` and `b:number` (seen
-  17 Nov 2026) – Outage Assessment creates the default variable selection itself:
+- Before the first QDS Outage Assessment reads the class-wide variable sets (IntMon
+  without `obj_id`) of the bound result object and, in every run, adds the default
+  variables it does not select yet – a result object without IntMon records only
+  `b:noconv` and `b:number` (seen 17 Nov 2026):
   `result.CreateObject("IntMon", …)`, `classnm` = class, `IntMon.AddVar("c:loading")`
   / `AddVar("m:u")` (`ensure_default_variables`). It reads the selection
   back and deletes what was added after the run. If nothing works, no run starts
