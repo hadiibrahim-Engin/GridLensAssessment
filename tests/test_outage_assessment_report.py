@@ -267,7 +267,8 @@ class App:
         return [item for item in self.outages if pattern.endswith(item.kind)]
 
     def PrintPlain(self, message):
-        self.messages.append(message)
+        # A long message arrives wrapped over several lines; the tests read it as one line.
+        self.messages.append(gl.re.sub(r"\s*\n\s*", " ", message))
 
     def GetCurrentScript(self):
         return self.script
@@ -363,17 +364,17 @@ def test_reference_runs_without_and_every_outage_runs_as_its_own_case(monkeypatc
     values = app.report.tables["ReportMeta"]["values"]
     assert values[0, "generated_by"] == "operator"
     assert values[0, "run_mode"] == "REFERENCE + PLANNING CASES"
-    assert any("blocking API call may take several minutes" in line
+    assert any("PowerFactory is calculating REF (quasi-dynamic simulation); this can take a while." in line
                for line in app.messages)
-    assert any("Time period [calcPeriod] = 4" in line for line in app.messages)
-    assert any("Step size [stepSize] = 1" in line for line in app.messages)
-    assert any("Step unit [stepUnit] = 2" in line for line in app.messages)
+    # The ComStatsim settings as one block of names and values (Hadi, 20 Nov 2026).
+    found = [gl.re.match(r"^\[OA\]\s+(.+?) \.{3,} (.*)$", line) for line in app.messages]
+    fields = {match.group(1): match.group(2) for match in found if match}
+    assert fields["Kind of time period [calcPeriod]"] == "4"
+    assert fields["Time step [stepSize, stepUnit]"] == "1 h"
+    assert fields["Planned outages [iopt_maint]"] == "0"
+    assert fields["Simulated period"].startswith("2014-01-01 00:00 .. 2014-01-05 00:00 [startTime .. endTime")
+    assert fields["Initial study time"] == "2014-05-01 00:00:00"
     assert any("Calculation options: iopt_at=1, iopt_maint=0, iopt_net=0" in line
-               for line in app.messages)
-    assert any("Planned outages [iopt_maint] = 0" in line for line in app.messages)
-    assert any("Simulated period [startTime .. endTime (calcPeriod 4)] = 2014-01-01" in line
-               for line in app.messages)
-    assert any("Initial Study Case time: 2014-05-01 00:00:00" in line
                for line in app.messages)
     cases = app.report.tables["Cases"]["values"]
     assert [cases[index, "case_name"] for index in range(4)] == [
@@ -1556,10 +1557,10 @@ def test_run_output_is_structured_in_steps_cases_and_tables(monkeypatch):
         assert step in text
     assert (text.index("STEP 3/7") < text.index("STEP 4/7") < text.index("STEP 5/7") < text.index("STEP 6/7")
             < text.index("STEP 7/7")), "every calculation comes before every evaluation"
-    assert ".. Case REF \u00b7 Reference" in text
-    assert ".. Case OUT01 \u00b7 Outage A" in text
+    assert "-- Case REF \u00b7 Reference" in text
+    assert "-- Case OUT01 \u00b7 Outage A" in text
     assert "Outages: Outage A (" in text
-    assert "Planning cases from: one case per planned outage in the simulated period" in text
+    assert "Planning cases from ... one case per planned outage in the simulated period" in text
     # Tables: outages, series per case, results per case, published tables.
     for heading in ("Planned outage  Status", "Result series  Count", "Case   Name", "Table  Rows"):
         assert heading.split("  ")[0] in text
@@ -1634,10 +1635,73 @@ def test_a_loading_never_valued_is_left_out_and_counted():
     assert counters["unvalued_branches"] == 1
 
 
-def test_a_time_step_without_any_loading_value_still_stops_the_case():
-    """Not a new object: no branch has a value, so the load flow most likely failed there."""
-    with pytest.raises(RuntimeError, match="no line or transformer has a loading value"):
-        gl.collect_series(StagedElmRes(line_a=(90.0, NAN, 110.0, 80.0), line_b=(NAN, NAN, 60.0, 70.0)))
+def test_a_time_step_without_any_loading_value_is_left_out_as_not_converged():
+    # Hadi, 20 Nov 2026: steps without a converged load flow are filtered out, the run goes on.
+    counters = {}
+    series = gl.collect_series(StagedElmRes(line_a=(90.0, NAN, 110.0, 80.0), line_b=(NAN, NAN, 60.0, 70.0)),
+                               counters=counters)[0]
+    assert counters["nonconverged_rows"] == [1] and counters["nonconverged_flag"] is False
+    bus = next(item for item in series if item["category"] == "voltage")
+    assert gl.array_value(bus["values"], 1) is None, "no element has a value at a step that did not converge"
+
+
+class FlaggedElmRes(StagedElmRes):
+    """As PowerFactory records it: b:noconv is 1 at the steps whose load flow did not converge."""
+
+    def __init__(self, flags=(0, 0, 1, 0), line_a=(90.0, 95.0, 300.0, 80.0)):
+        super().__init__(line_a=line_a)
+        self.calc = PFObject("Quasi-Dynamic Simulation", "ComStatsim")
+        self.variables = self.variables + ("b:noconv",)
+        self.objects = self.objects + (self.calc,)
+        self.units = self.units + ("",)
+        self.columns = self.columns + (list(flags),)
+
+
+def test_steps_flagged_as_not_converged_are_no_value_of_any_element():
+    counters = {}
+
+    series = gl.collect_series(FlaggedElmRes(), counters=counters)[0]
+
+    line_a = next(item for item in series if item["element_name"] == "Line A")
+    assert gl.array_value(line_a["values"], 2) is None and line_a["statistics"]["max"] == 95.0, (
+        "the 300 % of the unconverged step is no result")
+    assert counters["nonconverged_rows"] == [2] and counters["nonconverged_flagged"] == 1
+    assert counters["deenergized_steps"] == 0, "a step without convergence is no de-energised node"
+
+
+def test_a_run_that_converges_at_no_step_stops_with_its_reason():
+    with pytest.raises(RuntimeError, match="converged at none of its 4 time steps"):
+        gl.collect_series(FlaggedElmRes(flags=(1, 1, 1, 1)))
+
+
+def test_a_step_that_did_not_converge_in_ref_or_the_case_is_not_compared():
+    def result(case_id, flags):
+        counters = {}
+        series, labels, plot_times, unit, absolute, origin = gl.collect_series(FlaggedElmRes(flags=flags), counters)
+        return gl.case_result({"id": case_id, "name": case_id, "counters": counters, "hours": list(plot_times),
+                               "absolute": False}, series, labels, plot_times, unit)
+    reference = result("REF", (0, 0, 0, 0))
+    case = result("C1", (0, 0, 1, 0))
+
+    gl.compare_case(case, reference, [(None, None)])
+
+    assert case["assessment"]["nonconverged_rows"] == 1
+    line = next(record for record in case["comparison"]["line"] if record["item"]["element_name"] == "Line A")
+    assert line["status"] != gl.STATUS_DEENERGIZED, "a missing value of a step that did not converge is no finding"
+
+
+def test_steps_without_convergence_are_named_in_the_log_and_on_the_quality_page():
+    app = App((PlannedOutage("FS1"),))
+    app.original_result = app.qds.results = FlaggedElmRes()
+    app.study.AddCopy = lambda result: FlaggedElmRes()
+
+    gl.execute_outage_assessment(app)
+
+    text = "\n".join(app.messages)
+    assert "The load flow did not converge at 1 of 4 time step(s) of REF" in text
+    quality = app.report.tables["ModelQuality"]["values"]
+    names = [value for (_row, field), value in quality.items() if field == "check_name"]
+    assert "Load flow not converged" in names
 
 
 def test_the_changes_of_operation_are_listed_by_time():

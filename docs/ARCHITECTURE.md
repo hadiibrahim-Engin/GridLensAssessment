@@ -196,13 +196,13 @@ Phase 1 only calculates and keeps; nothing is read yet.
 5. **Recording check.** Before the first QDS Outage Assessment reads the variable
    selection (IntMon objects) of the bound result object. When it names no assessed
    variable (a result object without IntMon records only `b:noconv` and `b:number`),
-   Outage Assessment first presses PowerFactory's *Add default variables* (attribute
-   `butdefault`) and otherwise adds the default variables itself – one
+   Outage Assessment adds the default variables itself – one
    class-wide IntMon each: `c:loading` of `ElmLne`, `ElmTr2`, `ElmTr3`, `m:u` of
    `ElmTerm` (`ensure_default_variables`) – reads them back and removes them in step 5
    (`restore_default_variables`). If they cannot be added, no run starts. Right after
    the first run it checks again that the copy records at least one assessed
    variable (`check_recording`).
+   `ElmRes.butdefault` is evaluated by a separate probe and is not used by the runtime.
 6. **After every run** the *Ignored* flags are restored and read back, the
    study time is put back, and switches that are in another state than before
    the run are logged (Outage Assessment does not change switches).
@@ -407,7 +407,7 @@ of the network state:
 | n-1 / (n-1)': no value where REF n-0 has none | not in operation | the cell is left out and counted, no quality problem |
 | (n-1)' has no value, n-1 has one | switched off or cut off by the case | NOT_EVALUATED with that reason, never IMPROVED |
 | a series has no value in the whole run | not in operation during the whole period | left out and counted |
-| no line or transformer has a value at one step | the load flow failed at that step | the case stops with that step |
+| PowerFactory flags a step as not converged (`b:noconv` not 0), or no line or transformer has a value there | the load flow did not converge at that step | the step is no value of any element in that run and is left out of the comparison with REF in both directions; named in the log (WARNING) and on the quality page (*Load flow not converged*); only a run that converges at no step stops (since 20 Nov 2026) |
 
 A missing value never becomes 0, never produces a delta and never counts as a
 maximum. After every run the log shows a table *Time-dependent operation*: per
@@ -653,7 +653,8 @@ contingencies out of a re-evaluation, not add ones that were not calculated.
 
 | Part | Content |
 |---|---|
-| steps | `STEP n/7` sections; one block per case run |
+| steps | `STEP n/7` sections; one block per case run, with a blank line before |
+| line layout | `[OA] 17:05:51 +12.3s   message`: clock and run time, then the message; long messages wrap under themselves (one output call), details align under the message; only WARNING, ERROR, DIAGNOSTIC and the outcome (COMPLETE, CANCELLED, FAILED, ABORTED) are marked. Context, ComStatsim settings and the settings of the run are blocks of names and values (`RunLogger.fields`) at the start; tables have a blank line before (20 Nov 2026) |
 | plan | every case with status, outages, windows, network states, reuse |
 | applied outages | before each run: the option and every outage with *Ignored* = 0 |
 | results | verdict per case, outage effect, persistence, n-1 summary |

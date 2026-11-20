@@ -46,10 +46,11 @@ H, D = 3600.0, 86400.0
 
 
 # >>> copy of outage-assessment/main.py, written by ui/sync_case_manager_copy.py - do not edit >>>
-# Outage Assessment 8.3.0: 186 definitions.
+# Outage Assessment 8.3.0: 187 definitions.
 import hashlib
 import math
 import re
+import textwrap
 from datetime import datetime
 
 
@@ -666,6 +667,18 @@ def set_log_level(level):
     RUN_CONTEXT['log_level'] = normalized_log_level(level)
 
 
+def elapsed_text(seconds):
+    """'+12.3s', '+4m05s', '+2h03m': the run time so far, short enough for every line."""
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return '+{:.1f}s'.format(seconds)
+    if seconds < 3600:
+        minutes, rest = divmod(int(seconds), 60)
+        return '+{}m{:02d}s'.format(minutes, rest)
+    hours, rest = divmod(int(seconds) // 60, 60)
+    return '+{}h{:02d}m'.format(hours, rest)
+
+
 class RunLogger:
     """Structured progress output for the PowerFactory output window.
 
@@ -673,16 +686,28 @@ class RunLogger:
     a line shows when its verbosity is within the chosen level. Warnings, errors,
     section and case headings are always shown.
 
-    Three levels keep a long run readable:
+    The layout keeps a long run readable (Hadi, 20 Nov 2026: blocks apart, nothing lost in dense lines):
 
-        ====================================  section: one step of the run
-         STEP 4/7 · Calculation
-        ====================================
-        .. Case OUT01 · NE_L1 ..............  case: one QDS run
-            indented lines                     details of the current block
+        [OA] ==============================================  section: one step of the run
+        [OA]  STEP 4/7 · Calculation
+        [OA] ==============================================
+        [OA] 17:05:51 +12.3s   message                        one action, wrapped under itself
+        [OA]                   detail                         details aligned under the message
+        [OA] 17:05:52 +13.0s   WARNING  message               warnings and errors marked, nothing else
+
+        [OA] -- Case OUT01 · NE_L1 ------------------------  case: one QDS run, with a blank line before
+        [OA]                   Key ........ value            settings as key and value (fields)
     """
 
     WIDTH = 78
+    PREFIX = '[OA]'
+    # Width of the clock column ('17:05:51 +12.3s'); messages and details start right after it.
+    CLOCK = 17
+    TEXT_WIDTH = 104
+    # Stages that end a run; they are marked like a warning so the outcome is found at a glance.
+    OUTCOMES = ('COMPLETE', 'CANCELLED', 'FAILED', 'ABORTED')
+    # Stages marked like a warning: the outcome of the run, and diagnostic lines that only the diagnostic level shows.
+    MARKED_STAGES = OUTCOMES + ('DIAGNOSTIC',)
 
     def __init__(self, app, level=None):
         self.app = app
@@ -715,18 +740,26 @@ class RunLogger:
     def write(self, stage, message, step=None, level="INFO", verbosity=LOG_STANDARD):
         if self._hidden(level, verbosity):
             return
-        position = "--/{}".format(TOTAL_STEPS)
-        if step is not None:
-            position = "{:02d}/{}".format(step, TOTAL_STEPS)
+        # `stage` and `step` are kept by the callers for the meaning of a line; the section heading shows the step.
         if level in ("WARNING", "ERROR") and stage != "FAILED":
             _remember_warning(message)
         # Clock time, and the run time without the time the case manager window stood open.
-        self._emit("[Outage Assessment][{}][{}][{}][{} +{:.1f}s] {}".format(
-            position, level, stage, datetime.now().strftime("%H:%M:%S"), RUN_STATS.run_time(), message))
+        clock = "{} {}".format(datetime.now().strftime("%H:%M:%S"), elapsed_text(RUN_STATS.run_time()))
+        marker = stage if stage in self.MARKED_STAGES else level if level in ("WARNING", "ERROR") else ""
+        self._wrapped(clock.ljust(self.CLOCK) + " ", (marker + "  " if marker else "") + message)
+
+    def _wrapped(self, head, text):
+        """`head` and `text`; a long text continues on further lines under itself. One message stays one output
+        call (its lines joined by line breaks), so it is never torn apart by PowerFactory's own messages."""
+        indent = " " * (len(self.PREFIX) + 1 + len(head))
+        lines = textwrap.wrap(text, width=self.TEXT_WIDTH, break_long_words=False, break_on_hyphens=False) or [""]
+        self._emit("\n".join(["{} {}{}".format(self.PREFIX, head, lines[0]).rstrip()] + [indent + line for line in lines[1:]]))
 
     def _plain(self, text, level="INFO"):
-        self._emit("[Outage Assessment]{} {}".format(
-            "" if level == "INFO" else "[" + level + "]", text))
+        self._emit("{} {}{}".format(self.PREFIX, "" if level == "INFO" else level + ": ", text).rstrip())
+
+    def blank(self):
+        self._emit("")
 
     def section(self, title):
         self._emit("")
@@ -742,33 +775,52 @@ class RunLogger:
 
     def case(self, title):
         RUN_CONTEXT['case'] = title
-        head = ".. " + title + " "
-        self._plain(head + "." * max(3, self.WIDTH - len(head)))
+        head = "-- " + title + " "
+        self._emit("")
+        self._plain(head + "-" * max(3, self.WIDTH - len(head)))
 
-    def detail(self, message, level="INFO", verbosity=LOG_STANDARD):
+    def detail(self, message, level="INFO", verbosity=LOG_STANDARD, wrap=True):
         if self._hidden(level, verbosity):
             return
         if level == "WARNING":
             _remember_warning(message)
-        self._plain("    " + message, level)
+        text = message if level == "INFO" else level + ": " + message
+        if not text.strip():
+            self._emit("")
+        elif wrap:
+            self._wrapped(" " * (self.CLOCK + 1), text)
+        else:
+            self._emit("{} {}{}".format(self.PREFIX, " " * (self.CLOCK + 1), text).rstrip())
+
+    def fields(self, title, pairs, verbosity=LOG_STANDARD):
+        """A block of settings: the title, then one aligned 'name   value' line each; a long value wraps under itself."""
+        pairs = [(str(name), str(value)) for name, value in pairs if value is not None]
+        if not pairs or not self.shows(verbosity):
+            return
+        self._emit("")
+        self.detail(title + ":", wrap=False)
+        width = max(len(name) for name, _ in pairs) + 4
+        for name, value in pairs:
+            self._wrapped(" " * (self.CLOCK + 3) + (name + " ").ljust(width, "."), " " + value)
 
     def table(self, header, rows, level="INFO", verbosity=LOG_STANDARD):
-        """Rows of strings in aligned columns; the last column is not padded."""
+        """Rows of strings in aligned columns, with a blank line before; the last column is not padded."""
         if self._hidden(level, verbosity):
             return
         lines = ([tuple(header)] if header else []) + [
             tuple(str(cell) for cell in row) for row in rows]
         if not lines:
             return
+        self._emit("")
         widths = [max(len(line[i]) for line in lines) for i in range(len(lines[0]))]
         for number, line in enumerate(lines):
             self.detail("  ".join(
                 cell.ljust(widths[i]) if i < len(line) - 1 else cell
-                for i, cell in enumerate(line)), level)
+                for i, cell in enumerate(line)), level, wrap=False)
             if header and number == 0:
                 self.detail("  ".join(
                     "-" * widths[i] if i < len(line) - 1 else "-" * min(widths[i], 40)
-                    for i in range(len(line))))
+                    for i in range(len(line))), wrap=False)
 
 
 class WarningGroup:

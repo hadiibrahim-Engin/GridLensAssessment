@@ -831,6 +831,7 @@ def collect_series(elmres, counters=None):
     grids = {}
     dc_nodes = set()
     internal_nodes = set()
+    noconv_column = None
     recorded = {}  # what the result object records that Outage Assessment does not assess, for the error message
     # Without a grid selection every element is assessed, so its grid is not read at all.
     filtered = bool(current_setting('monitoring_grids'))
@@ -847,6 +848,8 @@ def collect_series(elmres, counters=None):
             kind = class_name(obj) or 'unknown'
             by_class[kind] = by_class.get(kind, 0) + 1
             by_variable[variable] = by_variable.get(variable, 0) + 1
+        if variable == NONCONVERGED_VARIABLE and noconv_column is None:
+            noconv_column = column
         if not category or variable not in VARIABLES[category]:
             if column != t_column:
                 name = '{} {}'.format(class_name(obj) or 'unknown object', variable)
@@ -897,6 +900,14 @@ def collect_series(elmres, counters=None):
         raise RuntimeError('Reading this result object needs about {} for {} series x {} time steps, {}. Choose fewer '
                            'grids in Settings -> Network scope, or a shorter period or larger QDS step.'.format(
                                memory_text(needed), len(chosen), rows, problem))
+    # Steps PowerFactory flags as not converged (b:noconv not 0): no element has a value there.
+    flagged = set()
+    if noconv_column is not None:
+        flagged = {row for row, value in enumerate(read_column(elmres, noconv_column, rows))
+                   if value is not None and value != 0}
+    skip = bytearray(rows)
+    for row in flagged:
+        skip[row] = 1
     series = []
     dark_series = 0
     energized = setting_value('energized_min_pu')
@@ -912,6 +923,9 @@ def collect_series(elmres, counters=None):
         is_voltage = category == 'voltage'
         dark = missing = 0
         for row, value in enumerate(read_column(elmres, column, rows)):
+            if skip[row]:
+                values.append(None)
+                continue
             if is_voltage:
                 if value is None or value < energized:
                     # A node an outage cuts off is reported as 0 or as NaN: both mean de-energised, no value.
@@ -927,14 +941,14 @@ def collect_series(elmres, counters=None):
         if counters is not None:
             counters['deenergized_steps'] += dark
         if not is_voltage:
-            if missing == len(values):
+            if missing == len(values) - len(flagged):
                 if counters is not None:
                     counters['unvalued_branches'] += 1
                 continue
             branches += 1
             if counters is not None:
                 counters['loading_gap_steps'] += missing
-        if dark == len(values):
+        if dark == len(values) - len(flagged):
             dark_series += 1
             if counters is not None:
                 counters['deenergized_nodes'] += 1
@@ -973,15 +987,36 @@ def collect_series(elmres, counters=None):
         })
     RUN_STATS.part(READ_SERVICE, READ_CHECK, time.monotonic() - looping - (
         sum(RUN_STATS.part_seconds(READ_SERVICE, name) for name in (READ_COLUMNS, READ_CELLS, READ_CONVERT)) - calls_before))
-    failed = [row for row in range(rows) if not valued[row]] if branches else []
-    if failed:
-        raise RuntimeError(
-            'At {} time step(s) no line or transformer has a loading value (first: {}), so the load flow most likely '
-            'failed there; a branch out of operation leaves only its own series without a value. Read the PowerFactory '
-            'messages of the quasi-dynamic simulation.'.format(len(failed), labels[failed[0]]))
+    # A step where no line or transformer has a loading value is a load flow that did not converge, also where
+    # PowerFactory recorded no flag; like a flagged step it is no value of any element.
+    unvalued = [row for row in range(rows) if not valued[row] and not skip[row]] if branches else []
+    if unvalued:
+        for item in series:
+            for row in unvalued:
+                item['values'][row] = MISSING
+            item['statistics'] = array_statistics(item['values'], labels)
+        series = [item for item in series if item['statistics'] is not None]
+    excluded = sorted(flagged | set(unvalued))
+    if counters is not None:
+        counters['nonconverged_rows'] = excluded
+        counters['nonconverged_flagged'] = len(flagged)
+        counters['nonconverged_flag'] = noconv_column is not None
+    if excluded and len(excluded) == rows:
+        raise RuntimeError('The load flow of the quasi-dynamic simulation converged at none of its {} time steps{}. '
+                           'Read the PowerFactory messages of the quasi-dynamic simulation.'.format(
+                               rows, ' ({} flagged by {})'.format(len(flagged), NONCONVERGED_VARIABLE) if flagged else ''))
     if not series:
         raise RuntimeError(missing_series_message(recorded, dark_series))
     return (series, labels, plot_times, time_unit, absolute, origin)
+
+
+# PowerFactory's flag of a QDS time step whose load flow did not converge (not 0); recorded with every QDS result.
+NONCONVERGED_VARIABLE = 'b:noconv'
+
+
+def nonconverged_rows(result):
+    """Rows of a result whose load flow did not converge; left out of every assessment."""
+    return set((result or {}).get('counters', {}).get('nonconverged_rows') or ())
 
 
 def missing_series_message(recorded, dark_series=0):
@@ -3373,7 +3408,10 @@ def compare_case(result, reference, windows, out_of_service_keys=()):
         raise OutageAssessmentError('the time series of {} were already released; a case can only be compared right after '
                             'its extraction'.format(', '.join(missing[:3])))
     spill = _spill_rows(case_items, ref_items, inside, len(hours)) if reference is not None and mappable and windows else []
-    rows = sorted(set(inside) | set(spill))
+    # A step without a converged load flow in the case or in REF has no value to compare.
+    unconverged = nonconverged_rows(result) | nonconverged_rows(reference)
+    rows = sorted((set(inside) | set(spill)) - unconverged)
+    assessment['nonconverged_rows'] = len((set(inside) | set(spill)) & unconverged)
     assessment['spill_rows'] = len(spill)
     assessment['spill_hours'] = sum(steps[row] for row in spill)
     assessment['rows'] = len(rows)
@@ -3991,6 +4029,14 @@ def _model_quality(payload, results, request=None):
         message = '{} evaluated; {} the limit in at least one case.'.format(_counted(evaluated, singular, plural), _counted(exceeded, 'exceeds', 'exceed')) if evaluated else 'No {} evaluated.'.format(singular)
         _quality(payload, 'series_' + category, label, 'PASS' if evaluated else 'WARNING', message,
                  _counted(exceeded, singular, plural) if exceeded else '-')
+    unconverged = [(_result_name(result), len(nonconverged_rows(result)), len(result.get('labels') or ()))
+                   for result in converged(results) if nonconverged_rows(result)]
+    if unconverged:
+        _quality(payload, 'nonconverged', 'Load flow not converged', 'WARNING',
+                 'Time steps without a converged load flow are left out of the assessment and of the comparison with '
+                 'Reference: {}.'.format('; '.join('{} {} of {}'.format(name, _counted(count, 'step', 'steps'), total)
+                                                   for name, count, total in unconverged)),
+                 ', '.join(name for name, _count, _total in unconverged))
     counters = _primary_counters(results)
     if (counters.get('dc_nodes') or counters.get('internal_nodes') or counters.get('deenergized_nodes')
             or counters.get('deenergized_steps')):
@@ -6188,6 +6234,18 @@ def set_log_level(level):
     RUN_CONTEXT['log_level'] = normalized_log_level(level)
 
 
+def elapsed_text(seconds):
+    """'+12.3s', '+4m05s', '+2h03m': the run time so far, short enough for every line."""
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return '+{:.1f}s'.format(seconds)
+    if seconds < 3600:
+        minutes, rest = divmod(int(seconds), 60)
+        return '+{}m{:02d}s'.format(minutes, rest)
+    hours, rest = divmod(int(seconds) // 60, 60)
+    return '+{}h{:02d}m'.format(hours, rest)
+
+
 class RunLogger:
     """Structured progress output for the PowerFactory output window.
 
@@ -6195,16 +6253,28 @@ class RunLogger:
     a line shows when its verbosity is within the chosen level. Warnings, errors,
     section and case headings are always shown.
 
-    Three levels keep a long run readable:
+    The layout keeps a long run readable (Hadi, 20 Nov 2026: blocks apart, nothing lost in dense lines):
 
-        ====================================  section: one step of the run
-         STEP 4/7 · Calculation
-        ====================================
-        .. Case OUT01 · NE_L1 ..............  case: one QDS run
-            indented lines                     details of the current block
+        [OA] ==============================================  section: one step of the run
+        [OA]  STEP 4/7 · Calculation
+        [OA] ==============================================
+        [OA] 17:05:51 +12.3s   message                        one action, wrapped under itself
+        [OA]                   detail                         details aligned under the message
+        [OA] 17:05:52 +13.0s   WARNING  message               warnings and errors marked, nothing else
+
+        [OA] -- Case OUT01 · NE_L1 ------------------------  case: one QDS run, with a blank line before
+        [OA]                   Key ........ value            settings as key and value (fields)
     """
 
     WIDTH = 78
+    PREFIX = '[OA]'
+    # Width of the clock column ('17:05:51 +12.3s'); messages and details start right after it.
+    CLOCK = 17
+    TEXT_WIDTH = 104
+    # Stages that end a run; they are marked like a warning so the outcome is found at a glance.
+    OUTCOMES = ('COMPLETE', 'CANCELLED', 'FAILED', 'ABORTED')
+    # Stages marked like a warning: the outcome of the run, and diagnostic lines that only the diagnostic level shows.
+    MARKED_STAGES = OUTCOMES + ('DIAGNOSTIC',)
 
     def __init__(self, app, level=None):
         self.app = app
@@ -6237,18 +6307,26 @@ class RunLogger:
     def write(self, stage, message, step=None, level="INFO", verbosity=LOG_STANDARD):
         if self._hidden(level, verbosity):
             return
-        position = "--/{}".format(TOTAL_STEPS)
-        if step is not None:
-            position = "{:02d}/{}".format(step, TOTAL_STEPS)
+        # `stage` and `step` are kept by the callers for the meaning of a line; the section heading shows the step.
         if level in ("WARNING", "ERROR") and stage != "FAILED":
             _remember_warning(message)
         # Clock time, and the run time without the time the case manager window stood open.
-        self._emit("[Outage Assessment][{}][{}][{}][{} +{:.1f}s] {}".format(
-            position, level, stage, datetime.now().strftime("%H:%M:%S"), RUN_STATS.run_time(), message))
+        clock = "{} {}".format(datetime.now().strftime("%H:%M:%S"), elapsed_text(RUN_STATS.run_time()))
+        marker = stage if stage in self.MARKED_STAGES else level if level in ("WARNING", "ERROR") else ""
+        self._wrapped(clock.ljust(self.CLOCK) + " ", (marker + "  " if marker else "") + message)
+
+    def _wrapped(self, head, text):
+        """`head` and `text`; a long text continues on further lines under itself. One message stays one output
+        call (its lines joined by line breaks), so it is never torn apart by PowerFactory's own messages."""
+        indent = " " * (len(self.PREFIX) + 1 + len(head))
+        lines = textwrap.wrap(text, width=self.TEXT_WIDTH, break_long_words=False, break_on_hyphens=False) or [""]
+        self._emit("\n".join(["{} {}{}".format(self.PREFIX, head, lines[0]).rstrip()] + [indent + line for line in lines[1:]]))
 
     def _plain(self, text, level="INFO"):
-        self._emit("[Outage Assessment]{} {}".format(
-            "" if level == "INFO" else "[" + level + "]", text))
+        self._emit("{} {}{}".format(self.PREFIX, "" if level == "INFO" else level + ": ", text).rstrip())
+
+    def blank(self):
+        self._emit("")
 
     def section(self, title):
         self._emit("")
@@ -6264,33 +6342,52 @@ class RunLogger:
 
     def case(self, title):
         RUN_CONTEXT['case'] = title
-        head = ".. " + title + " "
-        self._plain(head + "." * max(3, self.WIDTH - len(head)))
+        head = "-- " + title + " "
+        self._emit("")
+        self._plain(head + "-" * max(3, self.WIDTH - len(head)))
 
-    def detail(self, message, level="INFO", verbosity=LOG_STANDARD):
+    def detail(self, message, level="INFO", verbosity=LOG_STANDARD, wrap=True):
         if self._hidden(level, verbosity):
             return
         if level == "WARNING":
             _remember_warning(message)
-        self._plain("    " + message, level)
+        text = message if level == "INFO" else level + ": " + message
+        if not text.strip():
+            self._emit("")
+        elif wrap:
+            self._wrapped(" " * (self.CLOCK + 1), text)
+        else:
+            self._emit("{} {}{}".format(self.PREFIX, " " * (self.CLOCK + 1), text).rstrip())
+
+    def fields(self, title, pairs, verbosity=LOG_STANDARD):
+        """A block of settings: the title, then one aligned 'name   value' line each; a long value wraps under itself."""
+        pairs = [(str(name), str(value)) for name, value in pairs if value is not None]
+        if not pairs or not self.shows(verbosity):
+            return
+        self._emit("")
+        self.detail(title + ":", wrap=False)
+        width = max(len(name) for name, _ in pairs) + 4
+        for name, value in pairs:
+            self._wrapped(" " * (self.CLOCK + 3) + (name + " ").ljust(width, "."), " " + value)
 
     def table(self, header, rows, level="INFO", verbosity=LOG_STANDARD):
-        """Rows of strings in aligned columns; the last column is not padded."""
+        """Rows of strings in aligned columns, with a blank line before; the last column is not padded."""
         if self._hidden(level, verbosity):
             return
         lines = ([tuple(header)] if header else []) + [
             tuple(str(cell) for cell in row) for row in rows]
         if not lines:
             return
+        self._emit("")
         widths = [max(len(line[i]) for line in lines) for i in range(len(lines[0]))]
         for number, line in enumerate(lines):
             self.detail("  ".join(
                 cell.ljust(widths[i]) if i < len(line) - 1 else cell
-                for i, cell in enumerate(line)), level)
+                for i, cell in enumerate(line)), level, wrap=False)
             if header and number == 0:
                 self.detail("  ".join(
                     "-" * widths[i] if i < len(line) - 1 else "-" * min(widths[i], 40)
-                    for i in range(len(line))))
+                    for i in range(len(line))), wrap=False)
 
 
 class WarningGroup:
@@ -6556,13 +6653,10 @@ def log_run_summary(logger, stats=None):
     if longest_text:
         logger.detail(longest_text)
     if stats.steps:
-        logger.detail("")
         logger.table(("Step", "Duration", "Share of the run time"), stats.step_rows())
     if stats.cases:
-        logger.detail("")
         logger.table(("Case",) + tuple(stats.PHASE_LABELS[phase] for phase in stats.CASE_PHASES) + ("Total",),
                      stats.case_rows())
-    logger.detail("")
     logger.table(("Work", "Done", "Duration", "Share of the run time"), stats.rows())
     if stats.wait_services:
         logger.detail("While the case manager window stood open (not counted): {}.".format(", ".join(
@@ -6570,7 +6664,6 @@ def log_run_summary(logger, stats=None):
             for service, (_calls, seconds) in stats.wait_services.items())), verbosity=LOG_DETAILED)
     counted = stats.count_rows()
     if counted:
-        logger.detail("")
         logger.table(("What was calculated", "Number"), counted)
 
 
@@ -11317,9 +11410,7 @@ def _calculate_qds(app, study_case, qds, case_id, name, original_result, logger,
         "differ between the cases.".format(case_id), 4, verbosity=LOG_DETAILED)
     logger.write(
         "CALCULATION",
-        "PowerFactory is calculating {}. This blocking API call may take "
-        "several minutes; intermediate progress is controlled by PowerFactory."
-        .format(case_id), 4)
+        "PowerFactory is calculating {} (quasi-dynamic simulation); this can take a while.".format(case_id), 4)
     with RUN_STATS.measure("read switch states"):
         switches_before = switch_states(app)
     started = time.monotonic()
@@ -11505,6 +11596,14 @@ def evaluate_qds(run, description, plan, logger):
                     unit, labels[0], labels[-1],
                     '{:g} h'.format(plot_times[-1] - plot_times[0])), 6)
         logger.detail(result_object_text(snapshot, counters, labels, plot_times), verbosity=LOG_DETAILED)
+        excluded = counters.get('nonconverged_rows') or ()
+        if excluded:
+            logger.write("EXTRACTION", "The load flow did not converge at {} of {} time step(s) of {} (first: {}); "
+                         "they are left out of the assessment{}.".format(
+                             len(excluded), len(labels), case_id, labels[excluded[0]],
+                             "" if counters.get('nonconverged_flag') else
+                             " (no load flow value at all there; PowerFactory recorded no {} flag)".format(
+                                 NONCONVERGED_VARIABLE)), 6, "WARNING")
         _log_extraction_detail(logger, series, counters)
         _log_operation_changes(logger, series, labels, counters)
     except Exception as exc:
@@ -11685,16 +11784,24 @@ def _restore_study_time(state, logger, stage="RESTORE", step=5):
 
 
 def _log_qds_settings(qds, result, study_time_state, logger):
-    logger.write(
-        "SETTINGS",
-        "Active ComStatsim settings; Outage Assessment changes only the 'Planned "
-        "Outages' option and restores it:", 2)
-    for label, attribute in QDS_CORE_SETTINGS:
+    """Step 2: the settings of the quasi-dynamic simulation as one block; what Outage Assessment changes is said."""
+    found, kind = _read_setting(qds, "calcPeriod")
+    step = qds_step(qds)
+    fields = [("Kind of time period [calcPeriod]", _format_setting_value(kind) if found else "not exposed"),
+              ("Time step [stepSize, stepUnit]", "{} {}".format(*_step_words(step)) if step else "not readable")]
+    period_start, period_end = qds_period(qds)
+    fields.append(("Simulated period", "{} .. {} [{}]".format(_format_pf_time(period_start), _format_pf_time(period_end),
+                                                              qds_period_source(qds))
+                   if period_start is not None else "not readable ({})".format(qds_period_source(qds))))
+    for attribute in ("iopt_maint", "ciopt_maint", "iopt_action", "iopt_rep"):
         found, value = _read_setting(qds, attribute)
-        rendered = _format_setting_value(value) if found else "<not exposed>"
-        logger.write(
-            "SETTINGS",
-            "{} [{}] = {}".format(label, attribute, rendered), 2)
+        if found:
+            fields.append(("{} [{}]".format(attribute_label(qds, attribute) or "Planned outages", attribute),
+                           _format_setting_value(value)))
+    fields.append(("Initial study time", _format_study_time(study_time_state["date"], study_time_state["time"])))
+    logger.fields("Quasi-dynamic simulation (ComStatsim)", fields)
+    logger.detail("Outage Assessment changes only 'Planned Outages' and, for the run, the simulated period; both are "
+                  "restored afterwards.")
     option_names = set(QDS_OPTION_ATTRIBUTES)
     try:
         option_names.update(
@@ -11712,32 +11819,11 @@ def _log_qds_settings(qds, result, study_time_state, logger):
         "Calculation options: {}".format(
             ", ".join(options) if options else "<no exposed iopt_* attributes>"),
         2, verbosity=LOG_DETAILED)
-    period_start, period_end = qds_period(qds)
-    if period_start is not None:
-        logger.write(
-            "SETTINGS",
-            "Simulated period [{}] = {} .. {}".format(
-                qds_period_source(qds), _format_pf_time(period_start), _format_pf_time(period_end)), 2)
-    else:
+    if period_start is None:
         logger.write(
             "SETTINGS",
             "Simulated period is not readable from this ComStatsim ({}); planned "
             "outages will be judged against the reference time axis.".format(qds_period_source(qds)), 2, "WARNING")
-    for attribute in ("iopt_maint", "ciopt_maint", "iopt_action", "iopt_rep"):
-        found, value = _read_setting(qds, attribute)
-        if found:
-            logger.write(
-                "SETTINGS", "{} [{}] = {}".format(
-                    attribute_label(qds, attribute) or "Planned outages", attribute,
-                    _format_setting_value(value)), 2)
-    logger.write(
-        "SETTINGS",
-        "Result object [results] = '{}' ({})".format(
-            object_name(result), class_name(result) or "ElmRes"), 2)
-    logger.write(
-        "SETTINGS",
-        "Initial Study Case time: {}".format(_format_study_time(
-            study_time_state["date"], study_time_state["time"])), 2, verbosity=LOG_DETAILED)
 
 
 # PowerFactory reports why it refused a command only in its output window; Python sees "method call failed".
@@ -12196,6 +12282,12 @@ def sweep_settings_text(command):
         else:
             parts.append("{} = {}".format(attribute, clip_text(_format_setting_value(value), 80)))
     return "; ".join(parts)
+
+
+def _step_words(step):
+    """(number, unit) of a QDS step for the log: (15, 'min'), (1, 'h')."""
+    size, unit = step_setting(step)
+    return size, {0: 's', 1: 'min', 2: 'h', 3: 'd'}[unit]
 
 
 def step_setting(step):
@@ -12741,10 +12833,7 @@ def obtain_case_request(app, records, candidates, period, logger, qds_info=None,
 
 
 def _log_plan(logger, request):
-    logger.detail("Planning cases from: {}".format(request["source_text"]))
-    logger.detail("Reference: {}".format(_reference_text(request)))
-    logger.detail("Assessment: {}".format(", ".join(
-        "n-0 quasi-dynamic simulation" if item == "n-0" else item for item in request.get("assessments") or ["n-0"])))
+    """The planning cases as a table; source, reference and assessments are in the settings block above."""
     if request.get("disabled"):
         logger.detail("Excluded from the calculation in the case manager: {}".format(", ".join(request["disabled"])))
     for warning in request.get("warnings") or ():
@@ -12759,16 +12848,19 @@ def _log_plan(logger, request):
 
 
 def _log_context(app, study_case, qds, original_result, logger):
+    """Step 1: what the run works on, as one block."""
     try:
         project = object_name(app.GetActiveProject())
     except Exception:
         project = "unknown"
-    logger.detail("Project: {} | Study case: {} | ComStatsim: {}".format(
-        project, object_name(study_case), object_name(qds)), verbosity=LOG_DETAILED)
-    logger.detail("Result object: {} ({})".format(
-        object_name(original_result), class_name(original_result) or "ElmRes"), verbosity=LOG_DETAILED)
-    logger.detail("Reference case: {} | case source: {} | time base: complete ComStatsim period".format(
-        "on" if setting_value('run_reference') else "off", CASE_SOURCE), verbosity=LOG_DETAILED)
+    logger.fields("Context", [
+        ("Project", project), ("Study case", object_name(study_case)),
+        ("Quasi-dynamic simulation", object_name(qds) if qds is not None else "none (only n-1 possible)"),
+        ("Result object", "{} ({})".format(object_name(original_result), class_name(original_result) or "ElmRes")
+         if original_result is not None else "none bound yet"),
+        ("Reference case (REF)", "calculated" if setting_value('run_reference') else "not calculated"),
+        ("Planning cases from", {"gui": "case manager", "saved": "saved configuration",
+                                 "per_outage": "one case per planned outage"}.get(CASE_SOURCE, CASE_SOURCE))])
 
 
 def _series_overview(series):
@@ -13304,11 +13396,6 @@ def execute_outage_assessment(app):
             "planned outages, so no calculation was started.".format(
                 PLANNED_OUTAGE_OPTION))
     study_time_state = _capture_study_time(app)
-    logger.write(
-        "CONTEXT",
-        "Study case '{}'; QDS '{}'; result '{}'; reference flag {}."
-        .format(object_name(study_case), object_name(qds),
-                object_name(original_result), setting_value('run_reference')), 2)
     _log_context(app, study_case, qds, original_result, logger)
     logger.step(2, "ComStatsim settings")
     if qds is not None:
@@ -13344,12 +13431,19 @@ def execute_outage_assessment(app):
     set_log_level(request.get("log_level"))
     # The settings are fixed here, after the case manager has closed, and apply to the whole run.
     request["settings_snapshot"] = activate_settings(request.get("settings"))
-    logger.write("SETTINGS", "Settings {} with classification rules {}: {}.".format(
-        SETTINGS_VERSION, CLASSIFICATION_VERSION, overrides_text(request["settings_snapshot"]["overrides"])), 3)
     request["contingency_scope"] = contingency_scope_text(contingencies, current_setting("contingency_grids"),
                                                           current_setting("monitoring_grids"))
-    logger.write("SETTINGS", "Report filter: {}. Contingencies: {} {}.".format(
-        grid_scope_text(), request["contingency_scope"], n1_filter_text()), 3)
+    logger.fields("Settings of this run", [
+        ("Assessments", ", ".join("n-0 quasi-dynamic simulation" if item == "n-0" else item
+                                  for item in request.get("assessments") or ["n-0"])),
+        ("Reference", _reference_text(request)),
+        ("Planning cases from", request["source_text"]),
+        ("Settings", "{} (rules {}): {}".format(SETTINGS_VERSION, CLASSIFICATION_VERSION,
+                                               overrides_text(request["settings_snapshot"]["overrides"]))),
+        ("Assessed equipment", grid_scope_text()),
+        ("Contingencies (n-1)", "{} {}".format(request["contingency_scope"], n1_filter_text())
+         if N1_REFERENCE in (request.get("assessments") or ()) else "not calculated"),
+        ("Log", request.get("log_level") or LOG_LEVEL)])
     if follows_outages() or not n0:
         follow_outage_statuses(records, logger)
     _log_plan(logger, request)

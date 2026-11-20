@@ -218,6 +218,6 @@ def test_with_real_tk_the_tool_opens_the_new_window_and_cancel_ends_it(monkeypat
 def test_the_tool_needs_nothing_but_the_standard_library_and_powerfactory():
     source = TOOL.read_text(encoding="utf-8")
     imports = {line.split()[1].split(".")[0] for line in source.splitlines() if line.startswith(("import ", "from "))}
-    assert imports <= {"__future__", "datetime", "hashlib", "json", "math", "os", "re", "shutil", "sys", "tempfile", "time",
-                       "traceback"}
+    assert imports <= {"__future__", "datetime", "hashlib", "json", "math", "os", "re", "shutil", "sys", "tempfile",
+                       "textwrap", "time", "traceback"}
     assert json.loads(json.dumps({"ok": True}))

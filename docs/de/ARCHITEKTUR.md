@@ -206,14 +206,14 @@ Phase 1 rechnet und erhält nur; gelesen wird noch nichts.
 5. **Aufzeichnungsprüfung.** Vor der ersten QDS liest Outage Assessment die
    Variablenauswahl (IntMon) des gebundenen Ergebnisobjekts. Nennt sie keine
    bewertete Variable (ein Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und
-   `b:number` auf), drückt Outage Assessment zuerst PowerFactorys *Add default
-   variables* (Attribut `butdefault`) und legt sonst die Standardvariablen selbst
+   `b:number` auf), legt Outage Assessment die Standardvariablen selbst
    an – je ein klassenweiter IntMon: `c:loading` von `ElmLne`, `ElmTr2`,
    `ElmTr3`, `m:u` von `ElmTerm` (`ensure_default_variables`) –, liest sie zurück und
    entfernt sie in Schritt 5 wieder (`restore_default_variables`). Lassen sie sich
    nicht anlegen, startet kein Lauf. Direkt nach dem ersten Lauf prüft es noch
    einmal, dass die Kopie mindestens eine bewertete Variable enthält
    (`check_recording`).
+   `ElmRes.butdefault` wird mit einer separaten Probe untersucht und von der Laufzeit nicht verwendet.
 6. **Nach jedem Lauf** werden die *Ignored*-Flags zurückgesetzt und
    zurückgelesen, die Studienzeit wird zurückgesetzt, und Schalter, die anders
    stehen als vor dem Lauf, werden protokolliert (Outage Assessment ändert keine
@@ -427,7 +427,7 @@ Maßstab für den Netzstand:
 | n-1 / (n-1)': kein Wert, wo auch REF n-0 keinen hat | nicht in Betrieb | die Zelle wird ausgelassen und gezählt, kein Qualitätsproblem |
 | (n-1)' ohne Wert, n-1 mit Wert | vom Fall aus- oder abgeschaltet | NOT_EVALUATED mit diesem Grund, nie IMPROVED |
 | eine Reihe hat im ganzen Lauf keinen Wert | im ganzen Zeitraum nicht in Betrieb | ausgelassen und gezählt |
-| in einem Schritt hat keine Leitung und kein Transformator einen Wert | der Lastfluss ist in diesem Schritt gescheitert | der Fall stoppt mit diesem Schritt |
+| PowerFactory kennzeichnet einen Schritt als nicht konvergiert (`b:noconv` ungleich 0), oder keine Leitung und kein Transformator hat dort einen Wert | der Lastfluss ist in diesem Schritt nicht konvergiert | der Schritt ist in diesem Lauf für kein Element ein Wert und fällt in beiden Richtungen aus dem Vergleich mit REF; im Log (WARNING) und auf der Qualitätsseite (*Load flow not converged*) genannt; nur ein Lauf, der in keinem Schritt konvergiert, stoppt (seit 20.11.2026) |
 
 Ein fehlender Wert wird nie zu 0, erzeugt kein Delta und zählt nie als
 Maximum. Nach jedem Lauf zeigt das Log eine Tabelle *Time-dependent operation*:
@@ -688,7 +688,8 @@ Fehlerfälle weglassen, keine hinzufügen, die nicht gerechnet wurden.
 
 | Teil | Inhalt |
 |---|---|
-| Schritte | Abschnitte `STEP n/7`; ein Block je Falllauf |
+| Schritte | Abschnitte `STEP n/7`; ein Block je Falllauf, mit Leerzeile davor |
+| Zeilenaufbau | `[OA] 17:05:51 +12.3s   Meldung`: Uhrzeit und Laufzeit, dann die Meldung; lange Meldungen brechen unter sich um (ein Ausgabeaufruf), Details stehen bündig unter der Meldung; markiert sind nur WARNING, ERROR, DIAGNOSTIC und das Ergebnis (COMPLETE, CANCELLED, FAILED, ABORTED). Kontext, ComStatsim-Einstellungen und die Einstellungen des Laufs stehen vorn als Blöcke aus Name und Wert (`RunLogger.fields`); Tabellen haben eine Leerzeile davor (20.11.2026) |
 | Plan | jeder Fall mit Status, Außerbetriebnahmen, Fenstern, Netzzuständen, Wiederverwendung |
 | angewendete Außerbetriebnahmen | vor jedem Lauf: die Option und jede Außerbetriebnahme mit *Ignored* = 0 |
 | Ergebnisse | Urteil je Fall, Wirkung der Außerbetriebnahmen, Nachwirkung, n-1-Zusammenfassung |

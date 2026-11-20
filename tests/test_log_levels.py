@@ -17,7 +17,8 @@ class App:
         self.lines = []
 
     def PrintPlain(self, line):
-        self.lines.append(line)
+        # A long message arrives wrapped over several lines; the tests read it as one line.
+        self.lines.append(gl.re.sub(r"\s*\n\s*", " ", line))
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +88,27 @@ def test_log_lines_carry_clock_time_and_run_time():
     app = App()
     gl.RunLogger(app, "standard").write("X", "message", 2)
     line = app.lines[-1]
-    assert gl.re.search(r"\]\[\d\d:\d\d:\d\d \+\s*\d+\.\ds\] message$", line), line
+    assert gl.re.search(r"^\[OA\] \d\d:\d\d:\d\d \+\d+\.\ds +message$", line), line
+    assert gl.elapsed_text(12.34) == "+12.3s" and gl.elapsed_text(245) == "+4m05s" and gl.elapsed_text(7380) == "+2h03m"
+
+
+def test_long_messages_wrap_under_themselves_and_warnings_are_marked():
+    # Hadi, 20 Nov 2026: blocks apart and readable, nothing lost in dense lines.
+    printed = []
+
+    class Window:
+        def PrintPlain(self, text):
+            printed.append(text)
+    logger = gl.RunLogger(Window(), "standard")
+    logger.write("X", "word " * 60, 2, "WARNING")
+    lines = printed[-1].split("\n")
+    assert len(lines) > 1 and "WARNING  word" in lines[0], "one call, several lines"
+    column = lines[0].index("WARNING")
+    assert all(line.startswith(" " * column) for line in lines[1:]), "continued under the message"
+    logger.fields("Settings of this run", [("Assessments", "n-0"), ("Log", "standard")])
+    assert printed[-3].strip() == "[OA]                   Settings of this run:".strip()
+    assert printed[-2].endswith("Assessments ... n-0") and printed[-1].endswith("Log ........... standard"), (
+        "names and values aligned")
 
 
 def test_the_summary_shows_steps_cases_and_the_window_apart():

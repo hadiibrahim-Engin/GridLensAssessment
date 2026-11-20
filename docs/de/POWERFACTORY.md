@@ -247,16 +247,22 @@ copy.loc_name = "OA_<stamp>_<Fall>"
 - Vor der ersten QDS liest Outage Assessment die Variablenauswahl (IntMon) des
   gebundenen Ergebnisobjekts. Wählt sie keine von `c:loading`, `m:loading`, `m:u`,
   `m:u1` – ein Ergebnisobjekt ohne IntMon zeichnet nur `b:noconv` und `b:number` auf
-  (gesehen 17.11.2026) –, drückt Outage Assessment zuerst PowerFactorys eigenes
-  *Add default variables*: es schreibt 1 in das Attribut `butdefault` der ComStatsim
-  (sonst des Ergebnisobjekts). Kommt dadurch keine bewertete Variable hinzu, legt es
-  sie selbst an: `result.CreateObject("IntMon", …)`, `classnm` = Klasse,
-  `IntMon.AddVar("c:loading")` / `AddVar("m:u")` (`ensure_default_variables`). In
-  beiden Fällen liest es die Auswahl zurück und löscht das Angelegte nach dem Lauf.
-  Geht beides nicht, startet kein Lauf (`RecordingError`). `butdefault` ist ein
-  Attribut und steht deshalb nicht in der Python-Funktionsreferenz (nur Methoden);
-  dort stehen `IntMon.AddVar` und `ElmRes.AddVariable(element, varname)` (je Objekt,
-  nicht je Klasse). Noch nicht in PowerFactory geprüft: die Wirkung von `butdefault`. Direkt nach dem ersten Lauf prüft Outage Assessment noch einmal, ob
+  (gesehen 17.11.2026) –, legt Outage Assessment die Standardauswahl selbst an:
+  `result.CreateObject("IntMon", …)`, `classnm` = Klasse,
+  `IntMon.AddVar("c:loading")` / `AddVar("m:u")` (`ensure_default_variables`). Es
+  liest die Auswahl zurück und löscht das Angelegte nach dem Lauf.
+  Geht das nicht, startet kein Lauf (`RecordingError`). Die Laufzeit schreibt
+  `butdefault` derzeit nicht. Die separate
+  [ElmRes-Probe](../../powerfactory_tests/test_elmres_default_variables.py) prüft
+  `ElmRes.SetAttribute("butdefault", 1)` auf einer temporären Konfigurationskopie,
+  ohne sie zu binden oder eine Berechnung zu starten. Sie vergleicht `IntMon`/`vars`
+  vorher und nachher; ein erfolgreicher Attribut-Schreibzugriff allein belegt keine
+  Button-Aktion. `DEFAULT_VARIABLES_ADDED` verlangt alle vier benötigten
+  klassenweiten Auswahlen; eine Teiländerung wird gesondert gemeldet. Die Wirkung
+  ist noch nicht in PowerFactory bestätigt. Die Python-Funktionsreferenz beschreibt
+  `SetAttribute` als Setzen eines Attributwerts, `IntMon.AddVar` und
+  `ElmRes.AddVariable(element, varname)` (je Objekt, nicht je Klasse), dokumentiert
+  aber keine `butdefault`-Button-Aktion. Direkt nach dem ersten Lauf prüft Outage Assessment noch einmal, ob
   die Kopie Auslastung oder Spannung aufzeichnet (`check_recording`).
 - In die Beschreibung (`desc`) jeder Kopie schreibt Outage Assessment Version, Fall und
   einen Fingerabdruck der Außerbetriebnahmen; damit kann ein erhaltener Lauf

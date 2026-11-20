@@ -189,10 +189,57 @@ lokal zu verwenden (Ausnahme: `inspect_contingency_interface.py`).
 | [powerfactory_tests/inspect_network_scope.py](powerfactory_tests/inspect_network_scope.py) | zeigt, welche Elemente der Netzfilter bewertet und auslässt |
 | [powerfactory_tests/inspect_result_data.py](powerfactory_tests/inspect_result_data.py) | liest ein `ElmRes` vollständig aus ([docs/RESULT_EXPLORER.md](docs/RESULT_EXPLORER.md)) |
 | [powerfactory_tests/check_qds_recording.py](powerfactory_tests/check_qds_recording.py) | zeigt, wo die QDS ihre Variablen aufzeichnet |
+| [powerfactory_tests/test_elmres_default_variables.py](powerfactory_tests/test_elmres_default_variables.py) | prüft `ElmRes.butdefault` auf einer temporären Konfigurationskopie, ohne Berechnung; protokolliert technische Attribute und Variablenauswahlen ohne Objektnamen oder Pfade |
 | [powerfactory_tests/inspect_qds_period.py](powerfactory_tests/inspect_qds_period.py) | zeigt, welchen QDS-Zeitraum Outage Assessment liest und aus welchem `ComStatsim` |
 | [powerfactory_tests/inspect_contingency_interface.py](powerfactory_tests/inspect_contingency_interface.py) | beschreibt die Contingency-Schnittstelle ohne Projektdaten |
 | [powerfactory_tests/run_contingency_checks.py](powerfactory_tests/run_contingency_checks.py) | rechnet eine kleine Contingency Analysis auf einer Projektkopie; standardmäßig aus |
 | [powerfactory_tests/benchmark_report_writes.py](powerfactory_tests/benchmark_report_writes.py) | misst, wie schnell ein `IntReport` Zellen schreibt |
+| [powerfactory_tests/test_qds_parallel.py](powerfactory_tests/test_qds_parallel.py) | ermittelt QDS-Parallelparameter über den Attributkatalog; standardmäßig nur lesend, optional mit Konfigurationstest und QDS |
+
+Für den `butdefault`-Test einen Studienfall mit vorhandener `ComStatsim` und
+gebundenem `ElmRes` aktivieren und das Skript vollständig als separates
+`ComPython` ausführen. `TEST_BUTTON=True` schreibt `butdefault=1` auf eine
+temporäre Konfigurationskopie und entfernt sie danach; die ursprüngliche
+Variablenauswahl und Ergebnisbindung werden auf Unverändertheit geprüft.
+`DEFAULT_VARIABLES_ADDED` bestätigt alle vier benötigten klassenweiten Auswahlen,
+`PARTIAL_SELECTION_CHANGE` nur eine Teilwirkung und `NO_SELECTION_CHANGE` keine
+Wirkung auf `IntMon`/`vars`. Die tatsächliche Ergebnisaufzeichnung wird dabei nicht
+getestet. `TEST_BUTTON=False` liest ausschließlich das vorhandene Ergebnisobjekt.
+
+Für den Paralleltest einen Studienfall mit fertig konfigurierter QDS aktivieren
+und `powerfactory_tests/test_qds_parallel.py` vollständig als separates
+`ComPython` ausführen. Standardmäßig sind `INSPECT_ONLY=True` und
+`EXECUTE_QDS=False` eingestellt: Es wird nichts geändert oder berechnet.
+Die Probe fragt PowerFactory über `GetAvailableAttributesAsJson` beziehungsweise
+`GetAvailableAttributes` nach den tatsächlichen Eingabeattributen. Sie zeigt
+deren Namen und Beschreibungen; für Paralleloptionen einschließlich „Min Cases“
+und „Block Size“ auch die aktuellen numerischen Werte. Der vom Anwender genannte
+Schalter `iEnableParl` wird zusätzlich gezielt gelesen. Nicht verfügbare
+Katalogmethoden, fehlende Objekte und nicht lesbare Werte werden getrennt
+protokolliert. Auch wenn der Schalter nicht gefunden wird, läuft die Diagnose
+weiter. Textwerte und Objektverweise aus dem Projekt werden nicht ausgegeben.
+
+Erst nach Prüfung des Logs `PARALLEL_ATTRIBUTE` auf den bestätigten Namen setzen
+und mit `INSPECT_ONLY=False` den Konfigurationstest aktivieren. Dieser prüft
+`PARALLEL_VALUE=1` und `REQUESTED_WORKERS=2` per Rücklesen und stellt die
+ursprünglichen Einstellungen wieder her. Mindestfallzahl und Blockgröße werden
+zunächst nur gelesen; ihre Namen und geeigneten Sollwerte müssen aus dem echten
+Log bestätigt werden. Nur mit zusätzlich `EXECUTE_QDS=True` läuft eine komplette
+QDS über den bereits konfigurierten Zeitraum; dabei können vorhandene Ergebnisse
+überschrieben werden. Geänderte Parameter, Prozessanzahl und Studienzeit werden
+auch bei Fehlern zurückgesetzt und kontrolliert; Ergebnisse bleiben bestehen.
+`REQUESTED_WORKERS=-1` fordert alle verfügbaren Kerne an; akzeptiert wird die
+Anforderung nur bei übereinstimmendem Rücklesewert.
+
+Die Probe sucht den vorhandenen `SetParalman` im Konfigurationsordner. Falls
+dieser nicht eindeutig zugänglich ist, den vorhandenen Parallel Computing
+Manager als externes Objekt `parallel_manager` am `ComPython` hinterlegen.
+Im Diagnoselog stehen `METHOD`, `CATALOG`, `ATTRIBUTE` und `VALUE`, beim
+Konfigurationstest zusätzlich `REQUEST`, `BEFORE`, `SET`, `VERIFIED`, `EXECUTE`
+und `RESTORE`. Für die anschließende Anpassung von `main.py` und `main_qt.py` die
+gesamte Ausgabe von `[QDS parallel probe] BEGIN` bis `END` einschließlich der
+PowerFactory-Berechnungsmeldungen weitergeben. Ein Rückgabecode 0 und passende
+Einstellungen belegen allein noch keine tatsächliche parallele Ausführung.
 
 ## Grenzen der Aussage
 
